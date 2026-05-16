@@ -11,6 +11,12 @@ venv/
 # C runtime build artifacts
 runtime/*.o
 runtime/*.a
+runtime/fiber/*.o
+
+# C runtime test binaries (no extension on Unix)
+runtime/fiber/test_pingpong
+runtime/fiber/test_sched
+runtime/fiber/test_c10k
 
 # rwc build artifacts
 *.ll
