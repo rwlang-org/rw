@@ -1,0 +1,6 @@
+# ERROR: await
+# ERROR_LINE: 5
+def main() -> int:
+    x: int = 1
+    y: int = await x
+    return 0
