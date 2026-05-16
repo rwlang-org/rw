@@ -180,7 +180,3 @@ set runtimepath+=/path/to/rw/vim
 `int` / `Future` などの型、`true` / `false`、整数 / 浮動小数 / 文字列
 (エスケープ `\n` などは `SpecialChar`)、コメント中の `TODO` マーカー、
 将来予約語(`extern` など、MVP では `Error` 色で目立つ)。
-
-## ライセンス
-
-MIT(予定)
