@@ -18,3 +18,8 @@ jobs:
           # the existing tags and the commits since the latest one.
           fetch-depth: 0
       - uses: Songmu/tagpr@v1
+        env:
+          # tagpr reads GITHUB_TOKEN from the environment, not from
+          # `with:`. The default token granted to the workflow has
+          # the permissions we requested above (contents + PRs).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
