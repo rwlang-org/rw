@@ -1,0 +1,8 @@
+def add(a: int, b: int) -> int:
+    return a + b
+
+def main() -> int:
+    fu: Future[int] = spawn add(3, 4)
+    r: int = await fu
+    print(r)
+    return 0

@@ -1,0 +1,4 @@
+# ERROR: undefined variable
+# ERROR_LINE: 4
+def main() -> int:
+    return missing

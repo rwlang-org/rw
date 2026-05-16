@@ -1,0 +1,416 @@
+"""Recursive-descent parser for rw.
+
+Grammar (informal):
+
+    module    = { func_def }
+    func_def  = 'def' IDENT '(' [params] ')' '->' type ':' NEWLINE INDENT stmt+ DEDENT
+    params    = param { ',' param }
+    param     = IDENT ':' type
+    type      = 'int' | 'float' | 'bool' | 'string' | 'void' | 'Future' '[' type ']'
+
+    stmt      = var_decl | assign | return_stmt | if_stmt | while_stmt | expr_stmt
+    var_decl  = IDENT ':' type '=' expr NEWLINE
+    assign    = IDENT '=' expr NEWLINE
+    return    = 'return' [expr] NEWLINE
+    if_stmt   = 'if' expr ':' block ( 'elif' expr ':' block )* [ 'else' ':' block ]
+    while     = 'while' expr ':' block
+    expr_stmt = expr NEWLINE
+    block     = NEWLINE INDENT stmt+ DEDENT
+
+    expr      = or_expr
+    or_expr   = and_expr ( 'or' and_expr )*
+    and_expr  = not_expr ( 'and' not_expr )*
+    not_expr  = 'not' not_expr | cmp_expr
+    cmp_expr  = add_expr ( CMPOP add_expr )?
+    add_expr  = mul_expr ( ('+'|'-') mul_expr )*
+    mul_expr  = unary  ( ('*'|'/'|'%') unary )*
+    unary     = '-' unary | 'await' unary | spawn_or_atom
+    spawn_or_atom = 'spawn' call | atom_postfix
+    atom_postfix  = atom { '(' arglist ')' }    # only IDENT may be followed by '(' (call)
+    atom      = INT | FLOAT | STRING | 'true' | 'false' | IDENT | '(' expr ')'
+"""
+
+from __future__ import annotations
+
+from typing import List, Optional
+
+from . import ast_nodes as A
+from .lexer import Token, TokenKind
+
+
+class ParserError(Exception):
+    def __init__(self, message: str, line: int, col: int, length: int = 1) -> None:
+        super().__init__(message)
+        self.message = message
+        self.line = line
+        self.col = col
+        self.length = length
+
+
+_CMP_TOKENS: dict[TokenKind, str] = {
+    TokenKind.EQ: "==",
+    TokenKind.NE: "!=",
+    TokenKind.LT: "<",
+    TokenKind.LE: "<=",
+    TokenKind.GT: ">",
+    TokenKind.GE: ">=",
+}
+
+_ADD_TOKENS: dict[TokenKind, str] = {
+    TokenKind.PLUS: "+",
+    TokenKind.MINUS: "-",
+}
+
+_MUL_TOKENS: dict[TokenKind, str] = {
+    TokenKind.STAR: "*",
+    TokenKind.SLASH: "/",
+    TokenKind.PERCENT: "%",
+}
+
+
+class Parser:
+    def __init__(self, tokens: List[Token]) -> None:
+        self.toks = tokens
+        self.i = 0
+
+    # ------- token helpers -------
+    @property
+    def cur(self) -> Token:
+        return self.toks[self.i]
+
+    def peek(self, off: int = 1) -> Token:
+        j = self.i + off
+        if j >= len(self.toks):
+            return self.toks[-1]
+        return self.toks[j]
+
+    def eat(self, kind: TokenKind, what: Optional[str] = None) -> Token:
+        if self.cur.kind != kind:
+            label = what or kind.name
+            raise ParserError(
+                f"expected {label}, got {self.cur.kind.name} ({self.cur.value!r})",
+                self.cur.line,
+                self.cur.col,
+                max(1, len(self.cur.value)),
+            )
+        t = self.cur
+        self.i += 1
+        return t
+
+    def match(self, *kinds: TokenKind) -> Optional[Token]:
+        if self.cur.kind in kinds:
+            t = self.cur
+            self.i += 1
+            return t
+        return None
+
+    def skip_newlines(self) -> None:
+        while self.cur.kind == TokenKind.NEWLINE:
+            self.i += 1
+
+    # ------- entry -------
+    def parse_module(self) -> A.Module:
+        mod = A.Module()
+        self.skip_newlines()
+        while self.cur.kind != TokenKind.EOF:
+            if self.cur.kind == TokenKind.KW_DEF:
+                mod.functions.append(self.parse_func_def())
+            else:
+                raise ParserError(
+                    "expected 'def' at module level",
+                    self.cur.line,
+                    self.cur.col,
+                    max(1, len(self.cur.value)),
+                )
+            self.skip_newlines()
+        return mod
+
+    # ------- function definitions -------
+    def parse_func_def(self) -> A.FuncDef:
+        kw = self.eat(TokenKind.KW_DEF, "'def'")
+        name_tok = self.eat(TokenKind.IDENT, "function name")
+        self.eat(TokenKind.LPAREN, "'('")
+        params: List[A.Param] = []
+        if self.cur.kind != TokenKind.RPAREN:
+            params.append(self.parse_param())
+            while self.match(TokenKind.COMMA):
+                params.append(self.parse_param())
+        self.eat(TokenKind.RPAREN, "')'")
+        self.eat(TokenKind.ARROW, "'->' after parameter list")
+        ret_ty = self.parse_type()
+        self.eat(TokenKind.COLON, "':' to start function body")
+        self.eat(TokenKind.NEWLINE)
+        body = self.parse_block()
+        return A.FuncDef(name_tok.value, params, ret_ty, body, kw.line, kw.col)
+
+    def parse_param(self) -> A.Param:
+        name_tok = self.eat(TokenKind.IDENT, "parameter name")
+        self.eat(TokenKind.COLON, "':' after parameter name")
+        ty = self.parse_type()
+        return A.Param(name_tok.value, ty, name_tok.line, name_tok.col)
+
+    def parse_type(self) -> A.TypeExpr:
+        t = self.cur
+        kind_to_name = {
+            TokenKind.KW_INT: "int",
+            TokenKind.KW_FLOAT: "float",
+            TokenKind.KW_BOOL: "bool",
+            TokenKind.KW_STRING: "string",
+            TokenKind.KW_VOID: "void",
+        }
+        if t.kind in kind_to_name:
+            self.i += 1
+            return A.TypeName(kind_to_name[t.kind], t.line, t.col)
+        if t.kind == TokenKind.KW_FUTURE:
+            self.i += 1
+            self.eat(TokenKind.LBRACK, "'[' after Future")
+            inner = self.parse_type()
+            self.eat(TokenKind.RBRACK, "']' to close Future[...]")
+            return A.TypeFuture(inner, t.line, t.col)
+        raise ParserError(
+            f"expected type, got {t.kind.name}", t.line, t.col, max(1, len(t.value))
+        )
+
+    # ------- blocks and statements -------
+    def parse_block(self) -> List[A.Stmt]:
+        self.eat(TokenKind.INDENT, "indented block")
+        stmts: List[A.Stmt] = []
+        while self.cur.kind != TokenKind.DEDENT:
+            if self.cur.kind == TokenKind.EOF:
+                raise ParserError(
+                    "unexpected end of file inside block",
+                    self.cur.line,
+                    self.cur.col,
+                )
+            if self.cur.kind == TokenKind.NEWLINE:
+                self.i += 1
+                continue
+            stmts.append(self.parse_stmt())
+        self.eat(TokenKind.DEDENT)
+        if not stmts:
+            raise ParserError("empty block", self.cur.line, self.cur.col)
+        return stmts
+
+    def parse_stmt(self) -> A.Stmt:
+        t = self.cur
+        if t.kind == TokenKind.KW_RETURN:
+            return self.parse_return()
+        if t.kind == TokenKind.KW_IF:
+            return self.parse_if()
+        if t.kind == TokenKind.KW_WHILE:
+            return self.parse_while()
+        # IDENT followed by ':'  => var_decl
+        # IDENT followed by '='  => assignment
+        if t.kind == TokenKind.IDENT:
+            nxt = self.peek(1).kind
+            if nxt == TokenKind.COLON:
+                return self.parse_var_decl()
+            if nxt == TokenKind.ASSIGN:
+                return self.parse_assign()
+        # else: expression statement
+        return self.parse_expr_stmt()
+
+    def parse_return(self) -> A.Return:
+        kw = self.eat(TokenKind.KW_RETURN)
+        if self.cur.kind == TokenKind.NEWLINE:
+            self.eat(TokenKind.NEWLINE)
+            return A.Return(None, kw.line, kw.col)
+        expr = self.parse_expr()
+        self.eat(TokenKind.NEWLINE)
+        return A.Return(expr, kw.line, kw.col)
+
+    def parse_if(self) -> A.If:
+        kw = self.eat(TokenKind.KW_IF)
+        cond = self.parse_expr()
+        self.eat(TokenKind.COLON, "':' after if condition")
+        self.eat(TokenKind.NEWLINE)
+        then_body = self.parse_block()
+        else_body: List[A.Stmt] = []
+        if self.cur.kind == TokenKind.KW_ELIF:
+            # Normalize `elif` into nested If inside else_body.
+            else_body = [self.parse_if_from_elif()]
+        elif self.cur.kind == TokenKind.KW_ELSE:
+            self.eat(TokenKind.KW_ELSE)
+            self.eat(TokenKind.COLON, "':' after else")
+            self.eat(TokenKind.NEWLINE)
+            else_body = self.parse_block()
+        return A.If(cond, then_body, else_body, kw.line, kw.col)
+
+    def parse_if_from_elif(self) -> A.If:
+        kw = self.eat(TokenKind.KW_ELIF)
+        cond = self.parse_expr()
+        self.eat(TokenKind.COLON, "':' after elif condition")
+        self.eat(TokenKind.NEWLINE)
+        then_body = self.parse_block()
+        else_body: List[A.Stmt] = []
+        if self.cur.kind == TokenKind.KW_ELIF:
+            else_body = [self.parse_if_from_elif()]
+        elif self.cur.kind == TokenKind.KW_ELSE:
+            self.eat(TokenKind.KW_ELSE)
+            self.eat(TokenKind.COLON, "':' after else")
+            self.eat(TokenKind.NEWLINE)
+            else_body = self.parse_block()
+        return A.If(cond, then_body, else_body, kw.line, kw.col)
+
+    def parse_while(self) -> A.While:
+        kw = self.eat(TokenKind.KW_WHILE)
+        cond = self.parse_expr()
+        self.eat(TokenKind.COLON, "':' after while condition")
+        self.eat(TokenKind.NEWLINE)
+        body = self.parse_block()
+        return A.While(cond, body, kw.line, kw.col)
+
+    def parse_var_decl(self) -> A.VarDecl:
+        name_tok = self.eat(TokenKind.IDENT)
+        self.eat(TokenKind.COLON)
+        ty = self.parse_type()
+        self.eat(TokenKind.ASSIGN, "'=' in variable declaration")
+        value = self.parse_expr()
+        self.eat(TokenKind.NEWLINE)
+        return A.VarDecl(name_tok.value, ty, value, name_tok.line, name_tok.col)
+
+    def parse_assign(self) -> A.Assign:
+        name_tok = self.eat(TokenKind.IDENT)
+        self.eat(TokenKind.ASSIGN)
+        value = self.parse_expr()
+        self.eat(TokenKind.NEWLINE)
+        return A.Assign(name_tok.value, value, name_tok.line, name_tok.col)
+
+    def parse_expr_stmt(self) -> A.ExprStmt:
+        t = self.cur
+        expr = self.parse_expr()
+        self.eat(TokenKind.NEWLINE)
+        return A.ExprStmt(expr, t.line, t.col)
+
+    # ------- expressions -------
+    def parse_expr(self) -> A.Expr:
+        return self.parse_or()
+
+    def parse_or(self) -> A.Expr:
+        left = self.parse_and()
+        while self.cur.kind == TokenKind.KW_OR:
+            t = self.cur
+            self.i += 1
+            right = self.parse_and()
+            left = A.BinOp("or", left, right, t.line, t.col)
+        return left
+
+    def parse_and(self) -> A.Expr:
+        left = self.parse_not()
+        while self.cur.kind == TokenKind.KW_AND:
+            t = self.cur
+            self.i += 1
+            right = self.parse_not()
+            left = A.BinOp("and", left, right, t.line, t.col)
+        return left
+
+    def parse_not(self) -> A.Expr:
+        if self.cur.kind == TokenKind.KW_NOT:
+            t = self.cur
+            self.i += 1
+            inner = self.parse_not()
+            return A.UnaryOp("not", inner, t.line, t.col)
+        return self.parse_cmp()
+
+    def parse_cmp(self) -> A.Expr:
+        left = self.parse_add()
+        if self.cur.kind in _CMP_TOKENS:
+            t = self.cur
+            op = _CMP_TOKENS[t.kind]
+            self.i += 1
+            right = self.parse_add()
+            left = A.BinOp(op, left, right, t.line, t.col)
+        return left
+
+    def parse_add(self) -> A.Expr:
+        left = self.parse_mul()
+        while self.cur.kind in _ADD_TOKENS:
+            t = self.cur
+            op = _ADD_TOKENS[t.kind]
+            self.i += 1
+            right = self.parse_mul()
+            left = A.BinOp(op, left, right, t.line, t.col)
+        return left
+
+    def parse_mul(self) -> A.Expr:
+        left = self.parse_unary()
+        while self.cur.kind in _MUL_TOKENS:
+            t = self.cur
+            op = _MUL_TOKENS[t.kind]
+            self.i += 1
+            right = self.parse_unary()
+            left = A.BinOp(op, left, right, t.line, t.col)
+        return left
+
+    def parse_unary(self) -> A.Expr:
+        t = self.cur
+        if t.kind == TokenKind.MINUS:
+            self.i += 1
+            inner = self.parse_unary()
+            return A.UnaryOp("-", inner, t.line, t.col)
+        if t.kind == TokenKind.KW_AWAIT:
+            self.i += 1
+            inner = self.parse_unary()
+            return A.AwaitExpr(inner, t.line, t.col)
+        if t.kind == TokenKind.KW_SPAWN:
+            self.i += 1
+            # spawn must be followed by a call expression
+            atom = self.parse_atom_postfix()
+            if not isinstance(atom, A.Call):
+                raise ParserError(
+                    "'spawn' must be followed by a function call",
+                    t.line,
+                    t.col,
+                    5,
+                )
+            return A.SpawnExpr(atom, t.line, t.col)
+        return self.parse_atom_postfix()
+
+    def parse_atom_postfix(self) -> A.Expr:
+        atom = self.parse_atom()
+        # Only allow call when atom is a bare Name (MVP: no first-class fns).
+        while self.cur.kind == TokenKind.LPAREN and isinstance(atom, A.Name):
+            self.i += 1  # consume '('
+            args: List[A.Expr] = []
+            if self.cur.kind != TokenKind.RPAREN:
+                args.append(self.parse_expr())
+                while self.match(TokenKind.COMMA):
+                    args.append(self.parse_expr())
+            self.eat(TokenKind.RPAREN, "')'")
+            atom = A.Call(atom.name, args, atom.line, atom.col)
+        return atom
+
+    def parse_atom(self) -> A.Expr:
+        t = self.cur
+        if t.kind == TokenKind.INT:
+            self.i += 1
+            return A.IntLit(int(t.value), t.line, t.col)
+        if t.kind == TokenKind.FLOAT:
+            self.i += 1
+            return A.FloatLit(float(t.value), t.line, t.col)
+        if t.kind == TokenKind.STRING:
+            self.i += 1
+            return A.StringLit(t.value, t.line, t.col)
+        if t.kind == TokenKind.KW_TRUE:
+            self.i += 1
+            return A.BoolLit(True, t.line, t.col)
+        if t.kind == TokenKind.KW_FALSE:
+            self.i += 1
+            return A.BoolLit(False, t.line, t.col)
+        if t.kind == TokenKind.IDENT:
+            self.i += 1
+            return A.Name(t.value, t.line, t.col)
+        if t.kind == TokenKind.LPAREN:
+            self.i += 1
+            inner = self.parse_expr()
+            self.eat(TokenKind.RPAREN, "')'")
+            return inner
+        raise ParserError(
+            f"unexpected token in expression: {t.kind.name}",
+            t.line, t.col,
+            max(1, len(t.value)),
+        )
+
+
+def parse(tokens: List[Token]) -> A.Module:
+    return Parser(tokens).parse_module()

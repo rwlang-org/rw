@@ -1,0 +1,12 @@
+def main() -> int:
+    a: int = 1 + 2 * 3
+    b: float = 3.5 - 1.5
+    c: bool = a > 5 and b < 3.0
+    print(a)
+    print(b)
+    print(c)
+    if c:
+        print(1)
+    else:
+        print(0)
+    return 0

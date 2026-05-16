@@ -1,0 +1,5 @@
+# ERROR: type mismatch
+# ERROR_LINE: 4
+def main() -> int:
+    x: int = "hello"
+    return 0

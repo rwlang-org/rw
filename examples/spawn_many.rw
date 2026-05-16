@@ -1,0 +1,11 @@
+def square(n: int) -> int:
+    return n * n
+
+def main() -> int:
+    f1: Future[int] = spawn square(1)
+    f2: Future[int] = spawn square(2)
+    f3: Future[int] = spawn square(3)
+    f4: Future[int] = spawn square(4)
+    total: int = await f1 + await f2 + await f3 + await f4
+    print(total)
+    return 0

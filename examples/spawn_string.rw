@@ -1,0 +1,8 @@
+def greeting() -> string:
+    return "hello from worker"
+
+def main() -> int:
+    fu: Future[string] = spawn greeting()
+    s: string = await fu
+    print(s)
+    return 0
