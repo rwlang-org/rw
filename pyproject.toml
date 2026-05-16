@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rw"
+version = "0.0.1"
+description = "rw: a Python-flavored, async-first, statically-typed compiled language"
+requires-python = ">=3.11"
+dependencies = [
+    "llvmlite>=0.42,<0.45",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+[project.scripts]
+rwc = "rwc.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rwc*"]
