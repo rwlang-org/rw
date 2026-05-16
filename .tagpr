@@ -1,0 +1,15 @@
+; tagpr configuration
+; See https://github.com/Songmu/tagpr for the full reference.
+
+[tagpr]
+    ; Branch that produces releases.
+    releaseBranch = main
+    ; The single file tagpr rewrites on each release. rwc/__init__.py
+    ; reads from importlib.metadata so it stays in sync automatically.
+    versionFile   = pyproject.toml
+    ; Tags look like v0.0.2 (not 0.0.2).
+    vPrefix       = true
+    ; Maintain CHANGELOG.md.
+    changelog     = true
+    ; Publish a GitHub Release alongside the tag.
+    release       = true
