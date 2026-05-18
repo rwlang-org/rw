@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" alt="rw logo" width="320">
+</p>
+
 # rw
 
 **Python の書き味で書ける、非同期ファーストの静的型コンパイル言語。**
