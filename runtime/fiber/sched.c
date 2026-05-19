@@ -42,6 +42,7 @@
 #include "runq.h"
 
 #include <errno.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -110,18 +111,59 @@ struct rw_fiber_handle {
     } result;
     /* Singly-linked list pointers for the ready queue. */
     struct rw_fiber_handle *next;
+    /* Per-handle mutex/condvar used by joiners that are NOT themselves
+     * running on a worker thread (i.e., the main thread). A worker
+     * fiber that wants to join another handle uses the wait-list path
+     * (Commit 4); the main thread, having no fiber ctx to yield from,
+     * blocks here. The trampoline broadcasts on join_cv after
+     * release-storing DONE. */
+    pthread_mutex_t  join_mu;
+    pthread_cond_t   join_cv;
 };
 
-static rw_fiber_ctx g_sched_ctx;
-/* The currently running fiber, NULL while the scheduler is running. */
-static rw_fiber_handle *g_current = NULL;
+/* ---- M:N scheduler globals (single-worker variant, Commit 3) ----
+ *
+ * The single P's bounded ring is owned by the single worker M. The
+ * main thread does NOT touch the ring directly; main-side spawns push
+ * into the global queue, and the worker pulls from there into its
+ * local ring on demand.
+ *
+ * We have exactly one M (`g_worker`) for now. Commit 5 will scale this
+ * to N. Each M has its own scheduler ctx (the swap target when a fiber
+ * yields or finishes) and a pointer to the fiber it is currently
+ * running.
+ */
 
-/* The single P (256-slot bounded ring) and the global overflow queue.
- * In Commit 2 we still run on one OS thread, so the owner of `g_p` is
- * the main thread itself. Commit 3 will move ownership to a worker
- * pthread; Commit 5 will scale this to N Ps. */
+typedef struct rw_M {
+    pthread_t        thread;
+    rw_fiber_ctx     sched_ctx;
+    rw_fiber_handle *current;
+    rw_P            *p;
+} rw_M;
+
 static rw_P     g_p;
 static rw_globq g_globq;
+static rw_M     g_worker;
+
+/* Thread-local pointer to the worker that owns the current thread, or
+ * NULL on the main / external thread. This is the single source of
+ * truth for "am I inside a fiber on a worker M?" used by spawn and
+ * join. */
+static _Thread_local rw_M *tls_m = NULL;
+
+/* Wakeup channel for the worker. Held briefly around globq pushes;
+ * the worker waits on g_sched_cv when it has no local work AND globq
+ * is empty AND shutdown is not requested. */
+static pthread_mutex_t g_sched_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_sched_cv = PTHREAD_COND_INITIALIZER;
+
+/* Shutdown signal. Set by rw_sched_shutdown, observed by the worker
+ * loop at the top of each iteration. */
+static _Atomic int g_shutdown = 0;
+
+/* Has rw_sched_init started a worker? Used to keep rw_sched_shutdown
+ * idempotent and to skip pthread_join when init was never called. */
+static int g_worker_started = 0;
 
 /* Helpers exposed to runq.c so it can chain handles without depending
  * on the layout of rw_fiber_handle (which is private to this file). */
@@ -137,68 +179,99 @@ static void rw_die(const char *msg) {
     abort();
 }
 
-static void enqueue_ready(rw_fiber_handle *h) {
-    /* Single-threaded scheduler: relaxed is sufficient because all
-     * enqueue/dequeue happens on the same thread. The release/acquire
-     * pair that matters is on the RUNNING -> DONE transition (see the
-     * trampolines and joiners). */
-    atomic_store_explicit(&h->state, RW_FIBER_READY, memory_order_relaxed);
-    rw_runq_put(&g_p, h, &g_globq);
-}
-
-/* Pick the next ready fiber. Owner-side path: try local P first, then
- * pull a batch from globq into the local P, then take one. */
-static rw_fiber_handle *dequeue_ready(void) {
-    rw_fiber_handle *h = rw_runq_get(&g_p);
-    if (h) return h;
-    /* Refill: pull up to RW_RUNQ_CAP/2 items from globq into the local
-     * ring, then take the first one. */
-    rw_fiber_handle *batch[RW_RUNQ_CAP / 2];
-    uint32_t n = rw_globq_pop_batch(&g_globq, batch, RW_RUNQ_CAP / 2);
-    if (n == 0) return NULL;
-    /* Push n-1 back onto local; return batch[0]. */
-    for (uint32_t i = 1; i < n; i++) {
-        rw_runq_put(&g_p, batch[i], &g_globq);
-    }
-    return batch[0];
-}
-
-/* The scheduler loop has a peculiar shape: it isn't really a loop running
- * on a dedicated stack. Instead, every time someone yields, we land back
- * here (in the calling thread's main stack), pick a fiber, and swap into
- * it. When that fiber yields or finishes it comes back here again.
+/* Push a fiber onto a ready queue. Two callers:
+ *   - main thread on spawn (tls_m == NULL): push to globq + signal.
+ *   - worker thread (tls_m != NULL): push to its P's local ring.
  *
- * That means: rw_sched_yield() is a function call that "returns" once the
- * scheduler decides to resume this fiber. The actual scheduling decision
- * is small and inline. */
+ * The state transition to READY is relaxed: state's only synchronizing
+ * role is RUNNING -> DONE (Commit 1). */
+static void enqueue_ready(rw_fiber_handle *h) {
+    atomic_store_explicit(&h->state, RW_FIBER_READY, memory_order_relaxed);
+    rw_M *m = tls_m;
+    if (m) {
+        rw_runq_put(m->p, h, &g_globq);
+    } else {
+        /* main -> globq. Take g_sched_mu so the signal can't race the
+         * worker's "is globq empty?" check on its way to cond_wait. */
+        rw_globq_push(&g_globq, h);
+        pthread_mutex_lock(&g_sched_mu);
+        pthread_cond_signal(&g_sched_cv);
+        pthread_mutex_unlock(&g_sched_mu);
+    }
+}
+
+/* Worker-side: find a runnable fiber. Returns NULL only when shutdown
+ * has been requested. Otherwise blocks on g_sched_cv until work shows
+ * up. Called from the worker's scheduler ctx only. */
+static rw_fiber_handle *find_runnable(rw_M *m) {
+    for (;;) {
+        if (atomic_load_explicit(&g_shutdown, memory_order_acquire)) {
+            return NULL;
+        }
+        rw_fiber_handle *h = rw_runq_get(m->p);
+        if (h) return h;
+        /* Refill from globq. */
+        rw_fiber_handle *batch[RW_RUNQ_CAP / 2];
+        uint32_t n = rw_globq_pop_batch(&g_globq, batch, RW_RUNQ_CAP / 2);
+        if (n > 0) {
+            for (uint32_t i = 1; i < n; i++) {
+                rw_runq_put(m->p, batch[i], &g_globq);
+            }
+            return batch[0];
+        }
+        /* Nothing to run. Park until something is pushed or shutdown. */
+        pthread_mutex_lock(&g_sched_mu);
+        /* Re-check shutdown and globq under the lock to close the race
+         * with concurrent spawn/shutdown. */
+        if (atomic_load_explicit(&g_shutdown, memory_order_acquire)) {
+            pthread_mutex_unlock(&g_sched_mu);
+            return NULL;
+        }
+        if (g_globq.count == 0) {
+            pthread_cond_wait(&g_sched_cv, &g_sched_mu);
+        }
+        pthread_mutex_unlock(&g_sched_mu);
+    }
+}
+
+/* Cooperative yield. Only meaningful when called from inside a fiber
+ * running on a worker (tls_m != NULL). If called from the main thread
+ * outside of any fiber, this is a no-op: main doesn't have a fiber ctx
+ * to swap from. The yield body puts the current fiber back on its M's
+ * local ring (assuming it's still RUNNING) and swaps to the M's
+ * scheduler ctx, which will pick the next runnable fiber. */
 void rw_sched_yield(void) {
-    rw_fiber_handle *me = g_current;
-    if (me) {
-        /* Calling fiber yields: put it back on the queue (if still RUNNING) */
-        if (atomic_load_explicit(&me->state, memory_order_relaxed) == RW_FIBER_RUNNING) {
-            enqueue_ready(me);
-        }
+    rw_M *m = tls_m;
+    if (!m) return;
+    rw_fiber_handle *me = m->current;
+    if (!me) return;
+    if (atomic_load_explicit(&me->state, memory_order_relaxed) == RW_FIBER_RUNNING) {
+        enqueue_ready(me);
     }
-    /* Pick next. If none, swap back to the original (saved) main ctx. */
-    rw_fiber_handle *next = dequeue_ready();
-    if (!next) {
-        /* No fibers to run; if we have a current, it must be DONE - we
-         * still need to return to the main context. */
-        rw_fiber_handle *prev = g_current;
-        g_current = NULL;
-        if (prev) {
-            rw_fiber_swap(&prev->ctx, &g_sched_ctx);
-        } else {
-            /* nothing to do; called with empty queue and no current */
-            return;
-        }
-        return;
+    /* Hand back to the worker's scheduler ctx. From the worker's POV
+     * this looks like find_runnable() returning a new fiber. */
+    rw_fiber_swap(&me->ctx, &m->sched_ctx);
+}
+
+/* Worker entry point. Sets tls_m and loops on find_runnable + execute
+ * until shutdown. find_runnable's NULL return is the only way out. */
+static void *worker_main(void *arg) {
+    rw_M *m = (rw_M *)arg;
+    tls_m = m;
+    for (;;) {
+        rw_fiber_handle *g = find_runnable(m);
+        if (!g) break;
+        atomic_store_explicit(&g->state, RW_FIBER_RUNNING,
+                              memory_order_relaxed);
+        m->current = g;
+        /* Run g. Control returns here either when g yields (back to
+         * sched_ctx via rw_sched_yield) or when g finishes (back to
+         * sched_ctx from the trampoline). */
+        rw_fiber_swap(&m->sched_ctx, &g->ctx);
+        m->current = NULL;
     }
-    atomic_store_explicit(&next->state, RW_FIBER_RUNNING, memory_order_relaxed);
-    g_current = next;
-    /* Save into the *caller*'s ctx (either a fiber or the main thread). */
-    rw_fiber_ctx *from = me ? &me->ctx : &g_sched_ctx;
-    rw_fiber_swap(from, &next->ctx);
+    tls_m = NULL;
+    return NULL;
 }
 
 /* The fiber's entry point. Calls user fn, stores result, marks DONE,
@@ -214,20 +287,21 @@ void rw_sched_yield(void) {
         rw_fiber_handle *h = (rw_fiber_handle *)arg;                        \
         RETTY (*fn)(void *) = (RETTY (*)(void *))h->user_fn;                \
         h->result.FIELD = fn(h->user_arg);                                  \
+        /* Publish result + DONE (release) so any joiner that observes    \
+         * DONE with acquire also sees the result field. */                 \
         atomic_store_explicit(&h->state, RW_FIBER_DONE,                     \
                               memory_order_release);                        \
-        /* Final yield: never returns. */                                   \
-        g_current = h;                                                      \
-        rw_fiber_handle *next = dequeue_ready();                            \
-        rw_fiber_ctx *target = next ? &next->ctx : &g_sched_ctx;            \
-        if (next) {                                                         \
-            atomic_store_explicit(&next->state, RW_FIBER_RUNNING,           \
-                                  memory_order_relaxed);                    \
-            g_current = next;                                               \
-        } else {                                                            \
-            g_current = NULL;                                               \
-        }                                                                   \
-        rw_fiber_swap(&h->ctx, target);                                     \
+        /* Wake the main-thread joiner if any. We take the per-handle     \
+         * mutex briefly: this synchronizes with a joiner that is just    \
+         * about to call cond_wait, ensuring it re-checks state under     \
+         * the lock. */                                                    \
+        pthread_mutex_lock(&h->join_mu);                                    \
+        pthread_cond_broadcast(&h->join_cv);                                \
+        pthread_mutex_unlock(&h->join_mu);                                  \
+        /* Hand back to the worker's scheduler ctx. The fiber stack will \
+         * be reclaimed by free_handle in the joiner. */                    \
+        rw_M *m = tls_m;                                                    \
+        rw_fiber_swap(&h->ctx, &m->sched_ctx);                              \
         /* unreachable */                                                   \
         abort();                                                            \
     }
@@ -243,17 +317,11 @@ static void fiber_entry_void(void *arg) {
     void (*fn)(void *) = (void (*)(void *))h->user_fn;
     fn(h->user_arg);
     atomic_store_explicit(&h->state, RW_FIBER_DONE, memory_order_release);
-    g_current = h;
-    rw_fiber_handle *next = dequeue_ready();
-    rw_fiber_ctx *target = next ? &next->ctx : &g_sched_ctx;
-    if (next) {
-        atomic_store_explicit(&next->state, RW_FIBER_RUNNING,
-                              memory_order_relaxed);
-        g_current = next;
-    } else {
-        g_current = NULL;
-    }
-    rw_fiber_swap(&h->ctx, target);
+    pthread_mutex_lock(&h->join_mu);
+    pthread_cond_broadcast(&h->join_cv);
+    pthread_mutex_unlock(&h->join_mu);
+    rw_M *m = tls_m;
+    rw_fiber_swap(&h->ctx, &m->sched_ctx);
     abort();
 }
 
@@ -269,6 +337,9 @@ static rw_fiber_handle *spawn_common(rw_result_kind kind,
     /* calloc zeros the storage so state is RW_FIBER_READY (0) already;
      * make the initialization explicit since the field is _Atomic. */
     atomic_store_explicit(&h->state, RW_FIBER_READY, memory_order_relaxed);
+    /* Per-handle join mutex/condvar for main-thread joiners. */
+    pthread_mutex_init(&h->join_mu, NULL);
+    pthread_cond_init(&h->join_cv, NULL);
 
     void *region = mmap(NULL, rw_region_size(),
                         PROT_READ | PROT_WRITE,
@@ -306,21 +377,46 @@ rw_fiber_handle *rw_sched_spawn_void(void    (*fn)(void *), void *arg) {
 }
 
 static void free_handle(rw_fiber_handle *h) {
+    pthread_mutex_destroy(&h->join_mu);
+    pthread_cond_destroy(&h->join_cv);
     if (h->region) {
         munmap(h->region, rw_region_size());
     }
     free(h);
 }
 
-/* Join: acquire-load is what pairs with the trampoline's release-store of
- * DONE. Once we observe DONE we are guaranteed to see the result write
- * that happened-before in the trampoline. */
+/* Wait until h is DONE.
+ *
+ *   - Inside a fiber on a worker (tls_m != NULL): yield-poll. Acquire-
+ *     load pairs with the trampoline's release-store of DONE. This
+ *     path is still naive in Commit 3 — Commit 4 replaces it with
+ *     wait-list parking so the fiber doesn't busy-yield. As long as
+ *     a fiber can only join handles spawned earlier on the same M,
+ *     this loop terminates because the worker will eventually pick
+ *     the target off its own queue.
+ *   - From the main thread (tls_m == NULL): block on the per-handle
+ *     condvar. The trampoline broadcasts after release-storing DONE.
+ *     We re-check `state` under the mutex to close the lost-wakeup
+ *     race with a trampoline that finishes just before we sleep. */
+static void wait_done(rw_fiber_handle *h) {
+    if (tls_m) {
+        while (atomic_load_explicit(&h->state, memory_order_acquire)
+               != RW_FIBER_DONE) {
+            rw_sched_yield();
+        }
+        return;
+    }
+    pthread_mutex_lock(&h->join_mu);
+    while (atomic_load_explicit(&h->state, memory_order_acquire)
+           != RW_FIBER_DONE) {
+        pthread_cond_wait(&h->join_cv, &h->join_mu);
+    }
+    pthread_mutex_unlock(&h->join_mu);
+}
+
 #define DEFINE_JOIN(NAME, RETTY, FIELD)                                    \
     RETTY rw_sched_join_##NAME(rw_fiber_handle *h) {                       \
-        while (atomic_load_explicit(&h->state, memory_order_acquire)       \
-               != RW_FIBER_DONE) {                                         \
-            rw_sched_yield();                                              \
-        }                                                                  \
+        wait_done(h);                                                      \
         RETTY r = h->result.FIELD;                                         \
         free_handle(h);                                                    \
         return r;                                                          \
@@ -332,10 +428,7 @@ DEFINE_JOIN(bool, int8_t,  b)
 DEFINE_JOIN(str,  rw_str,  s)
 
 void rw_sched_join_void(rw_fiber_handle *h) {
-    while (atomic_load_explicit(&h->state, memory_order_acquire)
-           != RW_FIBER_DONE) {
-        rw_sched_yield();
-    }
+    wait_done(h);
     free_handle(h);
 }
 
@@ -349,18 +442,34 @@ void rw_sched_init(void) {
     }
     g_page_size = (size_t)ps;
     g_region_size = (size_t)ps + usable + (size_t)ps;
-    g_current = NULL;
-    memset(&g_sched_ctx, 0, sizeof(g_sched_ctx));
     rw_runq_init(&g_p);
     rw_globq_init(&g_globq);
+    atomic_store_explicit(&g_shutdown, 0, memory_order_release);
+    memset(&g_worker, 0, sizeof(g_worker));
+    g_worker.p = &g_p;
+    if (pthread_create(&g_worker.thread, NULL, worker_main, &g_worker) != 0) {
+        rw_die("pthread_create worker");
+    }
+    g_worker_started = 1;
 }
 
 void rw_sched_shutdown(void) {
-    /* In a well-formed program every spawned fiber has been joined.
-     * Anything left here is a leak; reclaim it. */
-    rw_fiber_handle *h;
-    while ((h = dequeue_ready()) != NULL) {
-        free_handle(h);
+    if (!g_worker_started) {
+        rw_globq_destroy(&g_globq);
+        return;
     }
+    /* Signal shutdown and wake the worker so it can observe it. */
+    pthread_mutex_lock(&g_sched_mu);
+    atomic_store_explicit(&g_shutdown, 1, memory_order_release);
+    pthread_cond_broadcast(&g_sched_cv);
+    pthread_mutex_unlock(&g_sched_mu);
+    pthread_join(g_worker.thread, NULL);
+    g_worker_started = 0;
+
+    /* Reclaim any unjoined fibers still on either queue. In a well-
+     * formed program this list is empty. */
+    rw_fiber_handle *h;
+    while ((h = rw_runq_get(&g_p)) != NULL) free_handle(h);
+    while ((h = rw_globq_pop(&g_globq)) != NULL) free_handle(h);
     rw_globq_destroy(&g_globq);
 }
