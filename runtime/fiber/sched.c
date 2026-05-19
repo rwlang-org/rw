@@ -41,6 +41,7 @@
 #include "fiber.h"
 
 #include <errno.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,9 +66,17 @@ static size_t g_region_size = 0;
 static size_t rw_region_size(void) { return g_region_size; }
 static size_t rw_guard_size(void)  { return g_page_size; }
 
+/* Fiber lifecycle states.
+ *
+ * WAITING is reserved for the upcoming M:N work (a joining fiber parks on
+ * another handle's wait list and is in WAITING until the target's
+ * trampoline releases waiters). It is unused in the single-threaded
+ * scheduler but added now so the atomic load/store sites don't change
+ * shape when we wire up park.c. */
 typedef enum {
     RW_FIBER_READY = 0,
     RW_FIBER_RUNNING,
+    RW_FIBER_WAITING,
     RW_FIBER_DONE,
 } rw_fiber_state;
 
@@ -82,7 +91,12 @@ typedef enum {
 struct rw_fiber_handle {
     rw_fiber_ctx     ctx;
     void            *region;       /* full mmap'd region, including guards */
-    rw_fiber_state   state;
+    /* `state` is the synchronization edge between the trampoline (which
+     * publishes the result and stores DONE with release ordering) and any
+     * joiner (which reads DONE with acquire ordering and then reads the
+     * result field). Internal READY<->RUNNING transitions happen in the
+     * scheduler's serialized path so they use relaxed ordering. */
+    _Atomic int      state;        /* values are rw_fiber_state */
     rw_result_kind   kind;
     /* The user fn and arg are kept so the trampoline can find them. */
     void            *user_fn;
@@ -110,7 +124,11 @@ static void rw_die(const char *msg) {
 }
 
 static void enqueue_ready(rw_fiber_handle *h) {
-    h->state = RW_FIBER_READY;
+    /* Single-threaded scheduler: relaxed is sufficient because all
+     * enqueue/dequeue happens on the same thread. The release/acquire
+     * pair that matters is on the RUNNING -> DONE transition (see the
+     * trampolines and joiners). */
+    atomic_store_explicit(&h->state, RW_FIBER_READY, memory_order_relaxed);
     h->next = NULL;
     if (g_ready_tail) {
         g_ready_tail->next = h;
@@ -141,7 +159,7 @@ void rw_sched_yield(void) {
     rw_fiber_handle *me = g_current;
     if (me) {
         /* Calling fiber yields: put it back on the queue (if still RUNNING) */
-        if (me->state == RW_FIBER_RUNNING) {
+        if (atomic_load_explicit(&me->state, memory_order_relaxed) == RW_FIBER_RUNNING) {
             enqueue_ready(me);
         }
     }
@@ -160,7 +178,7 @@ void rw_sched_yield(void) {
         }
         return;
     }
-    next->state = RW_FIBER_RUNNING;
+    atomic_store_explicit(&next->state, RW_FIBER_RUNNING, memory_order_relaxed);
     g_current = next;
     /* Save into the *caller*'s ctx (either a fiber or the main thread). */
     rw_fiber_ctx *from = me ? &me->ctx : &g_sched_ctx;
@@ -169,19 +187,30 @@ void rw_sched_yield(void) {
 
 /* The fiber's entry point. Calls user fn, stores result, marks DONE,
  * and yields permanently. We must NEVER let the fiber return into the
- * trampoline (the trampoline would brk #0xdead). */
+ * trampoline (the trampoline would brk #0xdead).
+ *
+ * The store of `result` is plain (non-atomic). The release-store of
+ * `state = DONE` synchronizes with the acquire-load in the joiner; the
+ * joiner only reads `result` *after* observing DONE, so the result write
+ * happens-before that read. */
 #define DEFINE_TRAMP(NAME, RETTY, FIELD)                                    \
     static void fiber_entry_##NAME(void *arg) {                             \
         rw_fiber_handle *h = (rw_fiber_handle *)arg;                        \
         RETTY (*fn)(void *) = (RETTY (*)(void *))h->user_fn;                \
         h->result.FIELD = fn(h->user_arg);                                  \
-        h->state = RW_FIBER_DONE;                                           \
+        atomic_store_explicit(&h->state, RW_FIBER_DONE,                     \
+                              memory_order_release);                        \
         /* Final yield: never returns. */                                   \
         g_current = h;                                                      \
         rw_fiber_handle *next = dequeue_ready();                            \
         rw_fiber_ctx *target = next ? &next->ctx : &g_sched_ctx;            \
-        if (next) { next->state = RW_FIBER_RUNNING; g_current = next; }     \
-        else      { g_current = NULL; }                                     \
+        if (next) {                                                         \
+            atomic_store_explicit(&next->state, RW_FIBER_RUNNING,           \
+                                  memory_order_relaxed);                    \
+            g_current = next;                                               \
+        } else {                                                            \
+            g_current = NULL;                                               \
+        }                                                                   \
         rw_fiber_swap(&h->ctx, target);                                     \
         /* unreachable */                                                   \
         abort();                                                            \
@@ -197,12 +226,17 @@ static void fiber_entry_void(void *arg) {
     rw_fiber_handle *h = (rw_fiber_handle *)arg;
     void (*fn)(void *) = (void (*)(void *))h->user_fn;
     fn(h->user_arg);
-    h->state = RW_FIBER_DONE;
+    atomic_store_explicit(&h->state, RW_FIBER_DONE, memory_order_release);
     g_current = h;
     rw_fiber_handle *next = dequeue_ready();
     rw_fiber_ctx *target = next ? &next->ctx : &g_sched_ctx;
-    if (next) { next->state = RW_FIBER_RUNNING; g_current = next; }
-    else      { g_current = NULL; }
+    if (next) {
+        atomic_store_explicit(&next->state, RW_FIBER_RUNNING,
+                              memory_order_relaxed);
+        g_current = next;
+    } else {
+        g_current = NULL;
+    }
     rw_fiber_swap(&h->ctx, target);
     abort();
 }
@@ -216,6 +250,9 @@ static rw_fiber_handle *spawn_common(rw_result_kind kind,
     h->kind = kind;
     h->user_fn = user_fn;
     h->user_arg = user_arg;
+    /* calloc zeros the storage so state is RW_FIBER_READY (0) already;
+     * make the initialization explicit since the field is _Atomic. */
+    atomic_store_explicit(&h->state, RW_FIBER_READY, memory_order_relaxed);
 
     void *region = mmap(NULL, rw_region_size(),
                         PROT_READ | PROT_WRITE,
@@ -259,9 +296,13 @@ static void free_handle(rw_fiber_handle *h) {
     free(h);
 }
 
+/* Join: acquire-load is what pairs with the trampoline's release-store of
+ * DONE. Once we observe DONE we are guaranteed to see the result write
+ * that happened-before in the trampoline. */
 #define DEFINE_JOIN(NAME, RETTY, FIELD)                                    \
     RETTY rw_sched_join_##NAME(rw_fiber_handle *h) {                       \
-        while (h->state != RW_FIBER_DONE) {                                \
+        while (atomic_load_explicit(&h->state, memory_order_acquire)       \
+               != RW_FIBER_DONE) {                                         \
             rw_sched_yield();                                              \
         }                                                                  \
         RETTY r = h->result.FIELD;                                         \
@@ -275,7 +316,8 @@ DEFINE_JOIN(bool, int8_t,  b)
 DEFINE_JOIN(str,  rw_str,  s)
 
 void rw_sched_join_void(rw_fiber_handle *h) {
-    while (h->state != RW_FIBER_DONE) {
+    while (atomic_load_explicit(&h->state, memory_order_acquire)
+           != RW_FIBER_DONE) {
         rw_sched_yield();
     }
     free_handle(h);
