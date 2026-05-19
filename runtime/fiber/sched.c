@@ -39,6 +39,7 @@
 
 #include "sched.h"
 #include "fiber.h"
+#include "runq.h"
 
 #include <errno.h>
 #include <stdatomic.h>
@@ -114,9 +115,22 @@ struct rw_fiber_handle {
 static rw_fiber_ctx g_sched_ctx;
 /* The currently running fiber, NULL while the scheduler is running. */
 static rw_fiber_handle *g_current = NULL;
-/* Doubly-linked queue of ready fibers. */
-static rw_fiber_handle *g_ready_head = NULL;
-static rw_fiber_handle *g_ready_tail = NULL;
+
+/* The single P (256-slot bounded ring) and the global overflow queue.
+ * In Commit 2 we still run on one OS thread, so the owner of `g_p` is
+ * the main thread itself. Commit 3 will move ownership to a worker
+ * pthread; Commit 5 will scale this to N Ps. */
+static rw_P     g_p;
+static rw_globq g_globq;
+
+/* Helpers exposed to runq.c so it can chain handles without depending
+ * on the layout of rw_fiber_handle (which is private to this file). */
+rw_fiber_handle *rw_fiber_handle_get_next(rw_fiber_handle *h) {
+    return h ? h->next : NULL;
+}
+void rw_fiber_handle_set_next(rw_fiber_handle *h, rw_fiber_handle *next) {
+    if (h) h->next = next;
+}
 
 static void rw_die(const char *msg) {
     perror(msg);
@@ -129,22 +143,24 @@ static void enqueue_ready(rw_fiber_handle *h) {
      * pair that matters is on the RUNNING -> DONE transition (see the
      * trampolines and joiners). */
     atomic_store_explicit(&h->state, RW_FIBER_READY, memory_order_relaxed);
-    h->next = NULL;
-    if (g_ready_tail) {
-        g_ready_tail->next = h;
-        g_ready_tail = h;
-    } else {
-        g_ready_head = g_ready_tail = h;
-    }
+    rw_runq_put(&g_p, h, &g_globq);
 }
 
+/* Pick the next ready fiber. Owner-side path: try local P first, then
+ * pull a batch from globq into the local P, then take one. */
 static rw_fiber_handle *dequeue_ready(void) {
-    rw_fiber_handle *h = g_ready_head;
-    if (!h) return NULL;
-    g_ready_head = h->next;
-    if (!g_ready_head) g_ready_tail = NULL;
-    h->next = NULL;
-    return h;
+    rw_fiber_handle *h = rw_runq_get(&g_p);
+    if (h) return h;
+    /* Refill: pull up to RW_RUNQ_CAP/2 items from globq into the local
+     * ring, then take the first one. */
+    rw_fiber_handle *batch[RW_RUNQ_CAP / 2];
+    uint32_t n = rw_globq_pop_batch(&g_globq, batch, RW_RUNQ_CAP / 2);
+    if (n == 0) return NULL;
+    /* Push n-1 back onto local; return batch[0]. */
+    for (uint32_t i = 1; i < n; i++) {
+        rw_runq_put(&g_p, batch[i], &g_globq);
+    }
+    return batch[0];
 }
 
 /* The scheduler loop has a peculiar shape: it isn't really a loop running
@@ -333,10 +349,10 @@ void rw_sched_init(void) {
     }
     g_page_size = (size_t)ps;
     g_region_size = (size_t)ps + usable + (size_t)ps;
-    g_ready_head = NULL;
-    g_ready_tail = NULL;
     g_current = NULL;
     memset(&g_sched_ctx, 0, sizeof(g_sched_ctx));
+    rw_runq_init(&g_p);
+    rw_globq_init(&g_globq);
 }
 
 void rw_sched_shutdown(void) {
@@ -346,4 +362,5 @@ void rw_sched_shutdown(void) {
     while ((h = dequeue_ready()) != NULL) {
         free_handle(h);
     }
+    rw_globq_destroy(&g_globq);
 }
