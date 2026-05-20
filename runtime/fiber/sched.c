@@ -145,14 +145,18 @@ struct rw_fiber_handle {
 
 typedef struct rw_M {
     pthread_t        thread;
+    int              id;
     rw_fiber_ctx     sched_ctx;
     rw_fiber_handle *current;
     rw_P            *p;
 } rw_M;
 
-static rw_P     g_p;
+#define RW_MAX_WORKERS 64
+
+static rw_P     g_ps[RW_MAX_WORKERS];
+static rw_M     g_workers[RW_MAX_WORKERS];
+static int      g_nworkers;
 static rw_globq g_globq;
-static rw_M     g_worker;
 
 /* Thread-local pointer to the worker that owns the current thread, or
  * NULL on the main / external thread. This is the single source of
@@ -160,19 +164,21 @@ static rw_M     g_worker;
  * join. */
 static _Thread_local rw_M *tls_m = NULL;
 
-/* Wakeup channel for the worker. Held briefly around globq pushes;
- * the worker waits on g_sched_cv when it has no local work AND globq
- * is empty AND shutdown is not requested. */
+/* Wakeup channel for workers. A worker that has no local work and
+ * finds globq empty parks on g_sched_cv. main signals (or broadcasts
+ * on shutdown) after publishing work into globq. We use signal
+ * (single wakeup) on spawn so we don't thunder-herd N workers when
+ * only one fiber is added. */
 static pthread_mutex_t g_sched_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_sched_cv = PTHREAD_COND_INITIALIZER;
 
-/* Shutdown signal. Set by rw_sched_shutdown, observed by the worker
+/* Shutdown signal. Set by rw_sched_shutdown, observed by every worker
  * loop at the top of each iteration. */
 static _Atomic int g_shutdown = 0;
 
-/* Has rw_sched_init started a worker? Used to keep rw_sched_shutdown
+/* Have workers been started? Used to keep rw_sched_shutdown
  * idempotent and to skip pthread_join when init was never called. */
-static int g_worker_started = 0;
+static int g_workers_started = 0;
 
 /* Helpers exposed to runq.c so it can chain handles without depending
  * on the layout of rw_fiber_handle (which is private to this file). */
@@ -486,6 +492,22 @@ void rw_sched_join_void(rw_fiber_handle *h) {
     free_handle(h);
 }
 
+static int parse_workers(void) {
+    long online = sysconf(_SC_NPROCESSORS_ONLN);
+    int n = (online > 0) ? (int)online : 2;
+    const char *env = getenv("RW_WORKERS");
+    if (env && *env) {
+        char *endp = NULL;
+        long v = strtol(env, &endp, 10);
+        if (endp && *endp == '\0' && v >= 1 && v <= RW_MAX_WORKERS) {
+            n = (int)v;
+        }
+    }
+    if (n < 1) n = 1;
+    if (n > RW_MAX_WORKERS) n = RW_MAX_WORKERS;
+    return n;
+}
+
 void rw_sched_init(void) {
     long ps = sysconf(_SC_PAGESIZE);
     if (ps <= 0) ps = 4096;  /* fallback */
@@ -496,34 +518,47 @@ void rw_sched_init(void) {
     }
     g_page_size = (size_t)ps;
     g_region_size = (size_t)ps + usable + (size_t)ps;
-    rw_runq_init(&g_p);
     rw_globq_init(&g_globq);
     atomic_store_explicit(&g_shutdown, 0, memory_order_release);
-    memset(&g_worker, 0, sizeof(g_worker));
-    g_worker.p = &g_p;
-    if (pthread_create(&g_worker.thread, NULL, worker_main, &g_worker) != 0) {
-        rw_die("pthread_create worker");
+
+    g_nworkers = parse_workers();
+    for (int i = 0; i < g_nworkers; i++) {
+        rw_runq_init(&g_ps[i]);
+        memset(&g_workers[i], 0, sizeof(g_workers[i]));
+        g_workers[i].id = i;
+        g_workers[i].p = &g_ps[i];
     }
-    g_worker_started = 1;
+    /* Spawn all workers AFTER all Ps are initialised so a worker that
+     * starts fast can't see a half-initialised neighbour P. */
+    for (int i = 0; i < g_nworkers; i++) {
+        if (pthread_create(&g_workers[i].thread, NULL,
+                           worker_main, &g_workers[i]) != 0) {
+            rw_die("pthread_create worker");
+        }
+    }
+    g_workers_started = 1;
 }
 
 void rw_sched_shutdown(void) {
-    if (!g_worker_started) {
+    if (!g_workers_started) {
         rw_globq_destroy(&g_globq);
         return;
     }
-    /* Signal shutdown and wake the worker so it can observe it. */
+    /* Signal shutdown and wake every worker so it can observe it. */
     pthread_mutex_lock(&g_sched_mu);
     atomic_store_explicit(&g_shutdown, 1, memory_order_release);
     pthread_cond_broadcast(&g_sched_cv);
     pthread_mutex_unlock(&g_sched_mu);
-    pthread_join(g_worker.thread, NULL);
-    g_worker_started = 0;
+    for (int i = 0; i < g_nworkers; i++) {
+        pthread_join(g_workers[i].thread, NULL);
+    }
+    g_workers_started = 0;
 
-    /* Reclaim any unjoined fibers still on either queue. In a well-
-     * formed program this list is empty. */
+    /* Reclaim any unjoined fibers still on any queue. */
     rw_fiber_handle *h;
-    while ((h = rw_runq_get(&g_p)) != NULL) free_handle(h);
+    for (int i = 0; i < g_nworkers; i++) {
+        while ((h = rw_runq_get(&g_ps[i])) != NULL) free_handle(h);
+    }
     while ((h = rw_globq_pop(&g_globq)) != NULL) free_handle(h);
     rw_globq_destroy(&g_globq);
 }
