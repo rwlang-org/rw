@@ -25,12 +25,18 @@ def _run_rwc(args: list[str]) -> subprocess.CompletedProcess:
 
 
 def _build_and_run(rw_path: Path) -> tuple[int, str]:
-    """Build the example and run it, returning (exit_code, stdout)."""
+    """Build the example and run it, returning (exit_code, stdout).
+
+    Pin RW_WORKERS=1 so output stays byte-identical regardless of the
+    machine's core count. The M:N scheduler is exercised separately
+    via the C-level tests under runtime/fiber/test_*.c.
+    """
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / rw_path.stem
         build = _run_rwc(["build", str(rw_path), "-o", str(out)])
         assert build.returncode == 0, f"rwc build failed:\n{build.stderr}"
-        run = subprocess.run([str(out)], capture_output=True, text=True)
+        env = {**os.environ, "RW_WORKERS": "1"}
+        run = subprocess.run([str(out)], capture_output=True, text=True, env=env)
         return run.returncode, run.stdout
 
 
