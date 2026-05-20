@@ -19,6 +19,7 @@ runtime/fiber/test_sched
 runtime/fiber/test_c10k
 runtime/fiber/test_runq
 runtime/fiber/test_wait
+runtime/fiber/test_steal
 
 # rwc build artifacts
 *.ll

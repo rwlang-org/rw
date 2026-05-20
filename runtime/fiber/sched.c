@@ -149,6 +149,9 @@ typedef struct rw_M {
     rw_fiber_ctx     sched_ctx;
     rw_fiber_handle *current;
     rw_P            *p;
+    /* xorshift64 PRNG state used to pick a random starting victim for
+     * work-stealing. Seeded per-M at init. */
+    uint64_t         rng_state;
 } rw_M;
 
 #define RW_MAX_WORKERS 64
@@ -205,6 +208,15 @@ static void enqueue_ready(rw_fiber_handle *h) {
     rw_M *m = tls_m;
     if (m) {
         rw_runq_put(m->p, h, &g_globq);
+        /* If any other worker is parked, wake one so it can come
+         * steal from us (or pull from globq if we overflowed). This
+         * is a single-wakeup signal: thunder-herding all N workers
+         * for one fiber wastes cycles. */
+        if (g_nworkers > 1) {
+            pthread_mutex_lock(&g_sched_mu);
+            pthread_cond_signal(&g_sched_cv);
+            pthread_mutex_unlock(&g_sched_mu);
+        }
     } else {
         /* main -> globq. Take g_sched_mu so the signal can't race the
          * worker's "is globq empty?" check on its way to cond_wait. */
@@ -213,6 +225,41 @@ static void enqueue_ready(rw_fiber_handle *h) {
         pthread_cond_signal(&g_sched_cv);
         pthread_mutex_unlock(&g_sched_mu);
     }
+}
+
+/* xorshift64 — small, fast, good enough to pick a starting victim
+ * for stealing. Each M owns its own state, so this needs no locks. */
+static inline uint64_t xorshift64(uint64_t *state) {
+    uint64_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    return x;
+}
+
+/* Try to steal work from another worker's P. Walks all other Ps in a
+ * round starting from a random offset, and returns the first fiber
+ * we successfully grabbed. If the grab returned more than one, the
+ * extras are pushed to our own P so subsequent find_runnable calls
+ * (or other stealers) can pick them up cheaply. */
+static rw_fiber_handle *try_steal(rw_M *m) {
+    if (g_nworkers <= 1) return NULL;
+    uint32_t offset = (uint32_t)(xorshift64(&m->rng_state) % (uint32_t)g_nworkers);
+    rw_fiber_handle *batch[RW_RUNQ_CAP / 2];
+    for (int i = 0; i < g_nworkers; i++) {
+        int idx = (int)((offset + (uint32_t)i) % (uint32_t)g_nworkers);
+        if (idx == m->id) continue;
+        rw_P *victim = &g_ps[idx];
+        uint32_t got = rw_runq_grab(victim, batch, RW_RUNQ_CAP / 2);
+        if (got == 0) continue;
+        /* Keep batch[0] for ourselves; push the rest onto our own P. */
+        for (uint32_t k = 1; k < got; k++) {
+            rw_runq_put(m->p, batch[k], &g_globq);
+        }
+        return batch[0];
+    }
+    return NULL;
 }
 
 /* Worker-side: find a runnable fiber. Returns NULL only when shutdown
@@ -234,10 +281,16 @@ static rw_fiber_handle *find_runnable(rw_M *m) {
             }
             return batch[0];
         }
-        /* Nothing to run. Park until something is pushed or shutdown. */
+        /* Local empty, globq empty. Try to steal half from another P. */
+        h = try_steal(m);
+        if (h) return h;
+        /* Truly nothing to run. Park until something is pushed or
+         * shutdown is set. */
         pthread_mutex_lock(&g_sched_mu);
         /* Re-check shutdown and globq under the lock to close the race
-         * with concurrent spawn/shutdown. */
+         * with concurrent spawn/shutdown. We do NOT re-check other Ps
+         * here: if they got new work between our try_steal and now, a
+         * spawn signal will arrive and wake us. */
         if (atomic_load_explicit(&g_shutdown, memory_order_acquire)) {
             pthread_mutex_unlock(&g_sched_mu);
             return NULL;
@@ -252,24 +305,30 @@ static rw_fiber_handle *find_runnable(rw_M *m) {
 /* Cooperative yield. Only meaningful when called from inside a fiber
  * running on a worker (tls_m != NULL). If called from the main thread
  * outside of any fiber, this is a no-op: main doesn't have a fiber ctx
- * to swap from. The yield body puts the current fiber back on its M's
- * local ring (assuming it's still RUNNING) and swaps to the M's
- * scheduler ctx, which will pick the next runnable fiber. */
+ * to swap from.
+ *
+ * Important: we do NOT re-enqueue the fiber here. Doing so would make
+ * the fiber's ctx visible to other workers (via work-stealing) BEFORE
+ * rw_fiber_swap has finished saving the ctx, which would cause a
+ * stealer that swaps-in to read a half-written register file. Instead,
+ * we swap to the worker's scheduler ctx and let worker_main do the
+ * re-enqueue from its own stack, AFTER our ctx has been fully saved. */
 void rw_sched_yield(void) {
     rw_M *m = tls_m;
     if (!m) return;
     rw_fiber_handle *me = m->current;
     if (!me) return;
-    if (atomic_load_explicit(&me->state, memory_order_relaxed) == RW_FIBER_RUNNING) {
-        enqueue_ready(me);
-    }
-    /* Hand back to the worker's scheduler ctx. From the worker's POV
-     * this looks like find_runnable() returning a new fiber. */
     rw_fiber_swap(&me->ctx, &m->sched_ctx);
 }
 
 /* Worker entry point. Sets tls_m and loops on find_runnable + execute
- * until shutdown. find_runnable's NULL return is the only way out. */
+ * until shutdown. find_runnable's NULL return is the only way out.
+ *
+ * The "re-enqueue if still RUNNING" decision is made here, not inside
+ * rw_sched_yield, because the fiber's ctx is only fully saved once
+ * the inbound rw_fiber_swap returns into this loop. Re-enqueuing
+ * earlier would let a stealer pick up the fiber while its ctx is
+ * still being written. */
 static void *worker_main(void *arg) {
     rw_M *m = (rw_M *)arg;
     tls_m = m;
@@ -279,10 +338,17 @@ static void *worker_main(void *arg) {
         atomic_store_explicit(&g->state, RW_FIBER_RUNNING,
                               memory_order_relaxed);
         m->current = g;
-        /* Run g. Control returns here either when g yields (back to
-         * sched_ctx via rw_sched_yield) or when g finishes (back to
-         * sched_ctx from the trampoline). */
         rw_fiber_swap(&m->sched_ctx, &g->ctx);
+        /* Control returns here once g either yielded (state still
+         * RUNNING) or finished (state == DONE) or parked on a wait
+         * list (state == WAITING). Only the RUNNING case puts g back
+         * on the queue; DONE / WAITING fibers re-enter the queue via
+         * a different path (finalize_fiber for DONE, the target
+         * trampoline for WAITING). */
+        if (atomic_load_explicit(&g->state, memory_order_relaxed)
+            == RW_FIBER_RUNNING) {
+            enqueue_ready(g);
+        }
         m->current = NULL;
     }
     tls_m = NULL;
@@ -527,6 +593,10 @@ void rw_sched_init(void) {
         memset(&g_workers[i], 0, sizeof(g_workers[i]));
         g_workers[i].id = i;
         g_workers[i].p = &g_ps[i];
+        /* Seed xorshift64 with a distinct nonzero value per M.
+         * The exact seed doesn't matter; only that the streams diverge
+         * so two workers don't pick the same first victim. */
+        g_workers[i].rng_state = 0x9E3779B97F4A7C15ull ^ ((uint64_t)i + 1);
     }
     /* Spawn all workers AFTER all Ps are initialised so a worker that
      * starts fast can't see a half-initialised neighbour P. */
