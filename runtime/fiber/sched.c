@@ -39,6 +39,7 @@
 
 #include "sched.h"
 #include "fiber.h"
+#include "park.h"
 #include "runq.h"
 
 #include <errno.h>
@@ -109,16 +110,24 @@ struct rw_fiber_handle {
         int8_t  b;
         rw_str  s;
     } result;
-    /* Singly-linked list pointers for the ready queue. */
+    /* Singly-linked list pointers: doubles as the ready-queue link
+     * AND the wait-list link. A handle is on at most one of {ready
+     * queue, wait list of some target, currently RUNNING/DONE} at any
+     * moment, so reusing the pointer is safe. */
     struct rw_fiber_handle *next;
     /* Per-handle mutex/condvar used by joiners that are NOT themselves
      * running on a worker thread (i.e., the main thread). A worker
      * fiber that wants to join another handle uses the wait-list path
-     * (Commit 4); the main thread, having no fiber ctx to yield from,
+     * below; the main thread, having no fiber ctx to yield from,
      * blocks here. The trampoline broadcasts on join_cv after
      * release-storing DONE. */
     pthread_mutex_t  join_mu;
     pthread_cond_t   join_cv;
+    /* Wait list of joining fibers (Commit 4). Guarded by `wait_lock`.
+     * The trampoline takes the lock once, splices the entire list
+     * out, then re-enqueues each waiter onto a runnable queue. */
+    rw_wait_lock     wait_lock;
+    struct rw_fiber_handle *wait_head;
 };
 
 /* ---- M:N scheduler globals (single-worker variant, Commit 3) ----
@@ -274,6 +283,70 @@ static void *worker_main(void *arg) {
     return NULL;
 }
 
+/* Park the calling fiber on target->waiters and yield. Returns when
+ * the trampoline puts us back on a run queue and a worker resumes us.
+ * On entry: caller is running on a worker, has not yet observed DONE
+ * on target, and wants to wait for it. */
+static void park_on(rw_fiber_handle *target) {
+    rw_M *m = tls_m;
+    rw_fiber_handle *me = m->current;
+
+    rw_wait_lock_acquire(&target->wait_lock);
+    /* Re-check state under the lock to close the race with a
+     * trampoline that is just about to take the wait list. */
+    if (atomic_load_explicit(&target->state, memory_order_acquire)
+        == RW_FIBER_DONE) {
+        rw_wait_lock_release(&target->wait_lock);
+        return;
+    }
+    me->next = target->wait_head;
+    target->wait_head = me;
+    atomic_store_explicit(&me->state, RW_FIBER_WAITING,
+                          memory_order_relaxed);
+    rw_wait_lock_release(&target->wait_lock);
+
+    /* Yield to the scheduler. enqueue_ready will skip us because our
+     * state is WAITING, not RUNNING. We resume only when the
+     * trampoline of `target` re-enqueues us as READY. */
+    rw_fiber_swap(&me->ctx, &m->sched_ctx);
+}
+
+/* Common fiber-completion path: publish result + DONE, broadcast main
+ * waiters, release fiber waiters, swap back to the worker's scheduler
+ * ctx. Called from every fiber_entry_<T> trampoline. The result must
+ * already be written into h->result before calling this. */
+static void finalize_fiber(rw_fiber_handle *h) {
+    /* Publish: result write (already done by caller) happens-before
+     * this release-store of DONE; any joiner that observes DONE with
+     * acquire ordering will see the result. */
+    atomic_store_explicit(&h->state, RW_FIBER_DONE, memory_order_release);
+
+    /* Wake main-thread joiner if any. The mutex synchronizes with a
+     * joiner just about to call cond_wait. */
+    pthread_mutex_lock(&h->join_mu);
+    pthread_cond_broadcast(&h->join_cv);
+    pthread_mutex_unlock(&h->join_mu);
+
+    /* Take the fiber wait list in one shot. */
+    rw_wait_lock_acquire(&h->wait_lock);
+    rw_fiber_handle *waiters = h->wait_head;
+    h->wait_head = NULL;
+    rw_wait_lock_release(&h->wait_lock);
+
+    /* Re-enqueue each waiter onto a ready queue. They will resume
+     * inside park_on, observe DONE, and return. */
+    while (waiters) {
+        rw_fiber_handle *next = waiters->next;
+        waiters->next = NULL;
+        /* enqueue_ready sets state = READY and pushes. */
+        enqueue_ready(waiters);
+        waiters = next;
+    }
+
+    rw_M *m = tls_m;
+    rw_fiber_swap(&h->ctx, &m->sched_ctx);
+}
+
 /* The fiber's entry point. Calls user fn, stores result, marks DONE,
  * and yields permanently. We must NEVER let the fiber return into the
  * trampoline (the trampoline would brk #0xdead).
@@ -287,21 +360,7 @@ static void *worker_main(void *arg) {
         rw_fiber_handle *h = (rw_fiber_handle *)arg;                        \
         RETTY (*fn)(void *) = (RETTY (*)(void *))h->user_fn;                \
         h->result.FIELD = fn(h->user_arg);                                  \
-        /* Publish result + DONE (release) so any joiner that observes    \
-         * DONE with acquire also sees the result field. */                 \
-        atomic_store_explicit(&h->state, RW_FIBER_DONE,                     \
-                              memory_order_release);                        \
-        /* Wake the main-thread joiner if any. We take the per-handle     \
-         * mutex briefly: this synchronizes with a joiner that is just    \
-         * about to call cond_wait, ensuring it re-checks state under     \
-         * the lock. */                                                    \
-        pthread_mutex_lock(&h->join_mu);                                    \
-        pthread_cond_broadcast(&h->join_cv);                                \
-        pthread_mutex_unlock(&h->join_mu);                                  \
-        /* Hand back to the worker's scheduler ctx. The fiber stack will \
-         * be reclaimed by free_handle in the joiner. */                    \
-        rw_M *m = tls_m;                                                    \
-        rw_fiber_swap(&h->ctx, &m->sched_ctx);                              \
+        finalize_fiber(h);                                                  \
         /* unreachable */                                                   \
         abort();                                                            \
     }
@@ -316,12 +375,7 @@ static void fiber_entry_void(void *arg) {
     rw_fiber_handle *h = (rw_fiber_handle *)arg;
     void (*fn)(void *) = (void (*)(void *))h->user_fn;
     fn(h->user_arg);
-    atomic_store_explicit(&h->state, RW_FIBER_DONE, memory_order_release);
-    pthread_mutex_lock(&h->join_mu);
-    pthread_cond_broadcast(&h->join_cv);
-    pthread_mutex_unlock(&h->join_mu);
-    rw_M *m = tls_m;
-    rw_fiber_swap(&h->ctx, &m->sched_ctx);
+    finalize_fiber(h);
     abort();
 }
 
@@ -340,6 +394,9 @@ static rw_fiber_handle *spawn_common(rw_result_kind kind,
     /* Per-handle join mutex/condvar for main-thread joiners. */
     pthread_mutex_init(&h->join_mu, NULL);
     pthread_cond_init(&h->join_cv, NULL);
+    /* Empty wait list for fiber-thread joiners. */
+    rw_wait_lock_init(&h->wait_lock);
+    h->wait_head = NULL;
 
     void *region = mmap(NULL, rw_region_size(),
                         PROT_READ | PROT_WRITE,
@@ -387,13 +444,10 @@ static void free_handle(rw_fiber_handle *h) {
 
 /* Wait until h is DONE.
  *
- *   - Inside a fiber on a worker (tls_m != NULL): yield-poll. Acquire-
- *     load pairs with the trampoline's release-store of DONE. This
- *     path is still naive in Commit 3 — Commit 4 replaces it with
- *     wait-list parking so the fiber doesn't busy-yield. As long as
- *     a fiber can only join handles spawned earlier on the same M,
- *     this loop terminates because the worker will eventually pick
- *     the target off its own queue.
+ *   - Inside a fiber on a worker (tls_m != NULL): park on h's wait
+ *     list, yield, resume when the trampoline of h has re-enqueued
+ *     us. This makes "fiber awaits fiber" a true cooperative block:
+ *     while we are WAITING, the worker is free to run other fibers.
  *   - From the main thread (tls_m == NULL): block on the per-handle
  *     condvar. The trampoline broadcasts after release-storing DONE.
  *     We re-check `state` under the mutex to close the lost-wakeup
@@ -402,7 +456,7 @@ static void wait_done(rw_fiber_handle *h) {
     if (tls_m) {
         while (atomic_load_explicit(&h->state, memory_order_acquire)
                != RW_FIBER_DONE) {
-            rw_sched_yield();
+            park_on(h);
         }
         return;
     }

@@ -18,7 +18,7 @@ else
   $(error unsupported architecture: $(UNAME_M))
 endif
 
-OBJS := runtime.o fiber/fiber.o fiber/sched.o fiber/runq.o $(FIBER_ASM)
+OBJS := runtime.o fiber/fiber.o fiber/sched.o fiber/runq.o fiber/park.o $(FIBER_ASM)
 
 .PHONY: all clean
 
@@ -33,10 +33,13 @@ runtime.o: runtime.c runtime.h fiber/sched.h
 fiber/fiber.o: fiber/fiber.c fiber/fiber.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-fiber/sched.o: fiber/sched.c fiber/sched.h fiber/fiber.h fiber/runq.h runtime.h
+fiber/sched.o: fiber/sched.c fiber/sched.h fiber/fiber.h fiber/runq.h fiber/park.h runtime.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 fiber/runq.o: fiber/runq.c fiber/runq.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+fiber/park.o: fiber/park.c fiber/park.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 fiber/fiber_arm64.o: fiber/fiber_arm64.S
