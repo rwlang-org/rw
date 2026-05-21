@@ -299,6 +299,8 @@ class Sema:
             lt = self._check_expr(fn, expr.left, locals_)
             rt = self._check_expr(fn, expr.right, locals_)
             op = expr.op
+            if op == "+" and lt is T.STRING and rt is T.STRING:
+                return T.STRING
             if op in ("+", "-", "*", "/", "%"):
                 if lt != rt:
                     raise CompileError(Diagnostic(
@@ -317,12 +319,6 @@ class Sema:
                     raise CompileError(Diagnostic(
                         self.filename, expr.line, expr.col, len(op),
                         f"`{op}` requires same type, found `{lt}` and `{rt}`",
-                    ))
-                if lt is T.STRING:
-                    # We could allow string equality later; disallow for MVP simplicity.
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, len(op),
-                        "string equality not supported in MVP",
                     ))
                 return T.BOOL
             if op in ("<", "<=", ">", ">="):
@@ -353,6 +349,11 @@ class Sema:
                     raise CompileError(Diagnostic(
                         self.filename, expr.line, expr.col, 5,
                         "cannot spawn the builtin `print`",
+                    ))
+                if call.callee == "len":
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 5,
+                        "cannot spawn the builtin `len`",
                     ))
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
@@ -389,6 +390,20 @@ class Sema:
                     f"print does not support `{at}`",
                 ))
             return T.VOID
+        # Builtin: len(string) -> int.
+        if call.callee == "len":
+            if len(call.args) != 1:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, 3,
+                    f"len takes exactly 1 argument, got {len(call.args)}",
+                ))
+            at = self._check_expr(fn, call.args[0], locals_)
+            if at is not T.STRING:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, 3,
+                    f"len argument must be string, found `{at}`",
+                ))
+            return T.INT
         if call.callee not in self.result.functions:
             raise CompileError(Diagnostic(
                 self.filename, call.line, call.col, len(call.callee),
