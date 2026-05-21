@@ -247,3 +247,21 @@ def test_cannot_spawn_len():
     )
     e = err(src)
     assert "cannot spawn the builtin `len`" in e.diagnostic.message
+
+
+def test_bytes_type_annotation_parses():
+    # Declaring a Bytes parameter and using it should parse and resolve.
+    # We don't yet have a way to *produce* a Bytes value, so use a
+    # function parameter (the only way to introduce a Bytes binding
+    # before bytes_from_str lands).
+    src = (
+        "def takes_bytes(b: Bytes) -> int:\n"
+        "    return 0\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    res = check(src)
+    assert "takes_bytes" in res.functions
+    assert res.functions["takes_bytes"].params[0][1] is T.BYTES
+
+
