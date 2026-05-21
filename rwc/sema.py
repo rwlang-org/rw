@@ -43,6 +43,7 @@ def _resolve_type(filename: str, ty: A.TypeExpr) -> T.Type:
             "float": T.FLOAT,
             "bool": T.BOOL,
             "string": T.STRING,
+            "Bytes": T.BYTES,
             "void": T.VOID,
         }
         if ty.name not in m:
@@ -355,6 +356,16 @@ class Sema:
                         self.filename, expr.line, expr.col, 5,
                         "cannot spawn the builtin `len`",
                     ))
+                if call.callee == "bytes_from_str":
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 5,
+                        "cannot spawn the builtin `bytes_from_str`",
+                    ))
+                if call.callee == "str_from_bytes":
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 5,
+                        "cannot spawn the builtin `str_from_bytes`",
+                    ))
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
                     f"undefined function: {call.callee}",
@@ -390,7 +401,7 @@ class Sema:
                     f"print does not support `{at}`",
                 ))
             return T.VOID
-        # Builtin: len(string) -> int.
+        # Builtin: len(string) -> int.  (also len(Bytes) -> int)
         if call.callee == "len":
             if len(call.args) != 1:
                 raise CompileError(Diagnostic(
@@ -398,12 +409,40 @@ class Sema:
                     f"len takes exactly 1 argument, got {len(call.args)}",
                 ))
             at = self._check_expr(fn, call.args[0], locals_)
-            if at is not T.STRING:
+            if at is not T.STRING and at is not T.BYTES:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, 3,
-                    f"len argument must be string, found `{at}`",
+                    f"len argument must be string or Bytes, found `{at}`",
                 ))
             return T.INT
+        # Builtin: bytes_from_str(string) -> Bytes.
+        if call.callee == "bytes_from_str":
+            if len(call.args) != 1:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"bytes_from_str takes exactly 1 argument, got {len(call.args)}",
+                ))
+            at = self._check_expr(fn, call.args[0], locals_)
+            if at is not T.STRING:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"bytes_from_str argument must be string, found `{at}`",
+                ))
+            return T.BYTES
+        # Builtin: str_from_bytes(Bytes) -> string.
+        if call.callee == "str_from_bytes":
+            if len(call.args) != 1:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"str_from_bytes takes exactly 1 argument, got {len(call.args)}",
+                ))
+            at = self._check_expr(fn, call.args[0], locals_)
+            if at is not T.BYTES:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"str_from_bytes argument must be Bytes, found `{at}`",
+                ))
+            return T.STRING
         if call.callee not in self.result.functions:
             raise CompileError(Diagnostic(
                 self.filename, call.line, call.col, len(call.callee),

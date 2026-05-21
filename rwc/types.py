@@ -31,6 +31,7 @@ FLOAT = _Primitive("float")
 BOOL = _Primitive("bool")
 STRING = _Primitive("string")
 VOID = _Primitive("void")
+BYTES = _Primitive("Bytes")
 
 
 @dataclass(eq=False)

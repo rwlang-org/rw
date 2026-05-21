@@ -156,6 +156,7 @@ class Parser:
             TokenKind.KW_FLOAT: "float",
             TokenKind.KW_BOOL: "bool",
             TokenKind.KW_STRING: "string",
+            TokenKind.KW_BYTES: "Bytes",
             TokenKind.KW_VOID: "void",
         }
         if t.kind in kind_to_name:

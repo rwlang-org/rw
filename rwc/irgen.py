@@ -39,6 +39,8 @@ def llvm_type_of(t: T.Type) -> ir.Type:
         return I8  # ABI: pass bool as i8
     if t is T.STRING:
         return RW_STR_TY
+    if t is T.BYTES:
+        return RW_STR_TY
     if t is T.VOID:
         return ir.VoidType()
     if isinstance(t, T.FutureType):
@@ -96,7 +98,7 @@ class IRGen:
             name, ret_llvm = "rw_spawn_f64", F64
         elif ret_ty is T.BOOL:
             name, ret_llvm = "rw_spawn_bool", I8
-        elif ret_ty is T.STRING:
+        elif ret_ty is T.STRING or ret_ty is T.BYTES:
             name, ret_llvm = "rw_spawn_str", RW_STR_TY
         elif ret_ty is T.VOID:
             name, ret_llvm = "rw_spawn_void", ir.VoidType()
@@ -119,7 +121,7 @@ class IRGen:
             name, ret_llvm = "rw_await_f64", F64
         elif ret_ty is T.BOOL:
             name, ret_llvm = "rw_await_bool", I8
-        elif ret_ty is T.STRING:
+        elif ret_ty is T.STRING or ret_ty is T.BYTES:
             name, ret_llvm = "rw_await_str", RW_STR_TY
         elif ret_ty is T.VOID:
             name, ret_llvm = "rw_await_void", ir.VoidType()
@@ -337,6 +339,7 @@ class IRGen:
         is_float = lty is T.FLOAT
         is_int = lty is T.INT
         is_str = lty is T.STRING
+        is_strlike = lty is T.STRING or lty is T.BYTES
 
         if op in ("+", "-", "*", "/", "%"):
             if is_int:
@@ -369,7 +372,7 @@ class IRGen:
                 i1 = b.fcmp_ordered(pred, l, r)
             elif lty is T.BOOL and op in ("==", "!="):
                 i1 = b.icmp_unsigned(op, l, r)
-            elif is_str and op in ("==", "!="):
+            elif is_strlike and op in ("==", "!="):
                 eq_i8 = b.call(self._rw_str_eq, [l, r])
                 i1 = b.icmp_unsigned("!=", eq_i8, ir.Constant(I8, 0))
                 if op == "!=":
@@ -401,6 +404,10 @@ class IRGen:
         if call.callee == "len":
             v = self._emit_expr(call.args[0], ctx)
             return ctx.builder.call(self._rw_str_len, [v])
+        if call.callee in ("bytes_from_str", "str_from_bytes"):
+            # Both are noops at the IR level: the value carries the
+            # same {len, ptr} layout, only the sema type changes.
+            return self._emit_expr(call.args[0], ctx)
         fn = self.funcs[call.callee]
         args = [self._emit_expr(a, ctx) for a in call.args]
         return ctx.builder.call(fn, args)
