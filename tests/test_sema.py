@@ -170,7 +170,80 @@ def test_spawn_unknown_function():
     assert "undefined function" in e.diagnostic.message
 
 
-def test_string_equality_not_supported():
+def test_string_equality_ok():
     src = "def main() -> int:\n    b: bool = \"a\" == \"b\"\n    return 0\n"
+    check(src)
+
+
+def test_string_neq_ok():
+    src = "def main() -> int:\n    b: bool = \"a\" != \"b\"\n    return 0\n"
+    check(src)
+
+
+def test_string_concat_ok():
+    src = (
+        "def main() -> int:\n"
+        "    s: string = \"a\" + \"b\"\n"
+        "    print(s)\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_len_returns_int():
+    src = (
+        "def main() -> int:\n"
+        "    n: int = len(\"hello\")\n"
+        "    return n\n"
+    )
+    check(src)
+
+
+def test_string_plus_int_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    s: string = \"a\" + 1\n"
+        "    return 0\n"
+    )
     e = err(src)
-    assert "string equality" in e.diagnostic.message
+    assert "+" in e.diagnostic.message
+
+
+def test_string_eq_int_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    b: bool = \"a\" == 1\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "same type" in e.diagnostic.message
+
+
+def test_len_wrong_arg_type():
+    src = (
+        "def main() -> int:\n"
+        "    n: int = len(1)\n"
+        "    return n\n"
+    )
+    e = err(src)
+    assert "len argument must be string" in e.diagnostic.message
+
+
+def test_len_wrong_arity():
+    src = (
+        "def main() -> int:\n"
+        "    n: int = len(\"a\", \"b\")\n"
+        "    return n\n"
+    )
+    e = err(src)
+    assert "len takes exactly 1 argument" in e.diagnostic.message
+
+
+def test_cannot_spawn_len():
+    src = (
+        "def main() -> int:\n"
+        "    f: Future[int] = spawn len(\"x\")\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "cannot spawn the builtin `len`" in e.diagnostic.message

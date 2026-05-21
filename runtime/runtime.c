@@ -35,6 +35,38 @@ rw_str rw_str_from_cstr(const char *cstr, int64_t len) {
     return s;
 }
 
+/* ---------- string ops ---------- */
+
+int64_t rw_str_len(rw_str s) {
+    return s.len;
+}
+
+int8_t rw_str_eq(rw_str a, rw_str b) {
+    if (a.len != b.len) return 0;
+    if (a.len == 0) return 1;  /* both empty: equal */
+    return (int8_t)(memcmp(a.ptr, b.ptr, (size_t)a.len) == 0);
+}
+
+rw_str rw_str_concat(rw_str a, rw_str b) {
+    rw_str out;
+    out.len = a.len + b.len;
+    if (out.len == 0) {
+        out.ptr = NULL;
+        return out;
+    }
+    char *p = (char *)malloc((size_t)out.len);
+    if (!p) {
+        /* OOM: degrade to empty string rather than crash. */
+        out.len = 0;
+        out.ptr = NULL;
+        return out;
+    }
+    if (a.len > 0) memcpy(p, a.ptr, (size_t)a.len);
+    if (b.len > 0) memcpy(p + a.len, b.ptr, (size_t)b.len);
+    out.ptr = p;
+    return out;
+}
+
 /* ---------- lifecycle ---------- */
 
 void rw_init(void) {

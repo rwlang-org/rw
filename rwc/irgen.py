@@ -69,6 +69,13 @@ class IRGen:
         self._rw_print_f64 = ir.Function(m, ir.FunctionType(ir.VoidType(), [F64]), "rw_print_f64")
         self._rw_print_bool = ir.Function(m, ir.FunctionType(ir.VoidType(), [I8]), "rw_print_bool")
         self._rw_print_str = ir.Function(m, ir.FunctionType(ir.VoidType(), [RW_STR_TY]), "rw_print_str")
+        # string ops
+        self._rw_str_len = ir.Function(
+            m, ir.FunctionType(I64, [RW_STR_TY]), "rw_str_len")
+        self._rw_str_eq = ir.Function(
+            m, ir.FunctionType(I8, [RW_STR_TY, RW_STR_TY]), "rw_str_eq")
+        self._rw_str_concat = ir.Function(
+            m, ir.FunctionType(RW_STR_TY, [RW_STR_TY, RW_STR_TY]), "rw_str_concat")
         # lifecycle
         self._rw_init = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_init")
         self._rw_shutdown = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_shutdown")
@@ -329,6 +336,7 @@ class IRGen:
         lty = self.sema.expr_types[id(expr.left)]
         is_float = lty is T.FLOAT
         is_int = lty is T.INT
+        is_str = lty is T.STRING
 
         if op in ("+", "-", "*", "/", "%"):
             if is_int:
@@ -343,6 +351,8 @@ class IRGen:
                     "/": b.fdiv, "%": b.frem,
                 }
                 return table[op](l, r)
+            if is_str and op == "+":
+                return b.call(self._rw_str_concat, [l, r])
             raise RuntimeError(f"arith op {op} on {lty}")
 
         if op in ("<", "<=", ">", ">=", "==", "!="):
@@ -359,6 +369,11 @@ class IRGen:
                 i1 = b.fcmp_ordered(pred, l, r)
             elif lty is T.BOOL and op in ("==", "!="):
                 i1 = b.icmp_unsigned(op, l, r)
+            elif is_str and op in ("==", "!="):
+                eq_i8 = b.call(self._rw_str_eq, [l, r])
+                i1 = b.icmp_unsigned("!=", eq_i8, ir.Constant(I8, 0))
+                if op == "!=":
+                    i1 = b.xor(i1, ir.Constant(ir.IntType(1), 1))
             else:
                 raise RuntimeError(f"cmp op {op} on {lty}")
             return b.zext(i1, I8)
@@ -383,6 +398,9 @@ class IRGen:
             # `print` is void; produce a poison-ish placeholder is unsafe; print is only
             # used as a statement expression; return a zero i64 sentinel never used.
             return ir.Constant(I64, 0)
+        if call.callee == "len":
+            v = self._emit_expr(call.args[0], ctx)
+            return ctx.builder.call(self._rw_str_len, [v])
         fn = self.funcs[call.callee]
         args = [self._emit_expr(a, ctx) for a in call.args]
         return ctx.builder.call(fn, args)
