@@ -1,0 +1,8 @@
+def main() -> int:
+    b: Bytes = bytes_from_str("hello")
+    print(len(b))
+    if b == bytes_from_str("hello"):
+        print("eq ok")
+    s: string = str_from_bytes(b)
+    print(s)
+    return 0
