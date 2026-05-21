@@ -265,3 +265,118 @@ def test_bytes_type_annotation_parses():
     assert res.functions["takes_bytes"].params[0][1] is T.BYTES
 
 
+# ---- Bytes builtin positive cases ----
+
+def test_bytes_from_str_returns_bytes():
+    src = (
+        "def main() -> int:\n"
+        "    b: Bytes = bytes_from_str(\"hi\")\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_len_bytes_returns_int():
+    src = (
+        "def main() -> int:\n"
+        "    b: Bytes = bytes_from_str(\"hello\")\n"
+        "    n: int = len(b)\n"
+        "    return n\n"
+    )
+    check(src)
+
+
+def test_bytes_equality_ok():
+    src = (
+        "def main() -> int:\n"
+        "    a: Bytes = bytes_from_str(\"x\")\n"
+        "    b: Bytes = bytes_from_str(\"y\")\n"
+        "    if a == b:\n"
+        "        return 0\n"
+        "    return 1\n"
+    )
+    check(src)
+
+
+def test_str_from_bytes_returns_string():
+    src = (
+        "def main() -> int:\n"
+        "    b: Bytes = bytes_from_str(\"x\")\n"
+        "    s: string = str_from_bytes(b)\n"
+        "    print(s)\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_future_bytes_ok():
+    src = (
+        "def make() -> Bytes:\n"
+        "    return bytes_from_str(\"x\")\n"
+        "def main() -> int:\n"
+        "    f: Future[Bytes] = spawn make()\n"
+        "    b: Bytes = await f\n"
+        "    return len(b)\n"
+    )
+    check(src)
+
+
+# ---- Bytes negative cases ----
+
+def test_print_bytes_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    b: Bytes = bytes_from_str(\"x\")\n"
+        "    print(b)\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "print" in e.diagnostic.message
+
+
+def test_bytes_plus_bytes_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    a: Bytes = bytes_from_str(\"x\")\n"
+        "    b: Bytes = bytes_from_str(\"y\")\n"
+        "    c: Bytes = a + b\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    # `+` falls through string-only special-case into the numeric check,
+    # which rejects with "int or float".
+    assert "+" in e.diagnostic.message
+
+
+def test_bytes_eq_string_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    b: Bytes = bytes_from_str(\"x\")\n"
+        "    if b == \"x\":\n"
+        "        return 0\n"
+        "    return 1\n"
+    )
+    e = err(src)
+    assert "same type" in e.diagnostic.message
+
+
+def test_bytes_from_str_wrong_arg_type():
+    src = (
+        "def main() -> int:\n"
+        "    b: Bytes = bytes_from_str(1)\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "bytes_from_str argument must be string" in e.diagnostic.message
+
+
+def test_cannot_spawn_bytes_from_str():
+    src = (
+        "def main() -> int:\n"
+        "    f: Future[Bytes] = spawn bytes_from_str(\"x\")\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "cannot spawn the builtin `bytes_from_str`" in e.diagnostic.message
+
+
