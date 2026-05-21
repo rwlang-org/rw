@@ -1,0 +1,12 @@
+def main() -> int:
+    hello: string = "hello"
+    world: string = "world"
+    sep: string = ", "
+    greeting: string = hello + sep + world
+    print(greeting)
+    print(len(greeting))
+    if greeting == "hello, world":
+        print("eq ok")
+    if hello != world:
+        print("neq ok")
+    return 0
