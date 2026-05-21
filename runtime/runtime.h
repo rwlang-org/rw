@@ -23,6 +23,11 @@ void rw_print_str(rw_str s);
 /* string helper */
 rw_str rw_str_from_cstr(const char *cstr, int64_t len);
 
+/* string ops */
+int64_t rw_str_len   (rw_str s);
+int8_t  rw_str_eq    (rw_str a, rw_str b);
+rw_str  rw_str_concat(rw_str a, rw_str b);
+
 /* spawn (one per return type) */
 rw_future_t *rw_spawn_i64 (int64_t (*fn)(void *), void *args);
 rw_future_t *rw_spawn_f64 (double  (*fn)(void *), void *args);
