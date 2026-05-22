@@ -404,6 +404,11 @@ class Sema:
                         self.filename, expr.line, expr.col, 5,
                         "cannot spawn the builtin `list_at`",
                     ))
+                if call.callee == "list_at_opt":
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 5,
+                        "cannot spawn the builtin `list_at_opt`",
+                    ))
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
                     f"undefined function: {call.callee}",
@@ -539,6 +544,26 @@ class Sema:
                     f"list_at second argument must be int, found `{t1}`",
                 ))
             return T.INT
+        # Builtin: list_at_opt(List[int], int) -> Option[int].
+        if call.callee == "list_at_opt":
+            if len(call.args) != 2:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_at_opt takes 2 arguments, got {len(call.args)}",
+                ))
+            t0 = self._check_expr(fn, call.args[0], locals_)
+            t1 = self._check_expr(fn, call.args[1], locals_)
+            if t0 is not T.LIST_INT:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_at_opt first argument must be List[int], found `{t0}`",
+                ))
+            if t1 is not T.INT:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_at_opt second argument must be int, found `{t1}`",
+                ))
+            return T.OPTION_INT
         if call.callee not in self.result.functions:
             raise CompileError(Diagnostic(
                 self.filename, call.line, call.col, len(call.callee),

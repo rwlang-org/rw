@@ -23,6 +23,7 @@ runtime/fiber/test_steal
 runtime/fiber/test_shutdown
 runtime/fiber/test_str_ops
 runtime/fiber/test_list_int
+runtime/fiber/test_option
 
 # rwc build artifacts
 *.ll

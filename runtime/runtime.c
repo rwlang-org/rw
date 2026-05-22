@@ -124,6 +124,16 @@ int64_t rw_list_int_len(const rw_list_int *l) {
     return l->len;
 }
 
+void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i) {
+    if (i < 0 || i >= l->len) {
+        out->tag = 0;
+        out->payload = 0;
+        return;
+    }
+    out->tag = 1;
+    out->payload = l->data[i];
+}
+
 /* ---------- lifecycle ---------- */
 
 void rw_init(void) {

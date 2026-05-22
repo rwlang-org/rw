@@ -43,10 +43,23 @@ typedef struct {
     int64_t *data;
 } rw_list_int;
 
+/* Option[int] type. Two-word fat struct: tag (0=None, 1=Some) +
+ * payload (int value when Some). 16 bytes — fits in two registers,
+ * so value-return ABI is safe (no pointer-out needed for the type
+ * itself). The list_at_opt helper still uses pointer-out for the
+ * output to match the List helpers' calling convention. */
+typedef struct {
+    int64_t tag;       /* 0 = None, 1 = Some */
+    int64_t payload;
+} rw_option_int;
+
 void    rw_list_int_new (rw_list_int *out);
 void    rw_list_int_push(rw_list_int *out, const rw_list_int *l, int64_t v);
 int64_t rw_list_int_at  (const rw_list_int *l, int64_t i);
 int64_t rw_list_int_len (const rw_list_int *l);
+
+/* List[int]: range-checked accessor returning Option[int]. */
+void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i);
 
 /* spawn (one per return type) */
 rw_future_t *rw_spawn_i64 (int64_t (*fn)(void *), void *args);

@@ -29,6 +29,7 @@ F64 = ir.DoubleType()
 I8P = I8.as_pointer()
 RW_STR_TY = ir.LiteralStructType([I64, I8P])  # { i64 len, i8* ptr }
 RW_LIST_INT_TY = ir.LiteralStructType([I64, I64, I64.as_pointer()])  # {len, cap, data*}
+RW_OPTION_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
 
 
 def llvm_type_of(t: T.Type) -> ir.Type:
@@ -44,6 +45,8 @@ def llvm_type_of(t: T.Type) -> ir.Type:
         return RW_STR_TY
     if t is T.LIST_INT:
         return RW_LIST_INT_TY
+    if t is T.OPTION_INT:
+        return RW_OPTION_INT_TY
     if t is T.VOID:
         return ir.VoidType()
     if isinstance(t, T.FutureType):
@@ -94,6 +97,13 @@ class IRGen:
             m, ir.FunctionType(I64, [list_ptr, I64]), "rw_list_int_at")
         self._rw_list_int_len = ir.Function(
             m, ir.FunctionType(I64, [list_ptr]), "rw_list_int_len")
+        # Option[int] ops — pointer-out for the output struct, matching
+        # the List helpers' calling convention.
+        option_ptr = RW_OPTION_INT_TY.as_pointer()
+        self._rw_list_int_at_opt = ir.Function(
+            m, ir.FunctionType(ir.VoidType(),
+                               [option_ptr, list_ptr, I64]),
+            "rw_list_int_at_opt")
         # lifecycle
         self._rw_init = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_init")
         self._rw_shutdown = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_shutdown")
@@ -273,6 +283,36 @@ class IRGen:
                 b.branch(cond_bb)
             b.position_at_end(end_bb)
             return
+        if isinstance(stmt, A.MatchStmt):
+            v = self._emit_expr(stmt.target, ctx)
+            tag = b.extract_value(v, 0)
+            payload = b.extract_value(v, 1)
+            some_bb = ctx.function.append_basic_block("match.some")
+            none_bb = ctx.function.append_basic_block("match.none")
+            end_bb = ctx.function.append_basic_block("match.end")
+            # i64 switch: tag == 1 -> some, default (0) -> none.
+            sw = b.switch(tag, none_bb)
+            sw.add_case(ir.Constant(I64, 1), some_bb)
+            # Some arm: bind some_var to the payload in a fresh slot.
+            b.position_at_end(some_bb)
+            slot = b.alloca(I64, name=stmt.some_var)
+            b.store(payload, slot)
+            saved = ctx.locals.get(stmt.some_var)
+            ctx.locals[stmt.some_var] = slot
+            self._emit_block(stmt.some_block, ctx)
+            if not b.block.is_terminated:
+                b.branch(end_bb)
+            if saved is not None:
+                ctx.locals[stmt.some_var] = saved
+            else:
+                ctx.locals.pop(stmt.some_var, None)
+            # None arm.
+            b.position_at_end(none_bb)
+            self._emit_block(stmt.none_block, ctx)
+            if not b.block.is_terminated:
+                b.branch(end_bb)
+            b.position_at_end(end_bb)
+            return
         raise RuntimeError(f"unsupported stmt: {type(stmt).__name__}")
 
     # ---------- expressions ----------
@@ -309,6 +349,14 @@ class IRGen:
             return self._emit_spawn(expr, ctx)
         if isinstance(expr, A.AwaitExpr):
             return self._emit_await(expr, ctx)
+        if isinstance(expr, A.SomeExpr):
+            v = self._emit_expr(expr.arg, ctx)
+            base = ir.Constant(RW_OPTION_INT_TY,
+                               [ir.Constant(I64, 1), ir.Constant(I64, 0)])
+            return ctx.builder.insert_value(base, v, 1)
+        if isinstance(expr, A.NoneExpr):
+            return ir.Constant(RW_OPTION_INT_TY,
+                               [ir.Constant(I64, 0), ir.Constant(I64, 0)])
         raise RuntimeError(f"unsupported expr: {type(expr).__name__}")
 
     def _emit_binop(self, expr: A.BinOp, ctx: "FunctionCtx") -> ir.Value:
@@ -453,6 +501,14 @@ class IRGen:
             slot = ctx.builder.alloca(RW_LIST_INT_TY)
             ctx.builder.store(lv, slot)
             return ctx.builder.call(self._rw_list_int_at, [slot, iv])
+        if call.callee == "list_at_opt":
+            lv = self._emit_expr(call.args[0], ctx)
+            iv = self._emit_expr(call.args[1], ctx)
+            in_slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            ctx.builder.store(lv, in_slot)
+            out_slot = ctx.builder.alloca(RW_OPTION_INT_TY)
+            ctx.builder.call(self._rw_list_int_at_opt, [out_slot, in_slot, iv])
+            return ctx.builder.load(out_slot)
         fn = self.funcs[call.callee]
         args = [self._emit_expr(a, ctx) for a in call.args]
         return ctx.builder.call(fn, args)
