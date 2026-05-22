@@ -1,0 +1,9 @@
+def main() -> int:
+    l: List[int] = list_new()
+    l = list_push(l, 10)
+    l = list_push(l, 20)
+    l = list_push(l, 30)
+    print(len(l))
+    print(list_at(l, 0))
+    print(list_at(l, 2))
+    return 0
