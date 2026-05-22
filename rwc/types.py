@@ -32,6 +32,7 @@ BOOL = _Primitive("bool")
 STRING = _Primitive("string")
 VOID = _Primitive("void")
 BYTES = _Primitive("Bytes")
+LIST_INT = _Primitive("List[int]")
 
 
 @dataclass(eq=False)

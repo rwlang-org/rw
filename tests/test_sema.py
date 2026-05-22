@@ -380,3 +380,35 @@ def test_cannot_spawn_bytes_from_str():
     assert "cannot spawn the builtin `bytes_from_str`" in e.diagnostic.message
 
 
+# ---- List[int] type annotation ----
+
+def test_list_int_type_annotation_parses():
+    # Declaring a List[int] parameter and using it should parse and
+    # resolve, even before list_new / list_push are wired up.
+    src = (
+        "def takes_list(l: List[int]) -> int:\n"
+        "    return 0\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    res = check(src)
+    assert "takes_list" in res.functions
+    assert res.functions["takes_list"].params[0][1] is T.LIST_INT
+
+
+def test_list_with_non_int_param_is_parser_error():
+    # only List[int] supported.
+    import pytest
+    from rwc.lexer import tokenize
+    from rwc.parser import parse, ParserError
+    src = (
+        "def f(l: List[string]) -> int:\n"
+        "    return 0\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    with pytest.raises(ParserError) as ei:
+        parse(tokenize(src))
+    assert "List[int]" in str(ei.value) or "only List" in str(ei.value)
+
+

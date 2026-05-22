@@ -44,6 +44,7 @@ def _resolve_type(filename: str, ty: A.TypeExpr) -> T.Type:
             "bool": T.BOOL,
             "string": T.STRING,
             "Bytes": T.BYTES,
+            "List[int]": T.LIST_INT,
             "void": T.VOID,
         }
         if ty.name not in m:

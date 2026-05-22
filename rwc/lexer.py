@@ -54,6 +54,7 @@ class TokenKind(Enum):
     KW_BOOL = auto()
     KW_STRING = auto()
     KW_BYTES = auto()
+    KW_LIST = auto()
     # Reserved for the future (cause errors in Sema, but tokenizable)
     KW_EXTERN = auto()
     KW_CLASS = auto()
@@ -106,6 +107,7 @@ KEYWORDS: dict[str, TokenKind] = {
     "bool": TokenKind.KW_BOOL,
     "string": TokenKind.KW_STRING,
     "Bytes": TokenKind.KW_BYTES,
+    "List": TokenKind.KW_LIST,
     "extern": TokenKind.KW_EXTERN,
     "class": TokenKind.KW_CLASS,
     "import": TokenKind.KW_IMPORT,
