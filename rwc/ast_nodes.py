@@ -106,9 +106,23 @@ class AwaitExpr:
     col: int
 
 
+@dataclass
+class SomeExpr:
+    arg: "Expr"
+    line: int
+    col: int
+
+
+@dataclass
+class NoneExpr:
+    line: int
+    col: int
+
+
 Expr = Union[
     IntLit, FloatLit, BoolLit, StringLit, Name,
     UnaryOp, BinOp, Call, SpawnExpr, AwaitExpr,
+    SomeExpr, NoneExpr,
 ]
 
 
@@ -163,7 +177,17 @@ class While:
     col: int
 
 
-Stmt = Union[VarDecl, Assign, ExprStmt, Return, If, While]
+@dataclass
+class MatchStmt:
+    target: Expr
+    some_var: str
+    some_block: List["Stmt"]
+    none_block: List["Stmt"]
+    line: int
+    col: int
+
+
+Stmt = Union[VarDecl, Assign, ExprStmt, Return, If, While, MatchStmt]
 
 
 # ----- Top level -----

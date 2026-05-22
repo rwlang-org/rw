@@ -537,3 +537,50 @@ def test_cannot_spawn_list_new():
     assert "cannot spawn the builtin `list_new`" in e.diagnostic.message
 
 
+# ---- Option[int] type annotation ----
+
+def test_option_int_type_annotation_parses():
+    src = (
+        "def takes_opt(o: Option[int]) -> int:\n"
+        "    return 0\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    res = check(src)
+    assert "takes_opt" in res.functions
+    assert res.functions["takes_opt"].params[0][1] is T.OPTION_INT
+
+
+def test_option_with_non_int_param_is_parser_error():
+    import pytest
+    from rwc.lexer import tokenize
+    from rwc.parser import parse, ParserError
+    src = (
+        "def f(o: Option[string]) -> int:\n"
+        "    return 0\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    with pytest.raises(ParserError) as ei:
+        parse(tokenize(src))
+    assert "Option[int]" in str(ei.value) or "only Option" in str(ei.value)
+
+
+def test_match_with_missing_arm_is_parser_error():
+    import pytest
+    from rwc.lexer import tokenize
+    from rwc.parser import parse, ParserError
+    # only Some arm — parser must reject
+    src = (
+        "def main() -> int:\n"
+        "    o: Option[int] = None\n"
+        "    match o:\n"
+        "        case Some(x):\n"
+        "            return x\n"
+        "    return 0\n"
+    )
+    with pytest.raises(ParserError) as ei:
+        parse(tokenize(src))
+    assert "must cover both" in str(ei.value)
+
+

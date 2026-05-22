@@ -180,6 +180,18 @@ class Parser:
             self.i += 1
             self.eat(TokenKind.RBRACK, "']' to close List[int]")
             return A.TypeName("List[int]", t.line, t.col)
+        if t.kind == TokenKind.KW_OPTION:
+            self.i += 1
+            self.eat(TokenKind.LBRACK, "'[' after Option")
+            inner_tok = self.cur
+            if inner_tok.kind != TokenKind.KW_INT:
+                raise ParserError(
+                    "only Option[int] is supported in this version of rw",
+                    inner_tok.line, inner_tok.col, max(1, len(inner_tok.value)),
+                )
+            self.i += 1
+            self.eat(TokenKind.RBRACK, "']' to close Option[int]")
+            return A.TypeName("Option[int]", t.line, t.col)
         raise ParserError(
             f"expected type, got {t.kind.name}", t.line, t.col, max(1, len(t.value))
         )
@@ -212,6 +224,8 @@ class Parser:
             return self.parse_if()
         if t.kind == TokenKind.KW_WHILE:
             return self.parse_while()
+        if t.kind == TokenKind.KW_MATCH:
+            return self.parse_match()
         # IDENT followed by ':'  => var_decl
         # IDENT followed by '='  => assignment
         if t.kind == TokenKind.IDENT:
@@ -272,6 +286,70 @@ class Parser:
         self.eat(TokenKind.NEWLINE)
         body = self.parse_block()
         return A.While(cond, body, kw.line, kw.col)
+
+    def parse_match(self) -> A.MatchStmt:
+        kw = self.eat(TokenKind.KW_MATCH)
+        target = self.parse_expr()
+        self.eat(TokenKind.COLON, "':' after match target")
+        self.eat(TokenKind.NEWLINE)
+        # The match body is a sequence of `case` arms inside one indented
+        # block. We can't use parse_block here because parse_block calls
+        # parse_stmt on each line and `case` is not a statement.
+        self.eat(TokenKind.INDENT, "indented match body")
+        some_var: Optional[str] = None
+        some_block: Optional[List[A.Stmt]] = None
+        none_block: Optional[List[A.Stmt]] = None
+        while self.cur.kind != TokenKind.DEDENT:
+            if self.cur.kind == TokenKind.NEWLINE:
+                self.i += 1
+                continue
+            if self.cur.kind != TokenKind.KW_CASE:
+                raise ParserError(
+                    "expected `case` arm in match body",
+                    self.cur.line, self.cur.col,
+                    max(1, len(self.cur.value)),
+                )
+            self.eat(TokenKind.KW_CASE)
+            arm_tok = self.cur
+            if arm_tok.kind == TokenKind.KW_SOME:
+                if some_block is not None:
+                    raise ParserError(
+                        "duplicate `case Some(...)` arm in match",
+                        arm_tok.line, arm_tok.col, 4,
+                    )
+                self.eat(TokenKind.KW_SOME)
+                self.eat(TokenKind.LPAREN, "'(' after Some")
+                ident = self.eat(TokenKind.IDENT, "identifier in Some(...)")
+                self.eat(TokenKind.RPAREN, "')' to close Some(...)")
+                self.eat(TokenKind.COLON, "':' after case pattern")
+                self.eat(TokenKind.NEWLINE)
+                some_var = ident.value
+                some_block = self.parse_block()
+            elif arm_tok.kind == TokenKind.KW_NONE:
+                if none_block is not None:
+                    raise ParserError(
+                        "duplicate `case None` arm in match",
+                        arm_tok.line, arm_tok.col, 4,
+                    )
+                self.eat(TokenKind.KW_NONE)
+                self.eat(TokenKind.COLON, "':' after case pattern")
+                self.eat(TokenKind.NEWLINE)
+                none_block = self.parse_block()
+            else:
+                raise ParserError(
+                    "match case must be `Some(x)` or `None`",
+                    arm_tok.line, arm_tok.col,
+                    max(1, len(arm_tok.value)),
+                )
+        self.eat(TokenKind.DEDENT)
+        if some_block is None or none_block is None or some_var is None:
+            raise ParserError(
+                "match on Option[int] must cover both Some and None",
+                kw.line, kw.col, 5,
+            )
+        return A.MatchStmt(
+            target, some_var, some_block, none_block, kw.line, kw.col,
+        )
 
     def parse_var_decl(self) -> A.VarDecl:
         name_tok = self.eat(TokenKind.IDENT)
@@ -377,6 +455,15 @@ class Parser:
                     5,
                 )
             return A.SpawnExpr(atom, t.line, t.col)
+        if t.kind == TokenKind.KW_SOME:
+            self.i += 1
+            self.eat(TokenKind.LPAREN, "'(' after Some")
+            arg = self.parse_expr()
+            self.eat(TokenKind.RPAREN, "')' to close Some(...)")
+            return A.SomeExpr(arg, t.line, t.col)
+        if t.kind == TokenKind.KW_NONE:
+            self.i += 1
+            return A.NoneExpr(t.line, t.col)
         return self.parse_atom_postfix()
 
     def parse_atom_postfix(self) -> A.Expr:

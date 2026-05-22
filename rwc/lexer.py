@@ -55,6 +55,11 @@ class TokenKind(Enum):
     KW_STRING = auto()
     KW_BYTES = auto()
     KW_LIST = auto()
+    KW_OPTION = auto()
+    KW_MATCH = auto()
+    KW_CASE = auto()
+    KW_SOME = auto()
+    KW_NONE = auto()
     # Reserved for the future (cause errors in Sema, but tokenizable)
     KW_EXTERN = auto()
     KW_CLASS = auto()
@@ -62,7 +67,6 @@ class TokenKind(Enum):
     KW_FOR = auto()
     KW_IN = auto()
     KW_AS = auto()
-    KW_NONE = auto()
 
     # Punctuation / operators
     LPAREN = auto()
@@ -108,13 +112,17 @@ KEYWORDS: dict[str, TokenKind] = {
     "string": TokenKind.KW_STRING,
     "Bytes": TokenKind.KW_BYTES,
     "List": TokenKind.KW_LIST,
+    "Option": TokenKind.KW_OPTION,
+    "match": TokenKind.KW_MATCH,
+    "case": TokenKind.KW_CASE,
+    "Some": TokenKind.KW_SOME,
+    "None": TokenKind.KW_NONE,
     "extern": TokenKind.KW_EXTERN,
     "class": TokenKind.KW_CLASS,
     "import": TokenKind.KW_IMPORT,
     "for": TokenKind.KW_FOR,
     "in": TokenKind.KW_IN,
     "as": TokenKind.KW_AS,
-    "None": TokenKind.KW_NONE,
 }
 
 
