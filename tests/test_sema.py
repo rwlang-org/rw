@@ -584,3 +584,137 @@ def test_match_with_missing_arm_is_parser_error():
     assert "must cover both" in str(ei.value)
 
 
+# ---- Option[int] positive cases ----
+
+def test_some_int_returns_option_int():
+    src = (
+        "def main() -> int:\n"
+        "    o: Option[int] = Some(5)\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_none_returns_option_int():
+    src = (
+        "def main() -> int:\n"
+        "    o: Option[int] = None\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_function_returning_option_int_with_both_arms():
+    src = (
+        "def f(b: int) -> Option[int]:\n"
+        "    if b == 0:\n"
+        "        return None\n"
+        "    return Some(1)\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_match_two_arms_ok():
+    src = (
+        "def main() -> int:\n"
+        "    o: Option[int] = Some(7)\n"
+        "    match o:\n"
+        "        case Some(x):\n"
+        "            print(x)\n"
+        "        case None:\n"
+        "            print(-1)\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_match_some_bound_var_is_int():
+    src = (
+        "def main() -> int:\n"
+        "    o: Option[int] = Some(7)\n"
+        "    match o:\n"
+        "        case Some(x):\n"
+        "            y: int = x + 1\n"
+        "            print(y)\n"
+        "        case None:\n"
+        "            print(-1)\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_match_terminates_via_both_arms_return():
+    # pick has no `return` after match because match itself terminates
+    # in both arms.
+    src = (
+        "def pick(b: int) -> int:\n"
+        "    o: Option[int] = None\n"
+        "    if b == 0:\n"
+        "        o = None\n"
+        "    else:\n"
+        "        o = Some(b)\n"
+        "    match o:\n"
+        "        case Some(x):\n"
+        "            return x\n"
+        "        case None:\n"
+        "            return -1\n"
+        "def main() -> int:\n"
+        "    return pick(7)\n"
+    )
+    check(src)
+
+
+# ---- Option[int] negative cases ----
+
+def test_some_string_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    o: Option[int] = Some(\"hi\")\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "Some argument must be int" in e.diagnostic.message
+
+
+def test_match_on_int_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    x: int = 5\n"
+        "    match x:\n"
+        "        case Some(v):\n"
+        "            print(v)\n"
+        "        case None:\n"
+        "            print(0)\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "match target must be Option[int]" in e.diagnostic.message
+
+
+def test_print_option_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    o: Option[int] = Some(1)\n"
+        "    print(o)\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "print" in e.diagnostic.message
+
+
+def test_option_eq_is_type_error():
+    # Option[int] is intentionally not on the == whitelist
+    src = (
+        "def main() -> int:\n"
+        "    a: Option[int] = Some(1)\n"
+        "    b: Option[int] = None\n"
+        "    if a == b:\n"
+        "        return 0\n"
+        "    return 1\n"
+    )
+    e = err(src)
+    assert "compare" in e.diagnostic.message or "==" in e.diagnostic.message
+
+
