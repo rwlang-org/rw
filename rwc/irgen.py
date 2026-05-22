@@ -28,6 +28,7 @@ I64 = ir.IntType(64)
 F64 = ir.DoubleType()
 I8P = I8.as_pointer()
 RW_STR_TY = ir.LiteralStructType([I64, I8P])  # { i64 len, i8* ptr }
+RW_LIST_INT_TY = ir.LiteralStructType([I64, I64, I64.as_pointer()])  # {len, cap, data*}
 
 
 def llvm_type_of(t: T.Type) -> ir.Type:
@@ -41,6 +42,8 @@ def llvm_type_of(t: T.Type) -> ir.Type:
         return RW_STR_TY
     if t is T.BYTES:
         return RW_STR_TY
+    if t is T.LIST_INT:
+        return RW_LIST_INT_TY
     if t is T.VOID:
         return ir.VoidType()
     if isinstance(t, T.FutureType):
@@ -78,6 +81,19 @@ class IRGen:
             m, ir.FunctionType(I8, [RW_STR_TY, RW_STR_TY]), "rw_str_eq")
         self._rw_str_concat = ir.Function(
             m, ir.FunctionType(RW_STR_TY, [RW_STR_TY, RW_STR_TY]), "rw_str_concat")
+        # List[int] ops — pointer-out ABI (see runtime.h for the
+        # rationale: 24-byte struct is past arm64's "return in regs"
+        # threshold, so we go through stack-allocated buffers).
+        list_ptr = RW_LIST_INT_TY.as_pointer()
+        self._rw_list_int_new = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [list_ptr]), "rw_list_int_new")
+        self._rw_list_int_push = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [list_ptr, list_ptr, I64]),
+            "rw_list_int_push")
+        self._rw_list_int_at = ir.Function(
+            m, ir.FunctionType(I64, [list_ptr, I64]), "rw_list_int_at")
+        self._rw_list_int_len = ir.Function(
+            m, ir.FunctionType(I64, [list_ptr]), "rw_list_int_len")
         # lifecycle
         self._rw_init = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_init")
         self._rw_shutdown = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_shutdown")
@@ -402,12 +418,41 @@ class IRGen:
             # used as a statement expression; return a zero i64 sentinel never used.
             return ir.Constant(I64, 0)
         if call.callee == "len":
-            v = self._emit_expr(call.args[0], ctx)
+            arg_ast = call.args[0]
+            v = self._emit_expr(arg_ast, ctx)
+            aty = self.sema.expr_types[id(arg_ast)]
+            if aty is T.LIST_INT:
+                # rw_list_int_len takes a pointer to a stack copy.
+                slot = ctx.builder.alloca(RW_LIST_INT_TY)
+                ctx.builder.store(v, slot)
+                return ctx.builder.call(self._rw_list_int_len, [slot])
             return ctx.builder.call(self._rw_str_len, [v])
         if call.callee in ("bytes_from_str", "str_from_bytes"):
             # Both are noops at the IR level: the value carries the
             # same {len, ptr} layout, only the sema type changes.
             return self._emit_expr(call.args[0], ctx)
+        if call.callee == "list_new":
+            # rw_list_int_new(rw_list_int *out) writes to a stack slot;
+            # we then load the value back out as a SSA struct.
+            slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            ctx.builder.call(self._rw_list_int_new, [slot])
+            return ctx.builder.load(slot)
+        if call.callee == "list_push":
+            lv = self._emit_expr(call.args[0], ctx)
+            vv = self._emit_expr(call.args[1], ctx)
+            # Copy the input list onto the stack, call push with an
+            # output slot, then load the new list back.
+            in_slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            ctx.builder.store(lv, in_slot)
+            out_slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            ctx.builder.call(self._rw_list_int_push, [out_slot, in_slot, vv])
+            return ctx.builder.load(out_slot)
+        if call.callee == "list_at":
+            lv = self._emit_expr(call.args[0], ctx)
+            iv = self._emit_expr(call.args[1], ctx)
+            slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            ctx.builder.store(lv, slot)
+            return ctx.builder.call(self._rw_list_int_at, [slot, iv])
         fn = self.funcs[call.callee]
         args = [self._emit_expr(a, ctx) for a in call.args]
         return ctx.builder.call(fn, args)

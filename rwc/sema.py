@@ -44,6 +44,7 @@ def _resolve_type(filename: str, ty: A.TypeExpr) -> T.Type:
             "bool": T.BOOL,
             "string": T.STRING,
             "Bytes": T.BYTES,
+            "List[int]": T.LIST_INT,
             "void": T.VOID,
         }
         if ty.name not in m:
@@ -321,6 +322,11 @@ class Sema:
                         self.filename, expr.line, expr.col, len(op),
                         f"`{op}` requires same type, found `{lt}` and `{rt}`",
                     ))
+                if lt not in (T.INT, T.FLOAT, T.BOOL, T.STRING, T.BYTES):
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, len(op),
+                        f"cannot compare `{lt}` with `{op}`",
+                    ))
                 return T.BOOL
             if op in ("<", "<=", ">", ">="):
                 if lt != rt or not T.is_numeric(lt):
@@ -366,6 +372,21 @@ class Sema:
                         self.filename, expr.line, expr.col, 5,
                         "cannot spawn the builtin `str_from_bytes`",
                     ))
+                if call.callee == "list_new":
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 5,
+                        "cannot spawn the builtin `list_new`",
+                    ))
+                if call.callee == "list_push":
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 5,
+                        "cannot spawn the builtin `list_push`",
+                    ))
+                if call.callee == "list_at":
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 5,
+                        "cannot spawn the builtin `list_at`",
+                    ))
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
                     f"undefined function: {call.callee}",
@@ -401,7 +422,7 @@ class Sema:
                     f"print does not support `{at}`",
                 ))
             return T.VOID
-        # Builtin: len(string) -> int.  (also len(Bytes) -> int)
+        # Builtin: len(string|Bytes|List[int]) -> int.
         if call.callee == "len":
             if len(call.args) != 1:
                 raise CompileError(Diagnostic(
@@ -409,10 +430,10 @@ class Sema:
                     f"len takes exactly 1 argument, got {len(call.args)}",
                 ))
             at = self._check_expr(fn, call.args[0], locals_)
-            if at is not T.STRING and at is not T.BYTES:
+            if at is not T.STRING and at is not T.BYTES and at is not T.LIST_INT:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, 3,
-                    f"len argument must be string or Bytes, found `{at}`",
+                    f"len argument must be string, Bytes or List[int], found `{at}`",
                 ))
             return T.INT
         # Builtin: bytes_from_str(string) -> Bytes.
@@ -443,6 +464,54 @@ class Sema:
                     f"str_from_bytes argument must be Bytes, found `{at}`",
                 ))
             return T.STRING
+        # Builtin: list_new() -> List[int].
+        if call.callee == "list_new":
+            if len(call.args) != 0:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_new takes no arguments, got {len(call.args)}",
+                ))
+            return T.LIST_INT
+        # Builtin: list_push(List[int], int) -> List[int].
+        if call.callee == "list_push":
+            if len(call.args) != 2:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_push takes 2 arguments, got {len(call.args)}",
+                ))
+            t0 = self._check_expr(fn, call.args[0], locals_)
+            t1 = self._check_expr(fn, call.args[1], locals_)
+            if t0 is not T.LIST_INT:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_push first argument must be List[int], found `{t0}`",
+                ))
+            if t1 is not T.INT:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_push second argument must be int, found `{t1}`",
+                ))
+            return T.LIST_INT
+        # Builtin: list_at(List[int], int) -> int.
+        if call.callee == "list_at":
+            if len(call.args) != 2:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_at takes 2 arguments, got {len(call.args)}",
+                ))
+            t0 = self._check_expr(fn, call.args[0], locals_)
+            t1 = self._check_expr(fn, call.args[1], locals_)
+            if t0 is not T.LIST_INT:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_at first argument must be List[int], found `{t0}`",
+                ))
+            if t1 is not T.INT:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_at second argument must be int, found `{t1}`",
+                ))
+            return T.INT
         if call.callee not in self.result.functions:
             raise CompileError(Diagnostic(
                 self.filename, call.line, call.col, len(call.callee),

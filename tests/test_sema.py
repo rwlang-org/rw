@@ -380,3 +380,160 @@ def test_cannot_spawn_bytes_from_str():
     assert "cannot spawn the builtin `bytes_from_str`" in e.diagnostic.message
 
 
+# ---- List[int] type annotation ----
+
+def test_list_int_type_annotation_parses():
+    # Declaring a List[int] parameter and using it should parse and
+    # resolve, even before list_new / list_push are wired up.
+    src = (
+        "def takes_list(l: List[int]) -> int:\n"
+        "    return 0\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    res = check(src)
+    assert "takes_list" in res.functions
+    assert res.functions["takes_list"].params[0][1] is T.LIST_INT
+
+
+def test_list_with_non_int_param_is_parser_error():
+    # only List[int] supported.
+    import pytest
+    from rwc.lexer import tokenize
+    from rwc.parser import parse, ParserError
+    src = (
+        "def f(l: List[string]) -> int:\n"
+        "    return 0\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    with pytest.raises(ParserError) as ei:
+        parse(tokenize(src))
+    assert "List[int]" in str(ei.value) or "only List" in str(ei.value)
+
+
+# ---- List[int] builtin positive cases ----
+
+def test_list_new_returns_list_int():
+    src = (
+        "def main() -> int:\n"
+        "    l: List[int] = list_new()\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_list_push_returns_list_int():
+    src = (
+        "def main() -> int:\n"
+        "    l: List[int] = list_new()\n"
+        "    l = list_push(l, 5)\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_list_at_returns_int():
+    src = (
+        "def main() -> int:\n"
+        "    l: List[int] = list_new()\n"
+        "    l = list_push(l, 7)\n"
+        "    x: int = list_at(l, 0)\n"
+        "    return x\n"
+    )
+    check(src)
+
+
+def test_len_list_int_returns_int():
+    src = (
+        "def main() -> int:\n"
+        "    l: List[int] = list_new()\n"
+        "    l = list_push(l, 1)\n"
+        "    n: int = len(l)\n"
+        "    return n\n"
+    )
+    check(src)
+
+
+# ---- List[int] negative cases ----
+
+def test_print_list_int_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    l: List[int] = list_new()\n"
+        "    print(l)\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "print" in e.diagnostic.message
+
+
+def test_list_int_plus_list_int_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    a: List[int] = list_new()\n"
+        "    b: List[int] = list_new()\n"
+        "    c: List[int] = a + b\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "+" in e.diagnostic.message
+
+
+def test_list_int_eq_list_int_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    a: List[int] = list_new()\n"
+        "    b: List[int] = list_new()\n"
+        "    if a == b:\n"
+        "        return 0\n"
+        "    return 1\n"
+    )
+    e = err(src)
+    # equality falls through to the generic "no comparison for this
+    # type" path; we just check it's flagged on `==`.
+    assert "==" in e.diagnostic.message or "compare" in e.diagnostic.message
+
+
+def test_list_push_wrong_value_type():
+    src = (
+        "def main() -> int:\n"
+        "    l: List[int] = list_new()\n"
+        "    l = list_push(l, \"hi\")\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "list_push second argument must be int" in e.diagnostic.message
+
+
+def test_list_at_wrong_index_type():
+    src = (
+        "def main() -> int:\n"
+        "    l: List[int] = list_new()\n"
+        "    x: int = list_at(l, \"a\")\n"
+        "    return x\n"
+    )
+    e = err(src)
+    assert "list_at second argument must be int" in e.diagnostic.message
+
+
+def test_list_new_wrong_arity():
+    src = (
+        "def main() -> int:\n"
+        "    l: List[int] = list_new(1)\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "list_new takes no arguments" in e.diagnostic.message
+
+
+def test_cannot_spawn_list_new():
+    src = (
+        "def main() -> int:\n"
+        "    f: Future[List[int]] = spawn list_new()\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "cannot spawn the builtin `list_new`" in e.diagnostic.message
+
+

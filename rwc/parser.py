@@ -168,6 +168,18 @@ class Parser:
             inner = self.parse_type()
             self.eat(TokenKind.RBRACK, "']' to close Future[...]")
             return A.TypeFuture(inner, t.line, t.col)
+        if t.kind == TokenKind.KW_LIST:
+            self.i += 1
+            self.eat(TokenKind.LBRACK, "'[' after List")
+            inner_tok = self.cur
+            if inner_tok.kind != TokenKind.KW_INT:
+                raise ParserError(
+                    "only List[int] is supported in this version of rw",
+                    inner_tok.line, inner_tok.col, max(1, len(inner_tok.value)),
+                )
+            self.i += 1
+            self.eat(TokenKind.RBRACK, "']' to close List[int]")
+            return A.TypeName("List[int]", t.line, t.col)
         raise ParserError(
             f"expected type, got {t.kind.name}", t.line, t.col, max(1, len(t.value))
         )
