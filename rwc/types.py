@@ -33,6 +33,7 @@ STRING = _Primitive("string")
 VOID = _Primitive("void")
 BYTES = _Primitive("Bytes")
 LIST_INT = _Primitive("List[int]")
+OPTION_INT = _Primitive("Option[int]")
 
 
 @dataclass(eq=False)

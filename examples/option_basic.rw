@@ -1,0 +1,19 @@
+def safe_div(a: int, b: int) -> Option[int]:
+    if b == 0:
+        return None
+    return Some(a / b)
+
+def main() -> int:
+    r: Option[int] = safe_div(10, 2)
+    match r:
+        case Some(x):
+            print(x)
+        case None:
+            print(-1)
+    e: Option[int] = safe_div(10, 0)
+    match e:
+        case Some(x):
+            print(x)
+        case None:
+            print(-1)
+    return 0

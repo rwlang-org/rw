@@ -45,6 +45,7 @@ def _resolve_type(filename: str, ty: A.TypeExpr) -> T.Type:
             "string": T.STRING,
             "Bytes": T.BYTES,
             "List[int]": T.LIST_INT,
+            "Option[int]": T.OPTION_INT,
             "void": T.VOID,
         }
         if ty.name not in m:
@@ -243,6 +244,22 @@ class Sema:
             self._check_block(fn, stmt.body, dict(locals_), ret_ty)
             return False  # while bodies don't guarantee return
 
+        if isinstance(stmt, A.MatchStmt):
+            tt = self._check_expr(fn, stmt.target, locals_)
+            if tt is not T.OPTION_INT:
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, 5,
+                    f"match target must be Option[int], found `{tt}`",
+                ))
+            # Some arm: bind some_var as int in a new locals scope.
+            some_locals = dict(locals_)
+            some_locals[stmt.some_var] = T.INT
+            some_ret = self._check_block(fn, stmt.some_block, some_locals, ret_ty)
+            # None arm: no binding.
+            none_ret = self._check_block(fn, stmt.none_block, dict(locals_), ret_ty)
+            # match terminates in return iff both arms do.
+            return some_ret and none_ret
+
         raise CompileError(Diagnostic(
             self.filename, 0, 0, 1, f"internal: unknown stmt: {type(stmt).__name__}",
         ))
@@ -387,6 +404,11 @@ class Sema:
                         self.filename, expr.line, expr.col, 5,
                         "cannot spawn the builtin `list_at`",
                     ))
+                if call.callee == "list_at_opt":
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 5,
+                        "cannot spawn the builtin `list_at_opt`",
+                    ))
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
                     f"undefined function: {call.callee}",
@@ -403,6 +425,16 @@ class Sema:
                     f"`await` requires a Future, found `{tgt}`",
                 ))
             return tgt.inner
+        if isinstance(expr, A.SomeExpr):
+            at = self._check_expr(fn, expr.arg, locals_)
+            if at is not T.INT:
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, 4,
+                    f"Some argument must be int, found `{at}`",
+                ))
+            return T.OPTION_INT
+        if isinstance(expr, A.NoneExpr):
+            return T.OPTION_INT
         raise CompileError(Diagnostic(
             self.filename, 0, 0, 1, f"internal: unknown expr {type(expr).__name__}",
         ))
@@ -512,6 +544,26 @@ class Sema:
                     f"list_at second argument must be int, found `{t1}`",
                 ))
             return T.INT
+        # Builtin: list_at_opt(List[int], int) -> Option[int].
+        if call.callee == "list_at_opt":
+            if len(call.args) != 2:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_at_opt takes 2 arguments, got {len(call.args)}",
+                ))
+            t0 = self._check_expr(fn, call.args[0], locals_)
+            t1 = self._check_expr(fn, call.args[1], locals_)
+            if t0 is not T.LIST_INT:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_at_opt first argument must be List[int], found `{t0}`",
+                ))
+            if t1 is not T.INT:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"list_at_opt second argument must be int, found `{t1}`",
+                ))
+            return T.OPTION_INT
         if call.callee not in self.result.functions:
             raise CompileError(Diagnostic(
                 self.filename, call.line, call.col, len(call.callee),
