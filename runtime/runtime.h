@@ -28,17 +28,25 @@ int64_t rw_str_len   (rw_str s);
 int8_t  rw_str_eq    (rw_str a, rw_str b);
 rw_str  rw_str_concat(rw_str a, rw_str b);
 
-/* List[int] type and ops. */
+/* List[int] type and ops.
+ *
+ * The struct is 3 words (24 bytes) which puts it past arm64's
+ * "return in registers" threshold and triggers sret on most ABIs.
+ * To keep llvmlite-emitted IR compatible with the C ABI without
+ * having to tag every declare with sret, we expose all helpers as
+ * pointer-out functions: the caller allocates a stack slot and
+ * passes its address as the first argument. Per-value reads
+ * (len/at) still return their results by value (i64). */
 typedef struct {
     int64_t  len;
     int64_t  cap;
     int64_t *data;
 } rw_list_int;
 
-rw_list_int  rw_list_int_new (void);
-rw_list_int  rw_list_int_push(rw_list_int l, int64_t v);
-int64_t      rw_list_int_at  (rw_list_int l, int64_t i);
-int64_t      rw_list_int_len (rw_list_int l);
+void    rw_list_int_new (rw_list_int *out);
+void    rw_list_int_push(rw_list_int *out, const rw_list_int *l, int64_t v);
+int64_t rw_list_int_at  (const rw_list_int *l, int64_t i);
+int64_t rw_list_int_len (const rw_list_int *l);
 
 /* spawn (one per return type) */
 rw_future_t *rw_spawn_i64 (int64_t (*fn)(void *), void *args);

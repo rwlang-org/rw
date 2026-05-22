@@ -67,52 +67,61 @@ rw_str rw_str_concat(rw_str a, rw_str b) {
     return out;
 }
 
-/* ---------- List[int] ops ---------- */
+/* ---------- List[int] ops ----------
+ *
+ * All helpers use pointer arguments instead of passing the 24-byte
+ * struct by value. See runtime.h for the rationale (avoids sret /
+ * ABI mismatches between clang-compiled callees and llvmlite-emitted
+ * call sites). */
 
-rw_list_int rw_list_int_new(void) {
-    rw_list_int l = { .len = 0, .cap = 0, .data = NULL };
-    return l;
+void rw_list_int_new(rw_list_int *out) {
+    out->len = 0;
+    out->cap = 0;
+    out->data = NULL;
 }
 
-rw_list_int rw_list_int_push(rw_list_int l, int64_t v) {
+void rw_list_int_push(rw_list_int *out, const rw_list_int *l, int64_t v) {
     /* If the existing cap can hold one more element, reuse it. We still
      * allocate a fresh buffer (immutability), but the new cap matches
      * the old one. Only when the old cap is exhausted do we double. */
     int64_t new_cap;
-    if (l.cap == 0) {
+    if (l->cap == 0) {
         new_cap = 4;
-    } else if (l.len + 1 <= l.cap) {
-        new_cap = l.cap;
+    } else if (l->len + 1 <= l->cap) {
+        new_cap = l->cap;
     } else {
-        new_cap = l.cap * 2;
-        while (new_cap < l.len + 1) new_cap *= 2;
+        new_cap = l->cap * 2;
+        while (new_cap < l->len + 1) new_cap *= 2;
     }
     int64_t *new_data = (int64_t *)malloc((size_t)new_cap * sizeof(int64_t));
     if (!new_data) {
         /* OOM: degrade to an empty list rather than crash. */
-        rw_list_int empty = { .len = 0, .cap = 0, .data = NULL };
-        return empty;
+        out->len = 0;
+        out->cap = 0;
+        out->data = NULL;
+        return;
     }
-    if (l.len > 0) {
-        memcpy(new_data, l.data, (size_t)l.len * sizeof(int64_t));
+    if (l->len > 0) {
+        memcpy(new_data, l->data, (size_t)l->len * sizeof(int64_t));
     }
-    new_data[l.len] = v;
-    rw_list_int out = { .len = l.len + 1, .cap = new_cap, .data = new_data };
-    return out;
-    /* Note: l.data is intentionally NOT freed; another caller may still
+    new_data[l->len] = v;
+    out->len = l->len + 1;
+    out->cap = new_cap;
+    out->data = new_data;
+    /* Note: l->data is intentionally NOT freed; another caller may still
      * hold the old List. Leak is acceptable for the learning runtime. */
 }
 
-int64_t rw_list_int_at(rw_list_int l, int64_t i) {
-    if (i < 0 || i >= l.len) {
+int64_t rw_list_int_at(const rw_list_int *l, int64_t i) {
+    if (i < 0 || i >= l->len) {
         fputs("rw: list_at: index out of bounds\n", stderr);
         abort();
     }
-    return l.data[i];
+    return l->data[i];
 }
 
-int64_t rw_list_int_len(rw_list_int l) {
-    return l.len;
+int64_t rw_list_int_len(const rw_list_int *l) {
+    return l->len;
 }
 
 /* ---------- lifecycle ---------- */
