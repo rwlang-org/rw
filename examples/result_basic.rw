@@ -1,0 +1,19 @@
+def div_checked(a: int, b: int) -> Result[int, int]:
+    if b == 0:
+        return Err(0)
+    return Ok(a / b)
+
+def main() -> int:
+    r: Result[int, int] = div_checked(10, 2)
+    match r:
+        case Ok(x):
+            print(x)
+        case Err(e):
+            print(-1)
+    e: Result[int, int] = div_checked(10, 0)
+    match e:
+        case Ok(x):
+            print(x)
+        case Err(code):
+            print(code)
+    return 0
