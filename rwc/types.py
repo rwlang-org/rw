@@ -34,6 +34,7 @@ VOID = _Primitive("void")
 BYTES = _Primitive("Bytes")
 LIST_INT = _Primitive("List[int]")
 OPTION_INT = _Primitive("Option[int]")
+RESULT_INT_INT = _Primitive("Result[int, int]")
 
 
 @dataclass(eq=False)

@@ -46,6 +46,7 @@ def _resolve_type(filename: str, ty: A.TypeExpr) -> T.Type:
             "Bytes": T.BYTES,
             "List[int]": T.LIST_INT,
             "Option[int]": T.OPTION_INT,
+            "Result[int, int]": T.RESULT_INT_INT,
             "void": T.VOID,
         }
         if ty.name not in m:
@@ -246,19 +247,33 @@ class Sema:
 
         if isinstance(stmt, A.MatchStmt):
             tt = self._check_expr(fn, stmt.target, locals_)
-            if tt is not T.OPTION_INT:
+            if stmt.style == "option":
+                if tt is not T.OPTION_INT:
+                    raise CompileError(Diagnostic(
+                        self.filename, stmt.line, stmt.col, 5,
+                        f"match target must be Option[int], found `{tt}`",
+                    ))
+                # Some arm: bind some_var as int in a new locals scope.
+                some_locals = dict(locals_)
+                some_locals[stmt.some_var] = T.INT
+                some_ret = self._check_block(fn, stmt.some_block, some_locals, ret_ty)
+                # None arm: no binding.
+                none_ret = self._check_block(fn, stmt.none_block, dict(locals_), ret_ty)
+                # match terminates in return iff both arms do.
+                return some_ret and none_ret
+            # style == "result"
+            if tt is not T.RESULT_INT_INT:
                 raise CompileError(Diagnostic(
                     self.filename, stmt.line, stmt.col, 5,
-                    f"match target must be Option[int], found `{tt}`",
+                    f"match target must be Result[int, int], found `{tt}`",
                 ))
-            # Some arm: bind some_var as int in a new locals scope.
-            some_locals = dict(locals_)
-            some_locals[stmt.some_var] = T.INT
-            some_ret = self._check_block(fn, stmt.some_block, some_locals, ret_ty)
-            # None arm: no binding.
-            none_ret = self._check_block(fn, stmt.none_block, dict(locals_), ret_ty)
-            # match terminates in return iff both arms do.
-            return some_ret and none_ret
+            ok_locals = dict(locals_)
+            ok_locals[stmt.ok_var] = T.INT
+            ok_ret = self._check_block(fn, stmt.ok_block, ok_locals, ret_ty)
+            err_locals = dict(locals_)
+            err_locals[stmt.err_var] = T.INT
+            err_ret = self._check_block(fn, stmt.err_block, err_locals, ret_ty)
+            return ok_ret and err_ret
 
         raise CompileError(Diagnostic(
             self.filename, 0, 0, 1, f"internal: unknown stmt: {type(stmt).__name__}",
@@ -435,6 +450,22 @@ class Sema:
             return T.OPTION_INT
         if isinstance(expr, A.NoneExpr):
             return T.OPTION_INT
+        if isinstance(expr, A.OkExpr):
+            at = self._check_expr(fn, expr.arg, locals_)
+            if at is not T.INT:
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, 2,
+                    f"Ok argument must be int, found `{at}`",
+                ))
+            return T.RESULT_INT_INT
+        if isinstance(expr, A.ErrExpr):
+            at = self._check_expr(fn, expr.arg, locals_)
+            if at is not T.INT:
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, 3,
+                    f"Err argument must be int, found `{at}`",
+                ))
+            return T.RESULT_INT_INT
         raise CompileError(Diagnostic(
             self.filename, 0, 0, 1, f"internal: unknown expr {type(expr).__name__}",
         ))

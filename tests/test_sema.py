@@ -718,3 +718,205 @@ def test_option_eq_is_type_error():
     assert "compare" in e.diagnostic.message or "==" in e.diagnostic.message
 
 
+# ---- Result[int, int] type annotation + parser ----
+
+def test_result_int_int_type_annotation_parses():
+    src = (
+        "def takes_res(r: Result[int, int]) -> int:\n"
+        "    return 0\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    res = check(src)
+    assert "takes_res" in res.functions
+    assert res.functions["takes_res"].params[0][1] is T.RESULT_INT_INT
+
+
+def test_result_with_non_int_param_is_parser_error():
+    import pytest
+    from rwc.lexer import tokenize
+    from rwc.parser import parse, ParserError
+    src = (
+        "def f(r: Result[string, int]) -> int:\n"
+        "    return 0\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    with pytest.raises(ParserError) as ei:
+        parse(tokenize(src))
+    assert "Result[int, int]" in str(ei.value) or "only Result" in str(ei.value)
+
+
+def test_match_with_mixed_arms_is_parser_error():
+    import pytest
+    from rwc.lexer import tokenize
+    from rwc.parser import parse, ParserError
+    src = (
+        "def main() -> int:\n"
+        "    o: Option[int] = None\n"
+        "    match o:\n"
+        "        case Some(x):\n"
+        "            return x\n"
+        "        case Err(e):\n"
+        "            return e\n"
+    )
+    with pytest.raises(ParserError) as ei:
+        parse(tokenize(src))
+    assert "mixed match arms" in str(ei.value)
+
+
+# ---- Result[int, int] positive cases ----
+
+def test_ok_int_returns_result_int_int():
+    src = (
+        "def main() -> int:\n"
+        "    r: Result[int, int] = Ok(5)\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_err_int_returns_result_int_int():
+    src = (
+        "def main() -> int:\n"
+        "    r: Result[int, int] = Err(0)\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_function_returning_result_with_both_arms():
+    src = (
+        "def f(b: int) -> Result[int, int]:\n"
+        "    if b == 0:\n"
+        "        return Err(0)\n"
+        "    return Ok(1)\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_match_result_two_arms_ok():
+    src = (
+        "def main() -> int:\n"
+        "    r: Result[int, int] = Ok(7)\n"
+        "    match r:\n"
+        "        case Ok(x):\n"
+        "            print(x)\n"
+        "        case Err(e):\n"
+        "            print(e)\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_match_result_bound_vars_are_int():
+    src = (
+        "def main() -> int:\n"
+        "    r: Result[int, int] = Ok(7)\n"
+        "    match r:\n"
+        "        case Ok(x):\n"
+        "            y: int = x + 1\n"
+        "            print(y)\n"
+        "        case Err(e):\n"
+        "            z: int = e * 2\n"
+        "            print(z)\n"
+        "    return 0\n"
+    )
+    check(src)
+
+
+def test_match_result_terminates_via_both_arms_return():
+    src = (
+        "def pick(b: int) -> int:\n"
+        "    r: Result[int, int] = Err(0)\n"
+        "    if b == 0:\n"
+        "        r = Err(0)\n"
+        "    else:\n"
+        "        r = Ok(b)\n"
+        "    match r:\n"
+        "        case Ok(x):\n"
+        "            return x\n"
+        "        case Err(e):\n"
+        "            return e\n"
+        "def main() -> int:\n"
+        "    return pick(7)\n"
+    )
+    check(src)
+
+
+# ---- Result[int, int] negative cases ----
+
+def test_ok_string_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    r: Result[int, int] = Ok(\"hi\")\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "Ok argument must be int" in e.diagnostic.message
+
+
+def test_err_string_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    r: Result[int, int] = Err(\"hi\")\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "Err argument must be int" in e.diagnostic.message
+
+
+def test_match_result_on_int_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    x: int = 5\n"
+        "    match x:\n"
+        "        case Ok(v):\n"
+        "            print(v)\n"
+        "        case Err(e):\n"
+        "            print(e)\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "match target must be Result[int, int]" in e.diagnostic.message
+
+
+def test_print_result_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    r: Result[int, int] = Ok(1)\n"
+        "    print(r)\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "print" in e.diagnostic.message
+
+
+def test_result_eq_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    a: Result[int, int] = Ok(1)\n"
+        "    b: Result[int, int] = Err(0)\n"
+        "    if a == b:\n"
+        "        return 0\n"
+        "    return 1\n"
+    )
+    e = err(src)
+    assert "compare" in e.diagnostic.message or "==" in e.diagnostic.message
+
+
+def test_ok_eq_some_is_type_error():
+    src = (
+        "def main() -> int:\n"
+        "    a: Result[int, int] = Ok(1)\n"
+        "    b: Option[int] = Some(1)\n"
+        "    if a == b:\n"
+        "        return 0\n"
+        "    return 1\n"
+    )
+    e = err(src)
+    assert "same type" in e.diagnostic.message
+
+

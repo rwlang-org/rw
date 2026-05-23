@@ -60,6 +60,9 @@ class TokenKind(Enum):
     KW_CASE = auto()
     KW_SOME = auto()
     KW_NONE = auto()
+    KW_RESULT = auto()
+    KW_OK = auto()
+    KW_ERR = auto()
     # Reserved for the future (cause errors in Sema, but tokenizable)
     KW_EXTERN = auto()
     KW_CLASS = auto()
@@ -117,6 +120,9 @@ KEYWORDS: dict[str, TokenKind] = {
     "case": TokenKind.KW_CASE,
     "Some": TokenKind.KW_SOME,
     "None": TokenKind.KW_NONE,
+    "Result": TokenKind.KW_RESULT,
+    "Ok": TokenKind.KW_OK,
+    "Err": TokenKind.KW_ERR,
     "extern": TokenKind.KW_EXTERN,
     "class": TokenKind.KW_CLASS,
     "import": TokenKind.KW_IMPORT,

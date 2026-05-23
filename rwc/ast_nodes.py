@@ -119,10 +119,25 @@ class NoneExpr:
     col: int
 
 
+@dataclass
+class OkExpr:
+    arg: "Expr"
+    line: int
+    col: int
+
+
+@dataclass
+class ErrExpr:
+    arg: "Expr"
+    line: int
+    col: int
+
+
 Expr = Union[
     IntLit, FloatLit, BoolLit, StringLit, Name,
     UnaryOp, BinOp, Call, SpawnExpr, AwaitExpr,
     SomeExpr, NoneExpr,
+    OkExpr, ErrExpr,
 ]
 
 
@@ -180,9 +195,16 @@ class While:
 @dataclass
 class MatchStmt:
     target: Expr
-    some_var: str
-    some_block: List["Stmt"]
-    none_block: List["Stmt"]
+    style: str                              # "option" or "result"
+    # Option-style fields (None when style == "result")
+    some_var: Optional[str]
+    some_block: Optional[List["Stmt"]]
+    none_block: Optional[List["Stmt"]]
+    # Result-style fields (None when style == "option")
+    ok_var: Optional[str]
+    ok_block: Optional[List["Stmt"]]
+    err_var: Optional[str]
+    err_block: Optional[List["Stmt"]]
     line: int
     col: int
 
