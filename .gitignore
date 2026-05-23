@@ -25,6 +25,7 @@ runtime/fiber/test_str_ops
 runtime/fiber/test_list_int
 runtime/fiber/test_option
 runtime/fiber/test_netpoller_pipe
+runtime/fiber/test_tcp_loopback
 
 # rwc build artifacts
 *.ll
