@@ -30,6 +30,7 @@ I8P = I8.as_pointer()
 RW_STR_TY = ir.LiteralStructType([I64, I8P])  # { i64 len, i8* ptr }
 RW_LIST_INT_TY = ir.LiteralStructType([I64, I64, I64.as_pointer()])  # {len, cap, data*}
 RW_OPTION_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
+RW_RESULT_INT_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload} (named alias)
 
 
 def llvm_type_of(t: T.Type) -> ir.Type:
@@ -47,6 +48,8 @@ def llvm_type_of(t: T.Type) -> ir.Type:
         return RW_LIST_INT_TY
     if t is T.OPTION_INT:
         return RW_OPTION_INT_TY
+    if t is T.RESULT_INT_INT:
+        return RW_RESULT_INT_INT_TY
     if t is T.VOID:
         return ir.VoidType()
     if isinstance(t, T.FutureType):
@@ -284,40 +287,48 @@ class IRGen:
             b.position_at_end(end_bb)
             return
         if isinstance(stmt, A.MatchStmt):
-            if stmt.style != "option":
-                # style == "result" lowering lands in Task 3.
-                raise RuntimeError(
-                    "internal: Result-style match not yet implemented in irgen")
             v = self._emit_expr(stmt.target, ctx)
             tag = b.extract_value(v, 0)
             payload = b.extract_value(v, 1)
-            some_bb = ctx.function.append_basic_block("match.some")
-            none_bb = ctx.function.append_basic_block("match.none")
+            arm1_bb = ctx.function.append_basic_block("match.arm1")
+            arm0_bb = ctx.function.append_basic_block("match.arm0")
             end_bb = ctx.function.append_basic_block("match.end")
-            # i64 switch: tag == 1 -> some, default (0) -> none.
-            sw = b.switch(tag, none_bb)
-            sw.add_case(ir.Constant(I64, 1), some_bb)
-            # Some arm: bind some_var to the payload in a fresh slot.
-            b.position_at_end(some_bb)
-            slot = b.alloca(I64, name=stmt.some_var)
-            b.store(payload, slot)
-            saved = ctx.locals.get(stmt.some_var)
-            ctx.locals[stmt.some_var] = slot
-            self._emit_block(stmt.some_block, ctx)
-            if not b.block.is_terminated:
-                b.branch(end_bb)
-            if saved is not None:
-                ctx.locals[stmt.some_var] = saved
-            else:
-                ctx.locals.pop(stmt.some_var, None)
-            # None arm.
-            b.position_at_end(none_bb)
-            self._emit_block(stmt.none_block, ctx)
-            if not b.block.is_terminated:
-                b.branch(end_bb)
+            # tag == 1 -> arm1, default (tag == 0) -> arm0.
+            sw = b.switch(tag, arm0_bb)
+            sw.add_case(ir.Constant(I64, 1), arm1_bb)
+            if stmt.style == "option":
+                var1, block1 = stmt.some_var, stmt.some_block
+                var0, block0 = None, stmt.none_block
+            else:  # "result"
+                var1, block1 = stmt.ok_var, stmt.ok_block
+                var0, block0 = stmt.err_var, stmt.err_block
+            # arm1 (tag == 1)
+            b.position_at_end(arm1_bb)
+            self._emit_arm(var1, block1, payload, ctx, end_bb)
+            # arm0 (tag == 0)
+            b.position_at_end(arm0_bb)
+            self._emit_arm(var0, block0, payload, ctx, end_bb)
             b.position_at_end(end_bb)
             return
         raise RuntimeError(f"unsupported stmt: {type(stmt).__name__}")
+
+    def _emit_arm(self, var_name, block, payload, ctx, end_bb):
+        """Emit one match arm. var_name=None means no payload binding."""
+        b = ctx.builder
+        if var_name is not None:
+            slot = b.alloca(I64, name=var_name)
+            b.store(payload, slot)
+            saved = ctx.locals.get(var_name)
+            ctx.locals[var_name] = slot
+            self._emit_block(block, ctx)
+            if saved is not None:
+                ctx.locals[var_name] = saved
+            else:
+                ctx.locals.pop(var_name, None)
+        else:
+            self._emit_block(block, ctx)
+        if not b.block.is_terminated:
+            b.branch(end_bb)
 
     # ---------- expressions ----------
     def _emit_expr(self, expr: A.Expr, ctx: "FunctionCtx") -> ir.Value:
@@ -361,6 +372,16 @@ class IRGen:
         if isinstance(expr, A.NoneExpr):
             return ir.Constant(RW_OPTION_INT_TY,
                                [ir.Constant(I64, 0), ir.Constant(I64, 0)])
+        if isinstance(expr, A.OkExpr):
+            v = self._emit_expr(expr.arg, ctx)
+            base = ir.Constant(RW_RESULT_INT_INT_TY,
+                               [ir.Constant(I64, 1), ir.Constant(I64, 0)])
+            return ctx.builder.insert_value(base, v, 1)
+        if isinstance(expr, A.ErrExpr):
+            v = self._emit_expr(expr.arg, ctx)
+            base = ir.Constant(RW_RESULT_INT_INT_TY,
+                               [ir.Constant(I64, 0), ir.Constant(I64, 0)])
+            return ctx.builder.insert_value(base, v, 1)
         raise RuntimeError(f"unsupported expr: {type(expr).__name__}")
 
     def _emit_binop(self, expr: A.BinOp, ctx: "FunctionCtx") -> ir.Value:
