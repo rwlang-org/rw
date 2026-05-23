@@ -920,3 +920,109 @@ def test_ok_eq_some_is_type_error():
     assert "same type" in e.diagnostic.message
 
 
+# ---- TCP builtins positive cases ----
+
+def test_tcp_listen_returns_int():
+    src = (
+        "def main() -> int:\n"
+        "    fd: int = tcp_listen(8080)\n"
+        "    return fd\n"
+    )
+    check(src)
+
+
+def test_tcp_accept_returns_int():
+    src = (
+        "def main() -> int:\n"
+        "    lfd: int = tcp_listen(8080)\n"
+        "    cfd: int = tcp_accept(lfd)\n"
+        "    return cfd\n"
+    )
+    check(src)
+
+
+def test_tcp_read_returns_bytes():
+    src = (
+        "def main() -> int:\n"
+        "    lfd: int = tcp_listen(8080)\n"
+        "    cfd: int = tcp_accept(lfd)\n"
+        "    b: Bytes = tcp_read(cfd, 4096)\n"
+        "    return len(b)\n"
+    )
+    check(src)
+
+
+def test_tcp_write_returns_int():
+    src = (
+        "def main() -> int:\n"
+        "    lfd: int = tcp_listen(8080)\n"
+        "    cfd: int = tcp_accept(lfd)\n"
+        "    b: Bytes = tcp_read(cfd, 4096)\n"
+        "    n: int = tcp_write(cfd, b)\n"
+        "    return n\n"
+    )
+    check(src)
+
+
+def test_tcp_close_returns_int():
+    src = (
+        "def main() -> int:\n"
+        "    lfd: int = tcp_listen(8080)\n"
+        "    rc: int = tcp_close(lfd)\n"
+        "    return rc\n"
+    )
+    check(src)
+
+
+# ---- TCP builtins negative cases ----
+
+def test_tcp_listen_wrong_arg_type():
+    src = (
+        "def main() -> int:\n"
+        "    fd: int = tcp_listen(\"8080\")\n"
+        "    return fd\n"
+    )
+    e = err(src)
+    assert "tcp_listen argument must be int" in e.diagnostic.message
+
+
+def test_tcp_read_wrong_max_type():
+    src = (
+        "def main() -> int:\n"
+        "    b: Bytes = tcp_read(3, \"big\")\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "tcp_read second argument must be int" in e.diagnostic.message
+
+
+def test_tcp_write_wrong_buffer_type():
+    src = (
+        "def main() -> int:\n"
+        "    n: int = tcp_write(3, \"hi\")\n"
+        "    return n\n"
+    )
+    e = err(src)
+    assert "tcp_write second argument must be Bytes" in e.diagnostic.message
+
+
+def test_tcp_listen_wrong_arity():
+    src = (
+        "def main() -> int:\n"
+        "    fd: int = tcp_listen()\n"
+        "    return fd\n"
+    )
+    e = err(src)
+    assert "tcp_listen takes 1 argument" in e.diagnostic.message
+
+
+def test_cannot_spawn_tcp_accept():
+    src = (
+        "def main() -> int:\n"
+        "    f: Future[int] = spawn tcp_accept(3)\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "cannot spawn the builtin `tcp_accept`" in e.diagnostic.message
+
+
