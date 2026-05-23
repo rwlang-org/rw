@@ -18,7 +18,21 @@ else
   $(error unsupported architecture: $(UNAME_M))
 endif
 
-OBJS := runtime.o fiber/fiber.o fiber/sched.o fiber/runq.o fiber/park.o $(FIBER_ASM)
+# Detect OS for the netpoller backend.
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Darwin)
+  NET_PLATFORM_O := net/netpoller_kqueue.o
+else ifeq ($(UNAME_S),Linux)
+  NET_PLATFORM_O := net/netpoller_epoll.o
+else
+  $(error unsupported OS: $(UNAME_S))
+endif
+
+OBJS := runtime.o \
+        fiber/fiber.o fiber/sched.o fiber/runq.o fiber/park.o \
+        net/netpoller.o net/tcp.o $(NET_PLATFORM_O) \
+        $(FIBER_ASM)
 
 .PHONY: all clean
 
@@ -40,6 +54,18 @@ fiber/runq.o: fiber/runq.c fiber/runq.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 fiber/park.o: fiber/park.c fiber/park.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+net/netpoller.o: net/netpoller.c net/netpoller.h fiber/sched.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+net/netpoller_kqueue.o: net/netpoller_kqueue.c net/netpoller.h fiber/sched.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+net/netpoller_epoll.o: net/netpoller_epoll.c net/netpoller.h fiber/sched.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+net/tcp.o: net/tcp.c net/tcp.h net/netpoller.h fiber/sched.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 fiber/fiber_arm64.o: fiber/fiber_arm64.S

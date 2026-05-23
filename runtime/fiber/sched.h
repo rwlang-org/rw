@@ -73,6 +73,22 @@ int8_t  rw_sched_join_bool(rw_fiber_handle *h);
 rw_str  rw_sched_join_str (rw_fiber_handle *h);
 void    rw_sched_join_void(rw_fiber_handle *h);
 
+/* ---- Exported for the netpoller (runtime/net/netpoller.c) ---- */
+
+/* Move the given fiber handle to the ready queue. Safe to call from
+ * any thread (uses the same mutex/cv as spawn). */
+void rw_sched_enqueue_ready(rw_fiber_handle *h);
+
+/* Return the fiber handle currently running on this worker thread,
+ * or NULL if the calling thread is not a worker (main / netpoller). */
+rw_fiber_handle *rw_sched_current_fiber(void);
+
+/* Mark the current fiber as WAITING and swap out to the scheduler.
+ * The fiber will NOT be re-enqueued by the scheduler; someone must
+ * call rw_sched_enqueue_ready(handle) to wake it later. Used by the
+ * netpoller to park fibers on fd readiness. */
+void rw_sched_park_current(void);
+
 #ifdef __cplusplus
 }
 #endif

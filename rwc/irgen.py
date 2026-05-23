@@ -107,6 +107,19 @@ class IRGen:
             m, ir.FunctionType(ir.VoidType(),
                                [option_ptr, list_ptr, I64]),
             "rw_list_int_at_opt")
+        # TCP API (runtime/net/tcp.c)
+        self._rw_tcp_listen = ir.Function(
+            m, ir.FunctionType(I64, [I64]), "rw_tcp_listen")
+        self._rw_tcp_accept = ir.Function(
+            m, ir.FunctionType(I64, [I64]), "rw_tcp_accept")
+        self._rw_tcp_read = ir.Function(
+            m, ir.FunctionType(ir.VoidType(),
+                               [RW_STR_TY.as_pointer(), I64, I64]),
+            "rw_tcp_read")
+        self._rw_tcp_write = ir.Function(
+            m, ir.FunctionType(I64, [I64, RW_STR_TY]), "rw_tcp_write")
+        self._rw_tcp_close = ir.Function(
+            m, ir.FunctionType(I64, [I64]), "rw_tcp_close")
         # lifecycle
         self._rw_init = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_init")
         self._rw_shutdown = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_shutdown")
@@ -534,6 +547,25 @@ class IRGen:
             out_slot = ctx.builder.alloca(RW_OPTION_INT_TY)
             ctx.builder.call(self._rw_list_int_at_opt, [out_slot, in_slot, iv])
             return ctx.builder.load(out_slot)
+        if call.callee == "tcp_listen":
+            v = self._emit_expr(call.args[0], ctx)
+            return ctx.builder.call(self._rw_tcp_listen, [v])
+        if call.callee == "tcp_accept":
+            v = self._emit_expr(call.args[0], ctx)
+            return ctx.builder.call(self._rw_tcp_accept, [v])
+        if call.callee == "tcp_read":
+            fd_v = self._emit_expr(call.args[0], ctx)
+            mx_v = self._emit_expr(call.args[1], ctx)
+            out_slot = ctx.builder.alloca(RW_STR_TY)
+            ctx.builder.call(self._rw_tcp_read, [out_slot, fd_v, mx_v])
+            return ctx.builder.load(out_slot)
+        if call.callee == "tcp_write":
+            fd_v = self._emit_expr(call.args[0], ctx)
+            b_v  = self._emit_expr(call.args[1], ctx)
+            return ctx.builder.call(self._rw_tcp_write, [fd_v, b_v])
+        if call.callee == "tcp_close":
+            v = self._emit_expr(call.args[0], ctx)
+            return ctx.builder.call(self._rw_tcp_close, [v])
         fn = self.funcs[call.callee]
         args = [self._emit_expr(a, ctx) for a in call.args]
         return ctx.builder.call(fn, args)

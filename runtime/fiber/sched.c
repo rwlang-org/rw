@@ -227,6 +227,17 @@ static void enqueue_ready(rw_fiber_handle *h) {
     }
 }
 
+/* Public wrapper for the netpoller (see sched.h). */
+void rw_sched_enqueue_ready(rw_fiber_handle *h) {
+    enqueue_ready(h);
+}
+
+/* Public wrapper for the netpoller (see sched.h). */
+rw_fiber_handle *rw_sched_current_fiber(void) {
+    rw_M *m = tls_m;
+    return m ? m->current : NULL;
+}
+
 /* xorshift64 — small, fast, good enough to pick a starting victim
  * for stealing. Each M owns its own state, so this needs no locks. */
 static inline uint64_t xorshift64(uint64_t *state) {
@@ -318,6 +329,20 @@ void rw_sched_yield(void) {
     if (!m) return;
     rw_fiber_handle *me = m->current;
     if (!me) return;
+    rw_fiber_swap(&me->ctx, &m->sched_ctx);
+}
+
+/* Park the current fiber: mark it WAITING and swap to sched_ctx.
+ * Unlike rw_sched_yield, the fiber is NOT re-enqueued — the caller
+ * must arrange a wake-up via rw_sched_enqueue_ready(). Used by the
+ * netpoller to park fibers on fd readiness. */
+void rw_sched_park_current(void) {
+    rw_M *m = tls_m;
+    if (!m) return;
+    rw_fiber_handle *me = m->current;
+    if (!me) return;
+    atomic_store_explicit(&me->state, RW_FIBER_WAITING,
+                          memory_order_relaxed);
     rw_fiber_swap(&me->ctx, &m->sched_ctx);
 }
 

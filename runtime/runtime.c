@@ -1,5 +1,6 @@
 #include "runtime.h"
 #include "fiber/sched.h"
+#include "net/netpoller.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -138,9 +139,11 @@ void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i) {
 
 void rw_init(void) {
     rw_sched_init();
+    rw_netpoller_init();
 }
 
 void rw_shutdown(void) {
+    rw_netpoller_shutdown();
     rw_sched_shutdown();
 }
 

@@ -1,0 +1,16 @@
+def handle_client(fd: int) -> int:
+    while true:
+        b: Bytes = tcp_read(fd, 4096)
+        if len(b) == 0:
+            tcp_close(fd)
+            return 0
+        tcp_write(fd, b)
+    return 0
+
+def main() -> int:
+    listen_fd: int = tcp_listen(8080)
+    while true:
+        client: int = tcp_accept(listen_fd)
+        spawn handle_client(client)
+    return 0
+
