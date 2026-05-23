@@ -192,6 +192,26 @@ class Parser:
             self.i += 1
             self.eat(TokenKind.RBRACK, "']' to close Option[int]")
             return A.TypeName("Option[int]", t.line, t.col)
+        if t.kind == TokenKind.KW_RESULT:
+            self.i += 1
+            self.eat(TokenKind.LBRACK, "'[' after Result")
+            inner1 = self.cur
+            if inner1.kind != TokenKind.KW_INT:
+                raise ParserError(
+                    "only Result[int, int] is supported in this version of rw",
+                    inner1.line, inner1.col, max(1, len(inner1.value)),
+                )
+            self.i += 1
+            self.eat(TokenKind.COMMA, "',' between Result type arguments")
+            inner2 = self.cur
+            if inner2.kind != TokenKind.KW_INT:
+                raise ParserError(
+                    "only Result[int, int] is supported in this version of rw",
+                    inner2.line, inner2.col, max(1, len(inner2.value)),
+                )
+            self.i += 1
+            self.eat(TokenKind.RBRACK, "']' to close Result[int, int]")
+            return A.TypeName("Result[int, int]", t.line, t.col)
         raise ParserError(
             f"expected type, got {t.kind.name}", t.line, t.col, max(1, len(t.value))
         )
@@ -296,9 +316,16 @@ class Parser:
         # block. We can't use parse_block here because parse_block calls
         # parse_stmt on each line and `case` is not a statement.
         self.eat(TokenKind.INDENT, "indented match body")
+
+        style: Optional[str] = None  # "option" or "result"
         some_var: Optional[str] = None
         some_block: Optional[List[A.Stmt]] = None
         none_block: Optional[List[A.Stmt]] = None
+        ok_var: Optional[str] = None
+        ok_block: Optional[List[A.Stmt]] = None
+        err_var: Optional[str] = None
+        err_block: Optional[List[A.Stmt]] = None
+
         while self.cur.kind != TokenKind.DEDENT:
             if self.cur.kind == TokenKind.NEWLINE:
                 self.i += 1
@@ -311,6 +338,30 @@ class Parser:
                 )
             self.eat(TokenKind.KW_CASE)
             arm_tok = self.cur
+
+            # Determine this arm's style.
+            if arm_tok.kind in (TokenKind.KW_SOME, TokenKind.KW_NONE):
+                this_style = "option"
+            elif arm_tok.kind in (TokenKind.KW_OK, TokenKind.KW_ERR):
+                this_style = "result"
+            else:
+                raise ParserError(
+                    "match case must be `Some(x)` / `None` or `Ok(x)` / `Err(e)`",
+                    arm_tok.line, arm_tok.col,
+                    max(1, len(arm_tok.value)),
+                )
+
+            # Lock in style on the first arm; reject mixed pairs.
+            if style is None:
+                style = this_style
+            elif style != this_style:
+                expected = "Some/None" if style == "option" else "Ok/Err"
+                raise ParserError(
+                    f"mixed match arms: expected `{expected}` pair, got `{arm_tok.value}`",
+                    arm_tok.line, arm_tok.col,
+                    max(1, len(arm_tok.value)),
+                )
+
             if arm_tok.kind == TokenKind.KW_SOME:
                 if some_block is not None:
                     raise ParserError(
@@ -335,20 +386,61 @@ class Parser:
                 self.eat(TokenKind.COLON, "':' after case pattern")
                 self.eat(TokenKind.NEWLINE)
                 none_block = self.parse_block()
-            else:
-                raise ParserError(
-                    "match case must be `Some(x)` or `None`",
-                    arm_tok.line, arm_tok.col,
-                    max(1, len(arm_tok.value)),
-                )
+            elif arm_tok.kind == TokenKind.KW_OK:
+                if ok_block is not None:
+                    raise ParserError(
+                        "duplicate `case Ok(...)` arm in match",
+                        arm_tok.line, arm_tok.col, 2,
+                    )
+                self.eat(TokenKind.KW_OK)
+                self.eat(TokenKind.LPAREN, "'(' after Ok")
+                ident = self.eat(TokenKind.IDENT, "identifier in Ok(...)")
+                self.eat(TokenKind.RPAREN, "')' to close Ok(...)")
+                self.eat(TokenKind.COLON, "':' after case pattern")
+                self.eat(TokenKind.NEWLINE)
+                ok_var = ident.value
+                ok_block = self.parse_block()
+            elif arm_tok.kind == TokenKind.KW_ERR:
+                if err_block is not None:
+                    raise ParserError(
+                        "duplicate `case Err(...)` arm in match",
+                        arm_tok.line, arm_tok.col, 3,
+                    )
+                self.eat(TokenKind.KW_ERR)
+                self.eat(TokenKind.LPAREN, "'(' after Err")
+                ident = self.eat(TokenKind.IDENT, "identifier in Err(...)")
+                self.eat(TokenKind.RPAREN, "')' to close Err(...)")
+                self.eat(TokenKind.COLON, "':' after case pattern")
+                self.eat(TokenKind.NEWLINE)
+                err_var = ident.value
+                err_block = self.parse_block()
+
         self.eat(TokenKind.DEDENT)
-        if some_block is None or none_block is None or some_var is None:
+
+        if style is None:
             raise ParserError(
-                "match on Option[int] must cover both Some and None",
+                "match must have at least one case arm",
                 kw.line, kw.col, 5,
             )
+        if style == "option":
+            if some_block is None or none_block is None or some_var is None:
+                raise ParserError(
+                    "match on Option[int] must cover both Some and None",
+                    kw.line, kw.col, 5,
+                )
+        else:  # "result"
+            if (ok_block is None or err_block is None
+                    or ok_var is None or err_var is None):
+                raise ParserError(
+                    "match on Result[int, int] must cover both Ok and Err",
+                    kw.line, kw.col, 5,
+                )
+
         return A.MatchStmt(
-            target, some_var, some_block, none_block, kw.line, kw.col,
+            target, style,
+            some_var, some_block, none_block,
+            ok_var, ok_block, err_var, err_block,
+            kw.line, kw.col,
         )
 
     def parse_var_decl(self) -> A.VarDecl:
@@ -464,6 +556,18 @@ class Parser:
         if t.kind == TokenKind.KW_NONE:
             self.i += 1
             return A.NoneExpr(t.line, t.col)
+        if t.kind == TokenKind.KW_OK:
+            self.i += 1
+            self.eat(TokenKind.LPAREN, "'(' after Ok")
+            arg = self.parse_expr()
+            self.eat(TokenKind.RPAREN, "')' to close Ok(...)")
+            return A.OkExpr(arg, t.line, t.col)
+        if t.kind == TokenKind.KW_ERR:
+            self.i += 1
+            self.eat(TokenKind.LPAREN, "'(' after Err")
+            arg = self.parse_expr()
+            self.eat(TokenKind.RPAREN, "')' to close Err(...)")
+            return A.ErrExpr(arg, t.line, t.col)
         return self.parse_atom_postfix()
 
     def parse_atom_postfix(self) -> A.Expr:

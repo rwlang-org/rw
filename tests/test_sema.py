@@ -718,3 +718,50 @@ def test_option_eq_is_type_error():
     assert "compare" in e.diagnostic.message or "==" in e.diagnostic.message
 
 
+# ---- Result[int, int] type annotation + parser ----
+
+def test_result_int_int_type_annotation_parses():
+    src = (
+        "def takes_res(r: Result[int, int]) -> int:\n"
+        "    return 0\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    res = check(src)
+    assert "takes_res" in res.functions
+    assert res.functions["takes_res"].params[0][1] is T.RESULT_INT_INT
+
+
+def test_result_with_non_int_param_is_parser_error():
+    import pytest
+    from rwc.lexer import tokenize
+    from rwc.parser import parse, ParserError
+    src = (
+        "def f(r: Result[string, int]) -> int:\n"
+        "    return 0\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    with pytest.raises(ParserError) as ei:
+        parse(tokenize(src))
+    assert "Result[int, int]" in str(ei.value) or "only Result" in str(ei.value)
+
+
+def test_match_with_mixed_arms_is_parser_error():
+    import pytest
+    from rwc.lexer import tokenize
+    from rwc.parser import parse, ParserError
+    src = (
+        "def main() -> int:\n"
+        "    o: Option[int] = None\n"
+        "    match o:\n"
+        "        case Some(x):\n"
+        "            return x\n"
+        "        case Err(e):\n"
+        "            return e\n"
+    )
+    with pytest.raises(ParserError) as ei:
+        parse(tokenize(src))
+    assert "mixed match arms" in str(ei.value)
+
+

@@ -284,6 +284,10 @@ class IRGen:
             b.position_at_end(end_bb)
             return
         if isinstance(stmt, A.MatchStmt):
+            if stmt.style != "option":
+                # style == "result" lowering lands in Task 3.
+                raise RuntimeError(
+                    "internal: Result-style match not yet implemented in irgen")
             v = self._emit_expr(stmt.target, ctx)
             tag = b.extract_value(v, 0)
             payload = b.extract_value(v, 1)
