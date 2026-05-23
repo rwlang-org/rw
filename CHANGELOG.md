@@ -1,5 +1,8 @@
 # Changelog
 
+## [v0.0.4](https://github.com/rwlang-org/rw/compare/v0.0.3...v0.0.4) - 2026-05-23
+- rwc + runtime: netpoller + 最小 TCP API (echo server) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/97
+
 ## [v0.0.3](https://github.com/rwlang-org/rw/compare/v0.0.2...v0.0.3) - 2026-05-23
 - rwc: 文字列の最小拡張 (len, ==, +) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/91
 - rwc: Bytes 型 (immutable, echo 最小セット) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/92
