@@ -30,3 +30,6 @@ runtime/fiber/test_tcp_loopback
 # rwc build artifacts
 *.ll
 *.o
+
+# Parallel-work worktrees
+.worktrees/
