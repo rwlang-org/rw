@@ -1,0 +1,18 @@
+def main() -> int:
+    total: int = 0
+    for i in range(0, 10):
+        total = total + i
+    down: int = 0
+    for j in range(10, 0, -1):
+        down = down + j
+    step2: int = 0
+    for k in range(0, 10, 2):
+        step2 = step2 + k
+    empty: int = 0
+    for m in range(5, 5):
+        empty = empty + 1
+    print(total)
+    print(down)
+    print(step2)
+    print(empty)
+    return 0
