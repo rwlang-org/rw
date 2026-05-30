@@ -38,9 +38,10 @@ lexer / parser / sema の 3 層 + 例題に閉じ込める。
 - start / stop / step は **任意の `int` 式** (変数・関数呼び出しを含む)
 - 半開区間 `[start, stop)`、ループ変数はループ本体スコープの `int`
 - 負の `step` に対応 (`stop` を下回るまで降順に反復)
-- `step == 0` は **ランタイムで trap** (abort) する
-- sema で `for` ノードを `while` + 代入の AST に desugar し、irgen は既存の
-  `while` 処理をそのまま使う (step==0 trap の分岐のみ irgen/runtime に追加)
+- `step == 0` は **0 回ループ** (本体を実行せず即終了)。desugar した
+  ループ条件が step==0 で両辺 false になる性質をそのまま利用する
+- `for` ノードを `while` + 代入の AST に desugar し、sema / irgen は既存の
+  `while` 処理をそのまま使う (両層とも無改修)
 
 ## Non-Goals
 
@@ -88,7 +89,6 @@ def main() -> int:
 __stop = b
 __step = s
 v = a                     # ループ変数 (ユーザー可視, int)
-# __step == 0 なら trap (irgen で分岐)
 while (__step > 0 and v < __stop) or (__step < 0 and v > __stop):
     <body>
     v = v + __step
@@ -100,32 +100,31 @@ while (__step > 0 and v < __stop) or (__step < 0 and v > __stop):
 - `range(stop)` / `range(start, stop)` は不足引数を `0` / `1` のリテラル
   ノードで補完してから上記に展開
 - desugar 後はすべて既存の AST ノード (`While` / `Assign` / `BinOp` / `If`)
-  なので、irgen は無改修で動く
+  なので、sema / irgen は無改修で動く
 
-## step == 0 の trap
+## step == 0 の挙動
 
-`step` は任意式なのでコンパイル時に 0 と判定できないケースがある。一貫して
-ランタイム trap とする:
-
-- desugar 時、ループ進入前に「`__step == 0` なら abort」する分岐を挿入
-- ランタイムに trap ヘルパが無ければ `runtime/` に 1 関数追加
-  (`rw_trap(const char* msg)` 相当)。既存の abort 系ヘルパがあれば再利用
+`step` は任意式なのでコンパイル時に 0 と判定できないケースがある。trap は
+設けず、desugar したループ条件 `(step>0 and v<stop) or (step<0 and v>stop)`
+が step==0 で両辺 false になる性質をそのまま利用し、**0 回ループ**
+(本体を実行せず即終了) とする。これにより runtime は無改修で済む。
 
 ## 触るレイヤー
 
 | レイヤー | ファイル | 変更 |
 |---|---|---|
 | Lexer | `rwc/lexer.py` | `KW_FOR` / `KW_IN` は予約済み (L70-71, L129-130)。追加不要 |
-| Parser | `rwc/parser.py` | `parse_for()` 追加、文ディスパッチに `KW_FOR` 追加 |
-| AST | `rwc/ast_nodes.py` | `For` ノード追加 (var, start, stop, step, body)。parser はこの For を生成し、sema が while へ desugar する |
-| Sema | `rwc/sema.py` | `for` の型チェック (引数 int、var を int 登録) + while への desugar |
-| irgen | `rwc/irgen.py` | desugar 済み while を使う想定。step==0 trap 分岐のみ |
-| Runtime | `runtime/` | trap ヘルパ 1 個 (既存があれば再利用、その場合 0 個) |
+| AST | `rwc/ast_nodes.py` | `For` ノード追加 (var, start, stop, step, body)。`Stmt` Union に追加 |
+| Parser | `rwc/parser.py` | `parse_for()` 追加、文ディスパッチに `KW_FOR` 追加。`range(...)` を for ヘッダ位置でのみ受理 |
+| Desugar | `rwc/desugar.py` (新規) | parser 直後・sema 前に走る独立パス。`For` を `VarDecl`/`While`/`Assign` に書き換える。CLI のパイプラインに 1 行挿入 |
+| Sema | `rwc/sema.py` | **無改修**。desugar 後は既存ノードのみなので型チェック・`local_types` 登録が自動で効く |
+| irgen | `rwc/irgen.py` | **無改修**。desugar 済み while をそのまま処理 |
+| Runtime | `runtime/` | **無改修**。step==0 は 0 回ループで処理 |
 | Examples | `examples/for_count.rw` (+ `.expected`) | 新サンプル 1 |
-| Tests | `tests/test_e2e.py` | parametrize に `for_count` 追加。parser/sema の unit test |
+| Tests | `tests/test_e2e.py` ほか | parametrize に `for_count` 追加。parser/desugar の unit test |
 
-実質 lexer/parser/sema/irgen + 例題で、`incremental-language-extensions` の
-「1 PR 4 層まで」にほぼ収まる (runtime は trap 再利用なら 0 層)。
+実質 AST / parser / desugar(新規) + 例題で、sema・irgen・runtime は無改修。
+`incremental-language-extensions` の「1 PR 4 層まで」に収まる。
 
 ## 検証
 
@@ -136,13 +135,14 @@ while (__step > 0 and v < __stop) or (__step < 0 and v > __stop):
   - 降順 `range(5, 0, -1)` が 5..1
   - step=2 `range(0, 10, 2)` が 0,2,4,6,8
   - 空ループ `range(5, 5)` / `range(0, -3)` は本体 0 回
+  - step==0 `range(0, 10, 0)` は本体 0 回 (即終了)
   - range 引数に変数・式を使う
 - negative テスト:
   - `for` 外で `range(...)` → 構文エラー
   - `x = range(0, 5)` → 構文エラー
-  - range 引数が非 int → 型エラー
+  - range 引数が非 int → 型エラー (sema)
   - `range()` 引数 0 個 / 4 個以上 → 構文エラー
-- ランタイム: `range(0, 10, 0)` が trap (abort)
+- desugar の unit test: `For` ノードが `VarDecl`/`While`/`Assign` に展開される
 
 ## リスクと対処
 
@@ -150,4 +150,7 @@ while (__step > 0 and v < __stop) or (__step < 0 and v > __stop):
 - **内部名の衝突**: 連番付き内部名 (`__for_stop_N`) でユーザー識別子と分離
 - **負 step の境界**: 条件を `(step>0 and v<stop) or (step<0 and v>stop)` と
   両側に分け、step の符号で正しく終了
-- **step==0 無限ループ**: ループ進入前の trap 分岐で防止
+- **step==0**: 上記条件が両辺 false になり 0 回ループで安全に終了 (trap 不要)
+- **desugar の挿入漏れ**: `compile_source` / `emit_ir` / `emit_ast` の 3 経路
+  すべてで parse 直後に desugar を呼ぶ (driver.py)。漏れると for が irgen に
+  生のまま渡り "unknown stmt" になるため、3 経路を e2e で踏むテストで担保
