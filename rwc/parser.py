@@ -244,6 +244,8 @@ class Parser:
             return self.parse_if()
         if t.kind == TokenKind.KW_WHILE:
             return self.parse_while()
+        if t.kind == TokenKind.KW_FOR:
+            return self.parse_for()
         if t.kind == TokenKind.KW_MATCH:
             return self.parse_match()
         # IDENT followed by ':'  => var_decl
@@ -306,6 +308,46 @@ class Parser:
         self.eat(TokenKind.NEWLINE)
         body = self.parse_block()
         return A.While(cond, body, kw.line, kw.col)
+
+    def parse_for(self) -> A.For:
+        kw = self.eat(TokenKind.KW_FOR)
+        var_tok = self.eat(TokenKind.IDENT, "loop variable name")
+        self.eat(TokenKind.KW_IN, "'in' after for variable")
+        # range header: the identifier `range` followed by ( args )
+        if not (self.cur.kind == TokenKind.IDENT and self.cur.value == "range"):
+            raise ParserError(
+                "for loop must iterate over range(...)",
+                self.cur.line, self.cur.col,
+            )
+        self.i += 1  # consume `range`
+        self.eat(TokenKind.LPAREN, "'(' after range")
+        args: List[A.Expr] = []
+        if self.cur.kind != TokenKind.RPAREN:
+            args.append(self.parse_expr())
+            while self.cur.kind == TokenKind.COMMA:
+                self.i += 1
+                args.append(self.parse_expr())
+        self.eat(TokenKind.RPAREN, "')' to close range")
+        if not (1 <= len(args) <= 3):
+            raise ParserError(
+                "range() takes 1 to 3 arguments",
+                kw.line, kw.col,
+            )
+        # Fill defaults: range(stop) / range(start, stop) / range(start, stop, step)
+        if len(args) == 1:
+            start: A.Expr = A.IntLit(0, kw.line, kw.col)
+            stop = args[0]
+        else:
+            start = args[0]
+            stop = args[1]
+        if len(args) == 3:
+            step: A.Expr = args[2]
+        else:
+            step = A.IntLit(1, kw.line, kw.col)
+        self.eat(TokenKind.COLON, "':' after for header")
+        self.eat(TokenKind.NEWLINE)
+        body = self.parse_block()
+        return A.For(var_tok.value, start, stop, step, body, kw.line, kw.col)
 
     def parse_match(self) -> A.MatchStmt:
         kw = self.eat(TokenKind.KW_MATCH)
