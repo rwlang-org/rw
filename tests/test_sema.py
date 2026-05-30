@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from rwc import types as T
+from rwc.desugar import desugar_module
 from rwc.diagnostics import CompileError
 from rwc.lexer import tokenize
 from rwc.parser import parse
@@ -10,7 +11,7 @@ from rwc.sema import analyze
 
 
 def check(src: str):
-    return analyze(parse(tokenize(src)), filename="test.rw")
+    return analyze(desugar_module(parse(tokenize(src))), filename="test.rw")
 
 
 def err(src: str) -> CompileError:
@@ -1024,5 +1025,40 @@ def test_cannot_spawn_tcp_accept():
     )
     e = err(src)
     assert "cannot spawn the builtin `tcp_accept`" in e.diagnostic.message
+
+
+# ---- for ... in range(...) ----
+
+def test_for_loop_int_args_ok():
+    src = (
+        "def main() -> int:\n"
+        "    total: int = 0\n"
+        "    for i in range(0, 5):\n"
+        "        total = total + i\n"
+        "    return total\n"
+    )
+    res = check(src)
+    assert "main" in res.functions
+
+
+def test_for_loop_non_int_stop_is_error():
+    src = (
+        "def main() -> int:\n"
+        '    for i in range(0, "x"):\n'
+        "        return i\n"
+        "    return 0\n"
+    )
+    err(src)
+
+
+def test_range_outside_for_is_error():
+    # `range` is only meaningful inside a for-header; used as a value it
+    # resolves to an unknown builtin call and must be rejected.
+    src = (
+        "def main() -> int:\n"
+        "    x: int = range(0, 5)\n"
+        "    return x\n"
+    )
+    err(src)
 
 
