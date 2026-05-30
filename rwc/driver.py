@@ -18,6 +18,7 @@ from typing import Optional
 from llvmlite import binding as llvm_binding
 
 from .ast_nodes import Module as ASTModule
+from .desugar import desugar_module
 from .diagnostics import CompileError, Diagnostic
 from .irgen import generate as irgen_generate
 from .lexer import LexerError, tokenize
@@ -80,6 +81,7 @@ def compile_source(
     try:
         tokens = tokenize(source, filename=filename)
         ast = parse(tokens)
+        ast = desugar_module(ast)
         sema = analyze(ast, filename=filename)
         llmod = irgen_generate(ast, sema)
     except LexerError as e:
@@ -127,6 +129,7 @@ def emit_ir(source: str, filename: str) -> str:
     """Generate LLVM IR text for a source string without invoking the linker."""
     tokens = tokenize(source, filename=filename)
     ast = parse(tokens)
+    ast = desugar_module(ast)
     sema = analyze(ast, filename=filename)
     llmod = irgen_generate(ast, sema)
     llmod.triple = llvm_binding.get_default_triple()
@@ -135,7 +138,7 @@ def emit_ir(source: str, filename: str) -> str:
 
 def emit_ast(source: str, filename: str) -> ASTModule:
     tokens = tokenize(source, filename=filename)
-    return parse(tokens)
+    return desugar_module(parse(tokens))
 
 
 def run_executable(path: Path) -> int:
