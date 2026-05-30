@@ -193,6 +193,17 @@ class While:
 
 
 @dataclass
+class For:
+    var: str               # loop variable name
+    start: Expr            # int expr
+    stop: Expr             # int expr
+    step: Expr             # int expr (defaults filled by parser)
+    body: List["Stmt"]
+    line: int
+    col: int
+
+
+@dataclass
 class MatchStmt:
     target: Expr
     style: str                              # "option" or "result"
@@ -209,7 +220,7 @@ class MatchStmt:
     col: int
 
 
-Stmt = Union[VarDecl, Assign, ExprStmt, Return, If, While, MatchStmt]
+Stmt = Union[VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt]
 
 
 # ----- Top level -----

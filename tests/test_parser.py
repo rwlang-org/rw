@@ -176,3 +176,46 @@ def test_unary_minus():
     assert isinstance(top, A.BinOp) and top.op == "+"
     assert isinstance(top.left, A.UnaryOp) and top.left.op == "-"
     assert isinstance(top.right, A.UnaryOp) and top.right.op == "-"
+
+
+def test_parse_for_two_args():
+    src = "def main() -> int:\n    for i in range(0, 10):\n        return i\n"
+    mod = parse_src(src)
+    f = mod.functions[0]
+    loop = f.body[0]
+    assert isinstance(loop, A.For)
+    assert loop.var == "i"
+    assert isinstance(loop.start, A.IntLit) and loop.start.value == 0
+    assert isinstance(loop.stop, A.IntLit) and loop.stop.value == 10
+    # step defaults to literal 1
+    assert isinstance(loop.step, A.IntLit) and loop.step.value == 1
+
+
+def test_parse_for_one_arg():
+    src = "def main() -> int:\n    for i in range(5):\n        return i\n"
+    loop = parse_src(src).functions[0].body[0]
+    assert isinstance(loop, A.For)
+    assert isinstance(loop.start, A.IntLit) and loop.start.value == 0
+    assert isinstance(loop.stop, A.IntLit) and loop.stop.value == 5
+    assert isinstance(loop.step, A.IntLit) and loop.step.value == 1
+
+
+def test_parse_for_three_args():
+    src = "def main() -> int:\n    for i in range(10, 0, -1):\n        return i\n"
+    loop = parse_src(src).functions[0].body[0]
+    assert isinstance(loop, A.For)
+    assert isinstance(loop.stop, A.IntLit) and loop.stop.value == 0
+    # step is unary minus on 1
+    assert isinstance(loop.step, A.UnaryOp) and loop.step.op == "-"
+
+
+def test_parse_for_zero_args_is_error():
+    src = "def main() -> int:\n    for i in range():\n        return i\n"
+    with pytest.raises(ParserError):
+        parse_src(src)
+
+
+def test_parse_for_four_args_is_error():
+    src = "def main() -> int:\n    for i in range(0, 1, 2, 3):\n        return i\n"
+    with pytest.raises(ParserError):
+        parse_src(src)
