@@ -64,9 +64,12 @@ void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i);
 /* TCP API (runtime/net/tcp.c). */
 int64_t rw_tcp_listen(int64_t port);
 int64_t rw_tcp_accept(int64_t listen_fd);
-void    rw_tcp_read  (rw_str *out, int64_t fd, int64_t max);
-int64_t rw_tcp_write (int64_t fd, rw_str b);
-int64_t rw_tcp_close (int64_t fd);
+
+/* Generic fd I/O (runtime/io.c): works on sockets, files, pipes. */
+void    rw_read     (rw_str *out, int64_t fd, int64_t max);
+int64_t rw_write    (int64_t fd, rw_str b);
+int64_t rw_close    (int64_t fd);
+int64_t rw_file_open(rw_str path, rw_str mode);
 
 /* spawn (one per return type) */
 rw_future_t *rw_spawn_i64 (int64_t (*fn)(void *), void *args);
