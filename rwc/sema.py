@@ -491,6 +491,22 @@ class Sema:
                     f"Err argument must be int, found `{at}`",
                 ))
             return T.RESULT_INT_INT
+        if isinstance(expr, A.IfExpr):
+            ct = self._check_expr(fn, expr.cond, locals_)
+            if ct is not T.BOOL:
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, 2,
+                    f"conditional expression requires bool condition, found `{ct}`",
+                ))
+            tt = self._check_expr(fn, expr.then, locals_)
+            et = self._check_expr(fn, expr.els, locals_)
+            if tt != et:
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, 2,
+                    f"conditional expression branches must have the same type, "
+                    f"found `{tt}` and `{et}`",
+                ))
+            return tt
         raise CompileError(Diagnostic(
             self.filename, 0, 0, 1, f"internal: unknown expr {type(expr).__name__}",
         ))

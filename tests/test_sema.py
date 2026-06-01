@@ -1062,3 +1062,42 @@ def test_range_outside_for_is_error():
     err(src)
 
 
+
+
+# ---- conditional (ternary) expression ----
+
+def test_ternary_int_branches_ok():
+    res = check(
+        "def main() -> int:\n"
+        "    x: int = 1 if true else 2\n"
+        "    return x\n"
+    )
+    assert res.functions["main"].return_type is T.INT
+
+
+def test_ternary_string_branches_ok():
+    res = check(
+        "def main() -> int:\n"
+        '    s: string = "yes" if true else "no"\n'
+        "    print(s)\n"
+        "    return 0\n"
+    )
+    assert "main" in res.functions
+
+
+def test_ternary_non_bool_cond_is_error():
+    e = err(
+        "def main() -> int:\n"
+        "    x: int = 1 if 7 else 2\n"
+        "    return x\n"
+    )
+    assert "bool" in e.diagnostic.message.lower()
+
+
+def test_ternary_branch_type_mismatch_is_error():
+    e = err(
+        "def main() -> int:\n"
+        '    x: int = 1 if true else "no"\n'
+        "    return x\n"
+    )
+    assert "same type" in e.diagnostic.message.lower()
