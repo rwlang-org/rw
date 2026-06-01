@@ -15,7 +15,23 @@
 - 算術: `+ - * / %`(同じ型同士のみ)
 - 比較: `== != < <= > >=`
 - 論理: `and`, `or`, `not`
+- 条件式(三項): `then if cond else els`(最も低い優先度、右結合)
 - 代入: `=`(再代入可、ただし型は不変)
+
+### 条件式(三項演算子)
+
+Python 互換の `then if cond else els`。`cond` は `bool`、`then` と `els` は
+同じ型で、その型が式全体の型になる(暗黙の型昇格はしない)。選ばれたブランチ
+のみが評価される。
+
+```python
+larger: int = a if a > b else b
+label: string = "even" if a % 2 == 0 else "odd"
+# 右結合: a if p else (b if q else c)
+sign: int = 1 if n > 0 else 0 if n == 0 else -1
+```
+
+詳細は [`14-ternary-expr.md`](14-ternary-expr.md) を参照。
 
 ## 関数定義
 
@@ -48,7 +64,15 @@ while i < 10:
     i = i + 1
 ```
 
-`for` は MVP では未対応(イテレータ概念が必要なため)。
+条件で値を選ぶときは、文の `if`/`else` の代わりに条件式(三項演算子)も使える:
+
+```python
+larger: int = a if a > b else b
+```
+
+`for ... in range(...)` のカウントループも利用できる(詳細は
+[`13-for-range-loop.md`](13-for-range-loop.md))。`for <var> in <list>` の
+イテレータ形式は未対応。
 
 ## 非同期構文
 
