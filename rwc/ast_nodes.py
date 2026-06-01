@@ -85,6 +85,16 @@ class BinOp:
 
 
 @dataclass
+class IfExpr:
+    # Conditional expression: `then if cond else els` (Python ternary syntax).
+    then: "Expr"
+    cond: "Expr"
+    els: "Expr"
+    line: int
+    col: int
+
+
+@dataclass
 class Call:
     callee: str        # MVP: simple identifier only
     args: List["Expr"]
@@ -135,7 +145,7 @@ class ErrExpr:
 
 Expr = Union[
     IntLit, FloatLit, BoolLit, StringLit, Name,
-    UnaryOp, BinOp, Call, SpawnExpr, AwaitExpr,
+    UnaryOp, BinOp, IfExpr, Call, SpawnExpr, AwaitExpr,
     SomeExpr, NoneExpr,
     OkExpr, ErrExpr,
 ]

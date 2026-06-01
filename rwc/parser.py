@@ -17,7 +17,8 @@ Grammar (informal):
     expr_stmt = expr NEWLINE
     block     = NEWLINE INDENT stmt+ DEDENT
 
-    expr      = or_expr
+    expr      = ternary
+    ternary   = or_expr [ 'if' or_expr 'else' ternary ]   # right-assoc
     or_expr   = and_expr ( 'or' and_expr )*
     and_expr  = not_expr ( 'and' not_expr )*
     not_expr  = 'not' not_expr | cmp_expr
@@ -509,7 +510,21 @@ class Parser:
 
     # ------- expressions -------
     def parse_expr(self) -> A.Expr:
-        return self.parse_or()
+        return self.parse_ternary()
+
+    def parse_ternary(self) -> A.Expr:
+        # Conditional expression: `then if cond else els` (Python ternary).
+        # Lowest precedence; the `else` branch parses another ternary so that
+        # chained `a if p else b if q else c` is right-associative.
+        then = self.parse_or()
+        if self.cur.kind != TokenKind.KW_IF:
+            return then
+        t = self.cur
+        self.i += 1  # consume `if`
+        cond = self.parse_or()
+        self.eat(TokenKind.KW_ELSE, "'else' in conditional expression")
+        els = self.parse_ternary()
+        return A.IfExpr(then, cond, els, t.line, t.col)
 
     def parse_or(self) -> A.Expr:
         left = self.parse_and()

@@ -219,3 +219,32 @@ def test_parse_for_four_args_is_error():
     src = "def main() -> int:\n    for i in range(0, 1, 2, 3):\n        return i\n"
     with pytest.raises(ParserError):
         parse_src(src)
+
+
+def test_parse_ternary_expr():
+    src = "def main() -> int:\n    x: int = 1 if true else 2\n    return x\n"
+    decl = parse_src(src).functions[0].body[0]
+    assert isinstance(decl, A.VarDecl)
+    e = decl.value
+    assert isinstance(e, A.IfExpr)
+    assert isinstance(e.then, A.IntLit) and e.then.value == 1
+    assert isinstance(e.cond, A.BoolLit) and e.cond.value is True
+    assert isinstance(e.els, A.IntLit) and e.els.value == 2
+
+
+def test_parse_ternary_is_right_associative():
+    # a if p else b if q else c  ==  a if p else (b if q else c)
+    src = "def main() -> int:\n    x: int = 1 if true else 2 if false else 3\n    return x\n"
+    e = parse_src(src).functions[0].body[0].value
+    assert isinstance(e, A.IfExpr)
+    assert isinstance(e.then, A.IntLit) and e.then.value == 1
+    # else branch is itself a conditional expression
+    assert isinstance(e.els, A.IfExpr)
+    assert isinstance(e.els.then, A.IntLit) and e.els.then.value == 2
+    assert isinstance(e.els.els, A.IntLit) and e.els.els.value == 3
+
+
+def test_parse_ternary_missing_else_is_error():
+    src = "def main() -> int:\n    x: int = 1 if true\n    return x\n"
+    with pytest.raises(ParserError):
+        parse_src(src)
