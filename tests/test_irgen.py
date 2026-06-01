@@ -122,3 +122,20 @@ def test_ternary_emits_branches_and_phi():
     assert "br i1" in ir_text
     assert "phi" in ir_text
     assert "10" in ir_text and "20" in ir_text
+
+
+def test_file_io_emits_runtime_calls():
+    src = (
+        "def main() -> int:\n"
+        "    fd: int = file_open(\"/tmp/x\", \"w\")\n"
+        "    n: int = write(fd, bytes_from_str(\"hi\"))\n"
+        "    rfd: int = file_open(\"/tmp/x\", \"r\")\n"
+        "    b: Bytes = read(rfd, 16)\n"
+        "    rc: int = close(rfd)\n"
+        "    return 0\n"
+    )
+    ir_text = ir_for(src)
+    assert "rw_file_open" in ir_text
+    assert "rw_read" in ir_text
+    assert "rw_write" in ir_text
+    assert "rw_close" in ir_text
