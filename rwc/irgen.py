@@ -395,7 +395,38 @@ class IRGen:
             base = ir.Constant(RW_RESULT_INT_INT_TY,
                                [ir.Constant(I64, 0), ir.Constant(I64, 0)])
             return ctx.builder.insert_value(base, v, 1)
+        if isinstance(expr, A.IfExpr):
+            return self._emit_if_expr(expr, ctx)
         raise RuntimeError(f"unsupported expr: {type(expr).__name__}")
+
+    def _emit_if_expr(self, expr: A.IfExpr, ctx: "FunctionCtx") -> ir.Value:
+        # `then if cond else els` lowered to cbranch + phi, mirroring the
+        # short-circuit and/or emission. Both branches are sema-checked to
+        # share one type, so the phi node uses that type.
+        b = ctx.builder
+        cond = self._emit_expr(expr.cond, ctx)
+        cond_i1 = b.icmp_unsigned("!=", cond, ir.Constant(I8, 0))
+        then_bb = ctx.function.append_basic_block("tern.then")
+        else_bb = ctx.function.append_basic_block("tern.else")
+        end_bb = ctx.function.append_basic_block("tern.end")
+        b.cbranch(cond_i1, then_bb, else_bb)
+
+        b.position_at_end(then_bb)
+        then_val = self._emit_expr(expr.then, ctx)
+        then_bb_end = b.block
+        b.branch(end_bb)
+
+        b.position_at_end(else_bb)
+        else_val = self._emit_expr(expr.els, ctx)
+        else_bb_end = b.block
+        b.branch(end_bb)
+
+        b.position_at_end(end_bb)
+        result_ty = llvm_type_of(self.sema.expr_types[id(expr)])
+        phi = b.phi(result_ty)
+        phi.add_incoming(then_val, then_bb_end)
+        phi.add_incoming(else_val, else_bb_end)
+        return phi
 
     def _emit_binop(self, expr: A.BinOp, ctx: "FunctionCtx") -> ir.Value:
         b = ctx.builder

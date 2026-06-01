@@ -109,3 +109,16 @@ def test_bool_lowered_to_i8():
     ir_text = ir_for(src)
     # The boolean local should be i8.
     assert "alloca i8" in ir_text
+
+
+def test_ternary_emits_branches_and_phi():
+    src = (
+        "def main() -> int:\n"
+        "    x: int = 10 if true else 20\n"
+        "    return x\n"
+    )
+    ir_text = ir_for(src)
+    # Lowered to conditional branch + phi, like short-circuit and/or.
+    assert "br i1" in ir_text
+    assert "phi" in ir_text
+    assert "10" in ir_text and "20" in ir_text
