@@ -117,20 +117,53 @@ aio.h に置く。net/tcp.h と異なり aio は独立した抽象なので自�
 
 ## 並行性の正しさ
 
-このプロトコルは netpoller の park パターンと同型:
-- netpoller: `register(fd, me)` → `rw_sched_park_current()`、poll スレッドが
-  `rw_sched_enqueue_ready(h)`。
-- aio: `submit(task, me)` → `rw_sched_park_current()`、worker スレッドが結果格納
-  後 `rw_sched_enqueue_ready(task->handle)`。
+このプロトコルは既存の 2 つの「park して別スレッドが起こす」経路と**完全に
+同型**にする。実コードを確認済み（`runtime/fiber/sched.c`,
+`runtime/net/netpoller*.c`）:
 
-`rw_sched_enqueue_ready` は「別スレッドから安全に呼べる」と sched.h に明記
-されており、netpoller が既にこの用途で使っている。park と enqueue の競合
-（submit 前に worker が完了して enqueue してしまう等）は、netpoller の
-register→park と同じ順序保証で回避する: **submit より前に handle を確定し、
-park は submit 後に必ず行う**。worker が park より先に enqueue しても、
-スケジューラの ready キューは「WAITING になる前に ready 入り」を許容する設計か
-を実装時に確認する（netpoller も同じ前提のはずなので踏襲。差異があれば
-park.c の spinlock 同等の手当てを行う）。
+- **netpoller** (`rw_net_park_read`): `rw_netpoller_register_read(fd, h)` で
+  kqueue/epoll に登録 → `rw_sched_park_current()`。poll スレッドがイベント時に
+  `rw_sched_enqueue_ready(h)`。
+- **join** (`park_on`): `wait_lock` 内で wait list に自分を入れ `state=WAITING`
+  → 解放 → `rw_fiber_swap`。完了側 `finalize_fiber` が `state=DONE`(release) →
+  `wait_lock` で list を一括 take → 各 waiter を `enqueue_ready`。
+- **aio (本 PR)**: handle を確定 → タスクを submit → `rw_sched_park_current()`。
+  worker が `read(2)`/`write(2)` 完了後、結果をスロットに格納 →
+  `rw_sched_enqueue_ready(task->handle)`。
+
+`rw_sched_enqueue_ready` は「別スレッドから安全に呼べる」と sched.h に明記され、
+`enqueue_ready` は `state=READY` にして ready キューへ push する
+(`sched.c:206`)。`rw_sched_park_current` は `state=WAITING` にして
+`rw_fiber_swap` でスケジューラへ戻る (`sched.c:339`)。worker_main は swap から
+戻った fiber を **`state==RUNNING` のときだけ** ready へ戻し、WAITING/DONE は
+戻さない (`sched.c:373`)。これが鉄則「WAITING の fiber は ready queue に居て
+はならない」を担保する。
+
+### ctx 公開タイミングの競合について
+
+stackful coroutine スケジューラには「`rw_sched_park_current` 内の
+`rw_fiber_swap`（ctx 保存）が完了する前に、別スレッドが `enqueue_ready` →
+別ワーカーが steal → half-written ctx を resume して PC=0 SEGV」という古典的
+競合がある（[[stackful-coroutine-scheduling]]）。
+
+本 PR の aio はこの競合を**新規に持ち込まない**。理由: 上記のとおり netpoller /
+join と**同一のプロトコル**（handle 確定 → 登録/submit → park、相手スレッドは
+park 後に enqueue）を使い、独自の publish-before-save パターンを作らないから。
+worker が park より先に enqueue する可能性の有無・その安全性は、netpoller の
+register→park（登録直後に fd が ready なら poll スレッドが即 enqueue しうる）と
+**完全に同じ条件**であり、本 PR が既存コードの安全性水準を上下させることはない。
+
+したがって本 PR の責務は「netpoller と寸分違わぬ順序でプロトコルを書く」こと。
+もし将来この同型競合が顕在化するなら、それは netpoller・join・aio に共通の
+スケジューラ層の課題であり、`park.c` の `wait_lock` 相当を park_current に
+組み込む別タスクとして 3 経路まとめて対処する（本 PR のスコープ外）。
+
+### 検証で competition を炙り出す
+
+[[stackful-coroutine-scheduling]] の検証手順に従い、複数 fiber が並行で
+ファイル I/O する e2e を **`RW_WORKERS=1` と `RW_WORKERS≥2`（steal が起きる）の
+両方**で回し、SEGV/ハングなく結果が揃うことを確認する。これは aio 経路が
+既存スケジューラと正しく協調できている証拠になる。
 
 ## 触るレイヤー
 
@@ -166,10 +199,11 @@ uv run rwc run examples/file_io.rw     # round-trip が従来どおり一致
 
 ## リスクと対処
 
-- **park/enqueue の競合**: netpoller と同じ順序保証（handle 確定 → submit →
-  park、worker は結果格納 → enqueue）で踏襲。スケジューラが「WAITING 前の
-  enqueue」を許容するか実装時に netpoller の挙動を確認し、必要なら park.c の
-  spinlock パターンを流用。
+- **park/enqueue の競合 (ctx 公開タイミング)**: netpoller / join と**同一
+  プロトコル**（handle 確定 → submit → `park_current`、worker は結果格納後
+  `enqueue_ready`）を厳守し、独自の publish-before-save を作らない。本 PR は
+  既存の安全性水準を変えない（上記「並行性の正しさ」参照）。実装時に
+  `RW_WORKERS≥2` + steal 負荷で SEGV/ハングがないことを必ず確認する。
 - **fiber スタック上のタスク生存**: park 中も fiber スタックは保持されるため、
   タスクをスタックに置きポインタを渡して安全。worker は完了書き込みのみ行い、
   タスクを free しない（呼び出し fiber が所有）。
