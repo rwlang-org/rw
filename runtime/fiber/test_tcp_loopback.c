@@ -29,10 +29,10 @@ static int64_t server_fiber(void *arg) {
     int64_t client = rw_tcp_accept((int64_t)listen_fd);
     if (client < 0) return -1;
     rw_str msg = { .len = 0, .ptr = NULL };
-    rw_tcp_read(&msg, client, 64);
-    if (msg.len <= 0) { rw_tcp_close(client); return -2; }
-    rw_tcp_write(client, msg);
-    rw_tcp_close(client);
+    rw_read(&msg, client, 64);
+    if (msg.len <= 0) { rw_close(client); return -2; }
+    rw_write(client, msg);
+    rw_close(client);
     return 0;
 }
 
@@ -84,7 +84,7 @@ int main(void) {
     pthread_join(client, &cli_rc);
     assert(cli_rc == NULL);
 
-    rw_tcp_close(lfd);
+    rw_close(lfd);
     rw_shutdown();
     printf("tcp loopback test ok\n");
     return 0;
