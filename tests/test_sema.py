@@ -942,37 +942,79 @@ def test_tcp_accept_returns_int():
     check(src)
 
 
-def test_tcp_read_returns_bytes():
-    src = (
+def test_read_returns_bytes():
+    res = check(
         "def main() -> int:\n"
-        "    lfd: int = tcp_listen(8080)\n"
-        "    cfd: int = tcp_accept(lfd)\n"
-        "    b: Bytes = tcp_read(cfd, 4096)\n"
-        "    return len(b)\n"
+        "    fd: int = file_open(\"/tmp/x\", \"r\")\n"
+        "    b: Bytes = read(fd, 4096)\n"
+        "    return 0\n"
     )
-    check(src)
+    assert "main" in res.functions
 
 
-def test_tcp_write_returns_int():
-    src = (
+def test_write_returns_int():
+    res = check(
         "def main() -> int:\n"
-        "    lfd: int = tcp_listen(8080)\n"
-        "    cfd: int = tcp_accept(lfd)\n"
-        "    b: Bytes = tcp_read(cfd, 4096)\n"
-        "    n: int = tcp_write(cfd, b)\n"
-        "    return n\n"
+        "    fd: int = file_open(\"/tmp/x\", \"w\")\n"
+        "    n: int = write(fd, bytes_from_str(\"hi\"))\n"
+        "    return 0\n"
     )
-    check(src)
+    assert "main" in res.functions
 
 
-def test_tcp_close_returns_int():
-    src = (
+def test_close_returns_int():
+    res = check(
         "def main() -> int:\n"
-        "    lfd: int = tcp_listen(8080)\n"
-        "    rc: int = tcp_close(lfd)\n"
-        "    return rc\n"
+        "    fd: int = file_open(\"/tmp/x\", \"r\")\n"
+        "    rc: int = close(fd)\n"
+        "    return 0\n"
     )
-    check(src)
+    assert "main" in res.functions
+
+
+def test_file_open_returns_int():
+    res = check(
+        "def main() -> int:\n"
+        "    fd: int = file_open(\"/tmp/x\", \"w\")\n"
+        "    return 0\n"
+    )
+    assert "main" in res.functions
+
+
+def test_read_wrong_max_type():
+    e = err(
+        "def main() -> int:\n"
+        "    b: Bytes = read(3, \"big\")\n"
+        "    return 0\n"
+    )
+    assert "read second argument must be int" in e.diagnostic.message
+
+
+def test_write_wrong_buffer_type():
+    e = err(
+        "def main() -> int:\n"
+        "    n: int = write(3, \"hi\")\n"
+        "    return 0\n"
+    )
+    assert "write second argument must be Bytes" in e.diagnostic.message
+
+
+def test_file_open_wrong_path_type():
+    e = err(
+        "def main() -> int:\n"
+        "    fd: int = file_open(3, \"r\")\n"
+        "    return 0\n"
+    )
+    assert "file_open first argument must be string" in e.diagnostic.message
+
+
+def test_file_open_wrong_arity():
+    e = err(
+        "def main() -> int:\n"
+        "    fd: int = file_open(\"/tmp/x\")\n"
+        "    return 0\n"
+    )
+    assert "file_open takes 2 arguments" in e.diagnostic.message
 
 
 # ---- TCP builtins negative cases ----
@@ -985,26 +1027,6 @@ def test_tcp_listen_wrong_arg_type():
     )
     e = err(src)
     assert "tcp_listen argument must be int" in e.diagnostic.message
-
-
-def test_tcp_read_wrong_max_type():
-    src = (
-        "def main() -> int:\n"
-        "    b: Bytes = tcp_read(3, \"big\")\n"
-        "    return 0\n"
-    )
-    e = err(src)
-    assert "tcp_read second argument must be int" in e.diagnostic.message
-
-
-def test_tcp_write_wrong_buffer_type():
-    src = (
-        "def main() -> int:\n"
-        "    n: int = tcp_write(3, \"hi\")\n"
-        "    return n\n"
-    )
-    e = err(src)
-    assert "tcp_write second argument must be Bytes" in e.diagnostic.message
 
 
 def test_tcp_listen_wrong_arity():

@@ -4,7 +4,8 @@
 
 `docs/specs/07-string-builtins.md` で `string` の `len` / `==` / `+` を入れた。
 次に必要なのは **バイナリセーフな可変長バイト列** の表現で、これは将来の
-netpoller + TCP API で `tcp_read(fd, n)` の戻り値型として使われる。
+netpoller + TCP API で `read(fd, n)` (旧 `tcp_read`、#33 で fd 汎用に統合) の
+戻り値型として使われる。
 
 `string` だとダメな理由:
 - `string` は実質 immutable な `{i64 len, i8* ptr}` で、**型システム上は「文字列」**。

@@ -5,8 +5,8 @@
  *   blocking accept() so the OS can kernel-sleep the main thread.
  * - Fiber-thread tcp_accept switches the listen fd to nonblocking
  *   on first use, then loops on accept + netpoller park.
- * - tcp_read / tcp_write always assume the fd is nonblocking
- *   (set by tcp_accept when handing out the client fd).
+ *
+ * Generic fd I/O (read/write/close) has moved to runtime/io.c.
  */
 
 #include "tcp.h"
@@ -71,41 +71,3 @@ int64_t rw_tcp_accept(int64_t listen_fd) {
     }
 }
 
-void rw_tcp_read(rw_str *out, int64_t fd, int64_t max) {
-    if (max <= 0) { out->len = 0; out->ptr = NULL; return; }
-    char *buf = (char *)malloc((size_t)max);
-    if (!buf)     { out->len = 0; out->ptr = NULL; return; }
-    for (;;) {
-        ssize_t n = recv((int)fd, buf, (size_t)max, 0);
-        if (n > 0)  { out->len = n; out->ptr = buf; return; }
-        if (n == 0) { free(buf); out->len = 0; out->ptr = NULL; return; }
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            if (rw_sched_current_fiber()) {
-                rw_net_park_read((int)fd);
-                continue;
-            }
-            free(buf); out->len = 0; out->ptr = NULL; return;
-        }
-        free(buf); out->len = 0; out->ptr = NULL; return;
-    }
-}
-
-int64_t rw_tcp_write(int64_t fd, rw_str b) {
-    if (b.len <= 0) return 0;
-    for (;;) {
-        ssize_t n = send((int)fd, b.ptr, (size_t)b.len, 0);
-        if (n >= 0) return (int64_t)n;
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            if (rw_sched_current_fiber()) {
-                rw_net_park_write((int)fd);
-                continue;
-            }
-            return -1;
-        }
-        return -1;
-    }
-}
-
-int64_t rw_tcp_close(int64_t fd) {
-    return (int64_t)close((int)fd);
-}

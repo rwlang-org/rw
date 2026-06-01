@@ -29,7 +29,7 @@ else
   $(error unsupported OS: $(UNAME_S))
 endif
 
-OBJS := runtime.o \
+OBJS := runtime.o io.o \
         fiber/fiber.o fiber/sched.o fiber/runq.o fiber/park.o \
         net/netpoller.o net/tcp.o $(NET_PLATFORM_O) \
         $(FIBER_ASM)
@@ -43,6 +43,9 @@ $(LIB): $(OBJS)
 
 runtime.o: runtime.c runtime.h fiber/sched.h
 	$(CC) $(CFLAGS) -c $< -o $@
+
+io.o: io.c io.h runtime.h net/netpoller.h fiber/sched.h
+	$(CC) $(CFLAGS) -c io.c -o io.o
 
 fiber/fiber.o: fiber/fiber.c fiber/fiber.h
 	$(CC) $(CFLAGS) -c $< -o $@

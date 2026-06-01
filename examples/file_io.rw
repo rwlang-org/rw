@@ -1,0 +1,16 @@
+def main() -> int:
+    path: string = "/tmp/rw_file_io_example.txt"
+
+    wfd: int = file_open(path, "w")
+    n1: int = write(wfd, bytes_from_str("hello file\n"))
+    n2: int = write(wfd, bytes_from_str("second line\n"))
+    close(wfd)
+
+    rfd: int = file_open(path, "r")
+    b: Bytes = read(rfd, 4096)
+    close(rfd)
+
+    s: string = str_from_bytes(b)
+    print(s)
+    print(len(b))
+    return 0

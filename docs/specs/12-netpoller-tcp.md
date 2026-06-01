@@ -20,6 +20,7 @@
 - **nonblocking I/O + fd readiness 監視**: `kqueue(2)` / `epoll(7)`
 - **fiber を fd 監視に紐づけて park / wake**: netpoller スレッド
 - **rw 言語からの TCP API**: `tcp_listen` / `tcp_accept` / `tcp_read` / `tcp_write` / `tcp_close`
+  *(注: `tcp_read` / `tcp_write` / `tcp_close` は後に `read` / `write` / `close` へ統合、後述)*
 
 ロードマップ:
 
@@ -35,12 +36,12 @@
 
 - ランタイムに netpoller スレッドを追加 (kqueue/epoll、専用 pthread 1 つ)
 - fiber を fd readiness で park / wake する内部 API (`rw_net_park_read/write`)
-- rw 言語に 5 つの TCP 組込み:
+- rw 言語に TCP 組込み:
   - `tcp_listen(port: int) -> int`
   - `tcp_accept(listen_fd: int) -> int`
-  - `tcp_read(fd: int, max: int) -> Bytes`
-  - `tcp_write(fd: int, b: Bytes) -> int`
-  - `tcp_close(fd: int) -> int`
+  - `read(fd: int, max: int) -> Bytes`  *(旧 `tcp_read`、fd 汎用に統合)*
+  - `write(fd: int, b: Bytes) -> int`   *(旧 `tcp_write`、fd 汎用に統合)*
+  - `close(fd: int) -> int`             *(旧 `tcp_close`、fd 汎用に統合)*
 - `examples/tcp_echo.rw` が動く (1 接続 + 10 並列接続を Python から検証)
 - 公開既存 ABI と既存 example はすべて回帰なし
 
@@ -50,10 +51,10 @@
 - `tcp_listen` のホスト指定 (`0.0.0.0` 固定 IPv4)
 - 詳細エラー (errno 取得 API)
 - graceful shutdown / SIGINT ハンドラ (Ctrl-C で殺す前提)
-- partial write の自動 retry (`tcp_write` は実際に書いたバイト数を返すだけ、
+- partial write の自動 retry (`write` は実際に書いたバイト数を返すだけ、
   全部書ききるのはユーザコードの責任)
 - 同一 fd への複数 fiber 同時 park (protocol で 1 fd = 1 fiber 規約)
-- Result 型でのエラー表現 (`tcp_read` は `Bytes` を返し len==0 で EOF/エラー
+- Result 型でのエラー表現 (`read` は `Bytes` を返し len==0 で EOF/エラー
   両方を表現)
 - 接続数の C10k ベンチ (最小 e2e のみ。1 接続成功 + 10 並列接続)
 - ファイル I/O / pipe / TTY (今回 socket のみ、kqueue/epoll で監視可能な
@@ -86,7 +87,7 @@
                           +---+----+ +---+----+ +---+----+
                               |          |          |
                               v          v          v
-                          fiber 実行 (tcp_read / tcp_write / ...)
+                          fiber 実行 (read / write / ...)
                               |
                               | EAGAIN → rw_net_park_read(fd)
                               |   ↓
@@ -183,8 +184,11 @@ epoll は ADD/MOD で挙動が違うので両方試行。kqueue は EV_ADD だ�
 
 ### tcp_* helper の実装パターン
 
+> **注 (#33):** `rw_tcp_read` / `rw_tcp_write` / `rw_tcp_close` は `runtime/io.c` の
+> `rw_read` / `rw_write` / `rw_close` に統合・削除済み。以下は設計時の参考実装。
+
 ```c
-// runtime/net/tcp.c
+// runtime/net/tcp.c (歴史的参考実装 — 現在は runtime/io.c に統合)
 
 int64_t rw_tcp_listen(int64_t port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -264,21 +268,27 @@ int64_t rw_tcp_close(int64_t fd) {
 
 ### rw 言語側の組込み
 
-5 つの組込み関数を Sema / irgen に追加。シグネチャは:
+> **更新 (#33 / [15-file-io](15-file-io.md)):** `tcp_read` / `tcp_write` /
+> `tcp_close` は fd 汎用の `read` / `write` / `close` に統合された。ソケットの
+> 読み書き・クローズはこれらを使う (実装は `runtime/io.c`)。ソケット固有の
+> `tcp_listen` / `tcp_accept` はそのまま。詳細は
+> [`15-file-io.md`](15-file-io.md) を参照。
+
+組込み関数を Sema / irgen に追加。シグネチャは:
 
 ```
-tcp_listen(int)        -> int
-tcp_accept(int)        -> int
-tcp_read(int, int)     -> Bytes
-tcp_write(int, Bytes)  -> int
-tcp_close(int)         -> int
+tcp_listen(int)     -> int
+tcp_accept(int)     -> int
+read(int, int)      -> Bytes   # 旧 tcp_read
+write(int, Bytes)   -> int     # 旧 tcp_write
+close(int)          -> int     # 旧 tcp_close
 ```
 
 全部 `spawn` 禁止 (組込みは spawn できない既存ルール)。
 
 irgen は既存パターン:
-- `tcp_read` は **pointer-out** (16 byte 戻り値だが alloca + load パターンに揃える)
-- `tcp_write` は Bytes (16 byte) を value 渡し
+- `read` は **pointer-out** (16 byte 戻り値だが alloca + load パターンに揃える)
+- `write` は Bytes (16 byte) を value 渡し
 - 残り 3 つはスカラ
 
 ### ファイル構成
@@ -292,15 +302,15 @@ runtime/net/                          (新規ディレクトリ)
 ├── tcp.h
 └── tcp.c
 
-runtime/runtime.h                     (5 つの tcp_* + 2 つの park プロトタイプ追加)
+runtime/runtime.h                     (tcp_listen/tcp_accept + read/write/close/file_open + 2 つの park プロトタイプ追加)
 runtime/runtime.c                     (rw_init / rw_shutdown に netpoller 呼び出し追加)
 runtime/Makefile                      (net/*.o + uname 分岐)
 
 runtime/fiber/test_netpoller_pipe.c   (新規 C テスト)
 runtime/fiber/test_tcp_loopback.c     (新規 C テスト)
 
-rwc/sema.py                           (5 組込み + spawn 禁止)
-rwc/irgen.py                          (5 組込み emit)
+rwc/sema.py                           (tcp_listen/tcp_accept/read/write/close + spawn 禁止)
+rwc/irgen.py                          (tcp_listen/tcp_accept/read/write/close emit)
 
 examples/tcp_echo.rw                  (echo server デモ)
 examples/tcp_echo.rw.expected         (今回は使わない、後述)
@@ -390,10 +400,10 @@ port は `socket.bind(0)` で空きを確保。example の port をハードコ�
    - 5 関数の実装
    - C テスト `test_tcp_loopback.c`: localhost で listen → connect → recv/send
 
-4. **rwc: 5 組込みを sema + irgen**
-   - `_check_call` に 5 分岐 + spawn 禁止
-   - `_emit_call` に 5 分岐 (`tcp_read` は pointer-out shim)
-   - positive 5 + negative 5 (引数型エラー、spawn 禁止)
+4. **rwc: 組込みを sema + irgen**
+   - `_check_call` に分岐 + spawn 禁止
+   - `_emit_call` に分岐 (`read` は pointer-out shim)
+   - positive / negative テスト (引数型エラー、spawn 禁止)
 
 5. **examples + e2e**
    - `examples/tcp_echo.rw`
