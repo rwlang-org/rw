@@ -434,20 +434,25 @@ class Sema:
                         self.filename, expr.line, expr.col, 5,
                         "cannot spawn the builtin `tcp_accept`",
                     ))
-                if call.callee == "tcp_read":
+                if call.callee == "read":
                     raise CompileError(Diagnostic(
                         self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `tcp_read`",
+                        "cannot spawn the builtin `read`",
                     ))
-                if call.callee == "tcp_write":
+                if call.callee == "write":
                     raise CompileError(Diagnostic(
                         self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `tcp_write`",
+                        "cannot spawn the builtin `write`",
                     ))
-                if call.callee == "tcp_close":
+                if call.callee == "close":
                     raise CompileError(Diagnostic(
                         self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `tcp_close`",
+                        "cannot spawn the builtin `close`",
+                    ))
+                if call.callee == "file_open":
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 5,
+                        "cannot spawn the builtin `file_open`",
                     ))
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
@@ -664,58 +669,78 @@ class Sema:
                     f"tcp_accept argument must be int, found `{at}`",
                 ))
             return T.INT
-        # Builtin: tcp_read(int, int) -> Bytes.
-        if call.callee == "tcp_read":
+        # Builtin: read(int, int) -> Bytes.
+        if call.callee == "read":
             if len(call.args) != 2:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
-                    f"tcp_read takes 2 arguments, got {len(call.args)}",
+                    f"read takes 2 arguments, got {len(call.args)}",
                 ))
             t0 = self._check_expr(fn, call.args[0], locals_)
             t1 = self._check_expr(fn, call.args[1], locals_)
             if t0 is not T.INT:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
-                    f"tcp_read first argument must be int, found `{t0}`",
+                    f"read first argument must be int, found `{t0}`",
                 ))
             if t1 is not T.INT:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
-                    f"tcp_read second argument must be int, found `{t1}`",
+                    f"read second argument must be int, found `{t1}`",
                 ))
             return T.BYTES
-        # Builtin: tcp_write(int, Bytes) -> int.
-        if call.callee == "tcp_write":
+        # Builtin: write(int, Bytes) -> int.
+        if call.callee == "write":
             if len(call.args) != 2:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
-                    f"tcp_write takes 2 arguments, got {len(call.args)}",
+                    f"write takes 2 arguments, got {len(call.args)}",
                 ))
             t0 = self._check_expr(fn, call.args[0], locals_)
             t1 = self._check_expr(fn, call.args[1], locals_)
             if t0 is not T.INT:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
-                    f"tcp_write first argument must be int, found `{t0}`",
+                    f"write first argument must be int, found `{t0}`",
                 ))
             if t1 is not T.BYTES:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
-                    f"tcp_write second argument must be Bytes, found `{t1}`",
+                    f"write second argument must be Bytes, found `{t1}`",
                 ))
             return T.INT
-        # Builtin: tcp_close(int) -> int.
-        if call.callee == "tcp_close":
+        # Builtin: close(int) -> int.
+        if call.callee == "close":
             if len(call.args) != 1:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
-                    f"tcp_close takes 1 argument, got {len(call.args)}",
+                    f"close takes 1 argument, got {len(call.args)}",
                 ))
             at = self._check_expr(fn, call.args[0], locals_)
             if at is not T.INT:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
-                    f"tcp_close argument must be int, found `{at}`",
+                    f"close argument must be int, found `{at}`",
+                ))
+            return T.INT
+        # Builtin: file_open(string, string) -> int.
+        if call.callee == "file_open":
+            if len(call.args) != 2:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"file_open takes 2 arguments, got {len(call.args)}",
+                ))
+            t0 = self._check_expr(fn, call.args[0], locals_)
+            t1 = self._check_expr(fn, call.args[1], locals_)
+            if t0 is not T.STRING:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"file_open first argument must be string, found `{t0}`",
+                ))
+            if t1 is not T.STRING:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"file_open second argument must be string, found `{t1}`",
                 ))
             return T.INT
         if call.callee not in self.result.functions:
