@@ -1,0 +1,18 @@
+def roundtrip(path: string) -> int:
+    wfd: int = file_open(path, "w")
+    write(wfd, bytes_from_str("payload\n"))
+    close(wfd)
+    rfd: int = file_open(path, "r")
+    b: Bytes = read(rfd, 4096)
+    close(rfd)
+    return len(b)
+
+def main() -> int:
+    f1: Future[int] = spawn roundtrip("/tmp/rw_file_par_1.txt")
+    f2: Future[int] = spawn roundtrip("/tmp/rw_file_par_2.txt")
+    f3: Future[int] = spawn roundtrip("/tmp/rw_file_par_3.txt")
+    r1: int = await f1
+    r2: int = await f2
+    r3: int = await f3
+    print(r1 + r2 + r3)
+    return 0

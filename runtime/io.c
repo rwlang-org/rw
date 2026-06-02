@@ -18,9 +18,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
+
+#include "aio.h"
 
 void rw_read(rw_str *out, int64_t fd, int64_t max) {
     if (max <= 0) { out->len = 0; out->ptr = NULL; return; }
+
+    /* Regular files block on read(2) (no EAGAIN), pinning the worker M.
+     * Offload them to the aio thread pool so the fiber parks instead.
+     * Sockets keep the nonblocking + netpoller path below. */
+    struct stat st;
+    if (fstat((int)fd, &st) == 0 && S_ISREG(st.st_mode)) {
+        rw_aio_read(out, fd, max);
+        return;
+    }
+
     char *buf = (char *)malloc((size_t)max);
     if (!buf)     { out->len = 0; out->ptr = NULL; return; }
     for (;;) {
@@ -40,6 +53,12 @@ void rw_read(rw_str *out, int64_t fd, int64_t max) {
 
 int64_t rw_write(int64_t fd, rw_str b) {
     if (b.len <= 0) return 0;
+
+    struct stat st;
+    if (fstat((int)fd, &st) == 0 && S_ISREG(st.st_mode)) {
+        return rw_aio_write(fd, b);
+    }
+
     for (;;) {
         ssize_t n = write((int)fd, b.ptr, (size_t)b.len);
         if (n >= 0) return (int64_t)n;
