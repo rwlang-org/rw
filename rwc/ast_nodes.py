@@ -203,6 +203,18 @@ class While:
 
 
 @dataclass
+class Break:
+    line: int
+    col: int
+
+
+@dataclass
+class Continue:
+    line: int
+    col: int
+
+
+@dataclass
 class For:
     var: str               # loop variable name
     start: Expr            # int expr
@@ -230,7 +242,7 @@ class MatchStmt:
     col: int
 
 
-Stmt = Union[VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt]
+Stmt = Union[VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt, Break, Continue]
 
 
 # ----- Top level -----

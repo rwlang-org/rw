@@ -297,10 +297,18 @@ class IRGen:
             cond_i1 = b.icmp_unsigned("!=", cond_i8, ir.Constant(I8, 0))
             b.cbranch(cond_i1, body_bb, end_bb)
             b.position_at_end(body_bb)
+            ctx.loop_stack.append((cond_bb, end_bb))
             self._emit_block(stmt.body, ctx)
+            ctx.loop_stack.pop()
             if not b.block.is_terminated:
                 b.branch(cond_bb)
             b.position_at_end(end_bb)
+            return
+        if isinstance(stmt, A.Break):
+            b.branch(ctx.loop_stack[-1][1])
+            return
+        if isinstance(stmt, A.Continue):
+            b.branch(ctx.loop_stack[-1][0])
             return
         if isinstance(stmt, A.MatchStmt):
             v = self._emit_expr(stmt.target, ctx)
@@ -724,6 +732,9 @@ class FunctionCtx:
         self.return_ty = return_ty
         self.gen = gen
         self.function_name = function.name.removeprefix("rw_user_")
+        # Stack of enclosing loops as (cond_bb, end_bb); continue -> cond_bb,
+        # break -> end_bb. Pushed/popped around each While body emission.
+        self.loop_stack: list = []
 
 
 def generate(module: A.Module, sema: SemaResult) -> ir.Module:

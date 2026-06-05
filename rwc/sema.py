@@ -66,6 +66,8 @@ class Sema:
         self.module = module
         self.filename = filename
         self.result = SemaResult(filename=filename, functions={})
+        # Depth of enclosing loops; break/continue are only valid when > 0.
+        self._loop_depth = 0
 
     # ---------- entry ----------
     def analyze(self) -> SemaResult:
@@ -242,8 +244,26 @@ class Sema:
                     self.filename, stmt.line, stmt.col, 5,
                     f"while condition must be bool, found `{cond_ty}`",
                 ))
+            self._loop_depth += 1
             self._check_block(fn, stmt.body, dict(locals_), ret_ty)
+            self._loop_depth -= 1
             return False  # while bodies don't guarantee return
+
+        if isinstance(stmt, A.Break):
+            if self._loop_depth == 0:
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, 5,
+                    "`break` used outside of a loop",
+                ))
+            return False
+
+        if isinstance(stmt, A.Continue):
+            if self._loop_depth == 0:
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, 8,
+                    "`continue` used outside of a loop",
+                ))
+            return False
 
         if isinstance(stmt, A.MatchStmt):
             tt = self._check_expr(fn, stmt.target, locals_)

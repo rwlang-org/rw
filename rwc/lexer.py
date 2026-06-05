@@ -39,6 +39,8 @@ class TokenKind(Enum):
     KW_ELIF = auto()
     KW_ELSE = auto()
     KW_WHILE = auto()
+    KW_BREAK = auto()
+    KW_CONTINUE = auto()
     KW_AND = auto()
     KW_OR = auto()
     KW_NOT = auto()
@@ -100,6 +102,8 @@ KEYWORDS: dict[str, TokenKind] = {
     "elif": TokenKind.KW_ELIF,
     "else": TokenKind.KW_ELSE,
     "while": TokenKind.KW_WHILE,
+    "break": TokenKind.KW_BREAK,
+    "continue": TokenKind.KW_CONTINUE,
     "and": TokenKind.KW_AND,
     "or": TokenKind.KW_OR,
     "not": TokenKind.KW_NOT,

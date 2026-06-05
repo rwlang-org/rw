@@ -1,0 +1,18 @@
+def main() -> int:
+    i: int = 0
+    total: int = 0
+    while i < 100:
+        i = i + 1
+        if i > 5:
+            break
+        total = total + i
+    print(total)
+    j: int = 0
+    even: int = 0
+    while j < 10:
+        j = j + 1
+        if j % 2 == 1:
+            continue
+        even = even + j
+    print(even)
+    return 0
