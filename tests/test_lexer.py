@@ -59,6 +59,41 @@ def test_numbers_int_and_float():
     assert toks[1].kind == TokenKind.FLOAT and toks[1].value == "3.14"
 
 
+def test_prefixed_integers():
+    toks = tokenize("0x1F 0o17 0b1010\n")
+    assert toks[0].kind == TokenKind.INT and toks[0].value == "0x1F"
+    assert toks[1].kind == TokenKind.INT and toks[1].value == "0o17"
+    assert toks[2].kind == TokenKind.INT and toks[2].value == "0b1010"
+
+
+def test_exponent_floats():
+    toks = tokenize("1e10 1.5e-3 2E+5\n")
+    assert toks[0].kind == TokenKind.FLOAT and toks[0].value == "1e10"
+    assert toks[1].kind == TokenKind.FLOAT and toks[1].value == "1.5e-3"
+    assert toks[2].kind == TokenKind.FLOAT and toks[2].value == "2E+5"
+
+
+def test_underscore_separators():
+    toks = tokenize("1_000_000 0xFF_FF\n")
+    assert toks[0].kind == TokenKind.INT and toks[0].value == "1_000_000"
+    assert toks[1].kind == TokenKind.INT and toks[1].value == "0xFF_FF"
+
+
+def test_prefix_without_digits_raises():
+    with pytest.raises(LexerError):
+        tokenize("0x\n")
+
+
+def test_consecutive_underscore_raises():
+    with pytest.raises(LexerError):
+        tokenize("1__0\n")
+
+
+def test_trailing_underscore_raises():
+    with pytest.raises(LexerError):
+        tokenize("1_\n")
+
+
 def test_string_literal_basic():
     toks = tokenize('"hello"\n')
     assert toks[0].kind == TokenKind.STRING
