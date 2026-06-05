@@ -123,6 +123,16 @@ class IRGen:
             m, ir.FunctionType(I64, [I64]), "rw_close")
         self._rw_file_open = ir.Function(
             m, ir.FunctionType(I64, [RW_STR_TY, RW_STR_TY]), "rw_file_open")
+        # math intrinsics (lowered by clang; no -lm / runtime link needed)
+        self._llvm_sqrt = m.declare_intrinsic("llvm.sqrt", [F64])
+        self._llvm_floor = m.declare_intrinsic("llvm.floor", [F64])
+        self._llvm_ceil = m.declare_intrinsic("llvm.ceil", [F64])
+        self._llvm_exp = m.declare_intrinsic("llvm.exp", [F64])
+        self._llvm_log = m.declare_intrinsic("llvm.log", [F64])
+        self._llvm_sin = m.declare_intrinsic("llvm.sin", [F64])
+        self._llvm_cos = m.declare_intrinsic("llvm.cos", [F64])
+        self._llvm_fabs = m.declare_intrinsic("llvm.fabs", [F64])
+        self._llvm_pow = m.declare_intrinsic("llvm.pow", [F64])  # double (double, double)
         # lifecycle
         self._rw_init = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_init")
         self._rw_shutdown = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_shutdown")
@@ -624,6 +634,20 @@ class IRGen:
             path_v = self._emit_expr(call.args[0], ctx)
             mode_v = self._emit_expr(call.args[1], ctx)
             return ctx.builder.call(self._rw_file_open, [path_v, mode_v])
+        # math intrinsics
+        _math_unary = {
+            "sqrt": "_llvm_sqrt", "floor": "_llvm_floor", "ceil": "_llvm_ceil",
+            "exp": "_llvm_exp", "log": "_llvm_log", "sin": "_llvm_sin",
+            "cos": "_llvm_cos", "fabs": "_llvm_fabs",
+        }
+        if call.callee in _math_unary:
+            v = self._emit_expr(call.args[0], ctx)
+            intr = getattr(self, _math_unary[call.callee])
+            return ctx.builder.call(intr, [v])
+        if call.callee == "pow":
+            base_v = self._emit_expr(call.args[0], ctx)
+            exp_v = self._emit_expr(call.args[1], ctx)
+            return ctx.builder.call(self._llvm_pow, [base_v, exp_v])
         fn = self.funcs[call.callee]
         args = [self._emit_expr(a, ctx) for a in call.args]
         return ctx.builder.call(fn, args)

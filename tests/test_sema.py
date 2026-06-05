@@ -1211,3 +1211,61 @@ def test_bitnot_on_float_is_error():
         "    return x\n"
     )
     assert "int" in e.diagnostic.message.lower()
+
+
+# ---- math builtins ----
+
+def test_sqrt_returns_float():
+    res = check(
+        "def main() -> int:\n"
+        "    x: float = sqrt(2.0)\n"
+        "    return 0\n"
+    )
+    assert "main" in res.functions
+
+
+def test_pow_returns_float():
+    res = check(
+        "def main() -> int:\n"
+        "    x: float = pow(2.0, 3.0)\n"
+        "    return 0\n"
+    )
+    assert "main" in res.functions
+
+
+def test_sqrt_int_arg_is_type_error():
+    e = err(
+        "def main() -> int:\n"
+        "    x: float = sqrt(2)\n"
+        "    return 0\n"
+    )
+    assert "sqrt argument must be float" in e.diagnostic.message
+
+
+def test_pow_wrong_arity_is_error():
+    e = err(
+        "def main() -> int:\n"
+        "    x: float = pow(2.0)\n"
+        "    return 0\n"
+    )
+    assert "pow takes 2 arguments" in e.diagnostic.message
+
+
+def test_floor_ceil_fabs_return_float():
+    res = check(
+        "def main() -> int:\n"
+        "    a: float = floor(3.7)\n"
+        "    b: float = ceil(3.2)\n"
+        "    c: float = fabs(0.0 - 1.0)\n"
+        "    return 0\n"
+    )
+    assert "main" in res.functions
+
+
+def test_cannot_spawn_sqrt():
+    e = err(
+        "def main() -> int:\n"
+        "    f: Future[float] = spawn sqrt(2.0)\n"
+        "    return 0\n"
+    )
+    assert "cannot spawn the builtin `sqrt`" in e.diagnostic.message
