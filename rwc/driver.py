@@ -109,7 +109,10 @@ def compile_source(
         ll_path = f.name
 
     try:
-        cmd = [clang, ll_path, str(librw), "-o", str(output), "-lpthread"]
+        # -lm: math intrinsics (llvm.pow/exp/log/sin/cos, ...) may be lowered
+        # to libm calls (e.g. `pow`) by the backend. macOS bundles these in
+        # libSystem, but GNU/Linux requires explicit linking against libm.
+        cmd = [clang, ll_path, str(librw), "-o", str(output), "-lpthread", "-lm"]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             raise CompileError(Diagnostic(
