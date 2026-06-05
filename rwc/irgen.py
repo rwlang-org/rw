@@ -371,6 +371,9 @@ class IRGen:
             if expr.op == "not":
                 # v is i8 with 0/1; flip lsb
                 return b.xor(v, ir.Constant(I8, 1))
+            if expr.op == "~":
+                # v is i64; bitwise complement
+                return b.not_(v)
             raise RuntimeError(f"bad unary {expr.op}")
         if isinstance(expr, A.BinOp):
             return self._emit_binop(expr, ctx)
@@ -493,6 +496,15 @@ class IRGen:
             if is_str and op == "+":
                 return b.call(self._rw_str_concat, [l, r])
             raise RuntimeError(f"arith op {op} on {lty}")
+
+        if op in ("&", "|", "^", "<<", ">>"):
+            if is_int:
+                table = {
+                    "&": b.and_, "|": b.or_, "^": b.xor,
+                    "<<": b.shl, ">>": b.ashr,
+                }
+                return table[op](l, r)
+            raise RuntimeError(f"bitwise op {op} on {lty}")
 
         if op in ("<", "<=", ">", ">=", "==", "!="):
             if is_int:

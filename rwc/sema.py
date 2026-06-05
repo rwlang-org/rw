@@ -327,6 +327,13 @@ class Sema:
                         f"`not` requires bool, found `{inner}`",
                     ))
                 return T.BOOL
+            if expr.op == "~":
+                if inner is not T.INT:
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 1,
+                        f"unary `~` requires int, found `{inner}`",
+                    ))
+                return T.INT
             raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
                                           f"internal: unknown unary op {expr.op}"))
         if isinstance(expr, A.BinOp):
@@ -348,6 +355,14 @@ class Sema:
                         f"operator `{op}` requires int or float, found `{lt}`",
                     ))
                 return lt
+            if op in ("&", "|", "^", "<<", ">>"):
+                if lt is not T.INT or rt is not T.INT:
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, len(op),
+                        f"operator `{op}` requires int on both sides, "
+                        f"found `{lt}` and `{rt}`",
+                    ))
+                return T.INT
             if op in ("==", "!="):
                 if lt != rt:
                     raise CompileError(Diagnostic(

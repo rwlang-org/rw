@@ -248,3 +248,38 @@ def test_parse_ternary_missing_else_is_error():
     src = "def main() -> int:\n    x: int = 1 if true\n    return x\n"
     with pytest.raises(ParserError):
         parse_src(src)
+
+
+def test_parse_bitwise_precedence_or_below_and():
+    # 1 | 2 & 3  ==  1 | (2 & 3)  ( & binds tighter than | )
+    src = "def f() -> int:\n    return 1 | 2 & 3\n"
+    ret = parse_src(src).functions[0].body[0]
+    assert isinstance(ret, A.Return)
+    top = ret.value
+    assert isinstance(top, A.BinOp) and top.op == "|"
+    assert isinstance(top.left, A.IntLit) and top.left.value == 1
+    assert isinstance(top.right, A.BinOp) and top.right.op == "&"
+    assert isinstance(top.right.left, A.IntLit) and top.right.left.value == 2
+    assert isinstance(top.right.right, A.IntLit) and top.right.right.value == 3
+
+
+def test_parse_shift_binds_looser_than_add():
+    # 1 + 2 << 3  ==  (1 + 2) << 3  ( + binds tighter than << )
+    src = "def f() -> int:\n    return 1 + 2 << 3\n"
+    ret = parse_src(src).functions[0].body[0]
+    assert isinstance(ret, A.Return)
+    top = ret.value
+    assert isinstance(top, A.BinOp) and top.op == "<<"
+    assert isinstance(top.left, A.BinOp) and top.left.op == "+"
+    assert isinstance(top.left.left, A.IntLit) and top.left.left.value == 1
+    assert isinstance(top.left.right, A.IntLit) and top.left.right.value == 2
+    assert isinstance(top.right, A.IntLit) and top.right.value == 3
+
+
+def test_parse_unary_tilde():
+    src = "def f() -> int:\n    return ~0\n"
+    ret = parse_src(src).functions[0].body[0]
+    assert isinstance(ret, A.Return)
+    e = ret.value
+    assert isinstance(e, A.UnaryOp) and e.op == "~"
+    assert isinstance(e.operand, A.IntLit) and e.operand.value == 0

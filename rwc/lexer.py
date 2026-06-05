@@ -91,6 +91,12 @@ class TokenKind(Enum):
     LE = auto()
     GT = auto()
     GE = auto()
+    AMP = auto()  # &
+    PIPE = auto()  # |
+    CARET = auto()  # ^
+    TILDE = auto()  # ~
+    LSHIFT = auto()  # <<
+    RSHIFT = auto()  # >>
 
 
 KEYWORDS: dict[str, TokenKind] = {
@@ -354,6 +360,8 @@ class Lexer:
             "!=": TokenKind.NE,
             "<=": TokenKind.LE,
             ">=": TokenKind.GE,
+            "<<": TokenKind.LSHIFT,
+            ">>": TokenKind.RSHIFT,
         }
         one_char = {
             "(": TokenKind.LPAREN,
@@ -370,6 +378,10 @@ class Lexer:
             "%": TokenKind.PERCENT,
             "<": TokenKind.LT,
             ">": TokenKind.GT,
+            "&": TokenKind.AMP,
+            "|": TokenKind.PIPE,
+            "^": TokenKind.CARET,
+            "~": TokenKind.TILDE,
         }
         if two in two_char:
             self._advance()
