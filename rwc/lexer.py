@@ -73,6 +73,7 @@ class TokenKind(Enum):
     KW_FOR = auto()
     KW_IN = auto()
     KW_AS = auto()
+    KW_TYPE = auto()
 
     # Punctuation / operators
     LPAREN = auto()
@@ -141,6 +142,7 @@ KEYWORDS: dict[str, TokenKind] = {
     "for": TokenKind.KW_FOR,
     "in": TokenKind.KW_IN,
     "as": TokenKind.KW_AS,
+    "type": TokenKind.KW_TYPE,
 }
 
 
