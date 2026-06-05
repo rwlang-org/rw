@@ -262,6 +262,14 @@ class Parser:
             return self.parse_if()
         if t.kind == TokenKind.KW_WHILE:
             return self.parse_while()
+        if t.kind == TokenKind.KW_BREAK:
+            kw = self.eat(TokenKind.KW_BREAK)
+            self.eat(TokenKind.NEWLINE)
+            return A.Break(kw.line, kw.col)
+        if t.kind == TokenKind.KW_CONTINUE:
+            kw = self.eat(TokenKind.KW_CONTINUE)
+            self.eat(TokenKind.NEWLINE)
+            return A.Continue(kw.line, kw.col)
         if t.kind == TokenKind.KW_FOR:
             return self.parse_for()
         if t.kind == TokenKind.KW_MATCH:

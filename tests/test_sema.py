@@ -1086,6 +1086,68 @@ def test_range_outside_for_is_error():
 
 
 
+# ---- break / continue ----
+
+def test_break_outside_loop_is_error():
+    src = (
+        "def main() -> int:\n"
+        "    break\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "break" in e.diagnostic.message and "loop" in e.diagnostic.message
+
+
+def test_continue_outside_loop_is_error():
+    src = (
+        "def main() -> int:\n"
+        "    continue\n"
+        "    return 0\n"
+    )
+    e = err(src)
+    assert "continue" in e.diagnostic.message and "loop" in e.diagnostic.message
+
+
+def test_break_inside_while_ok():
+    src = (
+        "def main() -> int:\n"
+        "    i: int = 0\n"
+        "    while i < 10:\n"
+        "        i = i + 1\n"
+        "        if i > 3:\n"
+        "            break\n"
+        "    return i\n"
+    )
+    check(src)
+
+
+def test_continue_inside_while_ok():
+    src = (
+        "def main() -> int:\n"
+        "    i: int = 0\n"
+        "    while i < 10:\n"
+        "        i = i + 1\n"
+        "        if i == 2:\n"
+        "            continue\n"
+        "    return i\n"
+    )
+    check(src)
+
+
+def test_break_after_loop_is_error():
+    # depth must return to 0 after the while body closes.
+    src = (
+        "def main() -> int:\n"
+        "    i: int = 0\n"
+        "    while i < 10:\n"
+        "        i = i + 1\n"
+        "    break\n"
+        "    return i\n"
+    )
+    e = err(src)
+    assert "break" in e.diagnostic.message and "loop" in e.diagnostic.message
+
+
 # ---- conditional (ternary) expression ----
 
 def test_ternary_int_branches_ok():

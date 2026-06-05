@@ -115,6 +115,30 @@ def test_parse_while_loop():
     assert isinstance(w.body[0], A.Assign)
 
 
+def test_parse_break_in_while():
+    src = (
+        "def f() -> void:\n"
+        "    while i < 10:\n"
+        "        break\n"
+    )
+    mod = parse_src(src)
+    w = mod.functions[0].body[0]
+    assert isinstance(w, A.While)
+    assert isinstance(w.body[0], A.Break)
+
+
+def test_parse_continue_in_while():
+    src = (
+        "def f() -> void:\n"
+        "    while i < 10:\n"
+        "        continue\n"
+    )
+    mod = parse_src(src)
+    w = mod.functions[0].body[0]
+    assert isinstance(w, A.While)
+    assert isinstance(w.body[0], A.Continue)
+
+
 def test_parse_call_expression():
     src = "def main() -> int:\n    return add(1, 2)\n"
     mod = parse_src(src)
