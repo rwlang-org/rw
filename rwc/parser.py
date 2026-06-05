@@ -645,7 +645,10 @@ class Parser:
         t = self.cur
         if t.kind == TokenKind.INT:
             self.i += 1
-            return A.IntLit(int(t.value), t.line, t.col)
+            # base=0 auto-detects 0x/0o/0b prefixes; underscores are accepted
+            # by Python's int(). Plain decimals (incl. "0") work too because
+            # the lexer never emits a leading-zero non-zero decimal.
+            return A.IntLit(int(t.value, 0), t.line, t.col)
         if t.kind == TokenKind.FLOAT:
             self.i += 1
             return A.FloatLit(float(t.value), t.line, t.col)
