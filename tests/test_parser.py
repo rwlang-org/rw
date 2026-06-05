@@ -322,3 +322,19 @@ def test_parse_type_alias():
     assert alias.name == "Foo"
     assert isinstance(alias.target, A.TypeName)
     assert alias.target.name == "int"
+
+
+def test_parse_assert_without_message():
+    src = "def f() -> void:\n    assert x\n"
+    stmt = parse_src(src).functions[0].body[0]
+    assert isinstance(stmt, A.Assert)
+    assert isinstance(stmt.cond, A.Name) and stmt.cond.name == "x"
+    assert stmt.msg is None
+
+
+def test_parse_assert_with_message():
+    src = "def f() -> void:\n    assert x, \"msg\"\n"
+    stmt = parse_src(src).functions[0].body[0]
+    assert isinstance(stmt, A.Assert)
+    assert isinstance(stmt.cond, A.Name) and stmt.cond.name == "x"
+    assert isinstance(stmt.msg, A.StringLit) and stmt.msg.value == "msg"
