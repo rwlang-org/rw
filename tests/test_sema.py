@@ -1211,3 +1211,39 @@ def test_bitnot_on_float_is_error():
         "    return x\n"
     )
     assert "int" in e.diagnostic.message.lower()
+
+
+def test_assert_bool_ok():
+    res = check(
+        "def main() -> int:\n"
+        "    assert 1 == 1\n"
+        "    return 0\n"
+    )
+    assert "main" in res.functions
+
+
+def test_assert_with_message_ok():
+    res = check(
+        "def main() -> int:\n"
+        "    assert true, \"oops\"\n"
+        "    return 0\n"
+    )
+    assert "main" in res.functions
+
+
+def test_assert_non_bool_cond_is_error():
+    e = err(
+        "def main() -> int:\n"
+        "    assert 1\n"
+        "    return 0\n"
+    )
+    assert "bool" in e.diagnostic.message.lower()
+
+
+def test_assert_non_string_message_is_error():
+    e = err(
+        "def main() -> int:\n"
+        "    assert true, 5\n"
+        "    return 0\n"
+    )
+    assert "string" in e.diagnostic.message.lower()

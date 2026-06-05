@@ -28,6 +28,17 @@ void rw_print_str(rw_str s) {
     fputc('\n', stdout);
 }
 
+/* ---------- assertion failure ---------- */
+
+void rw_panic(rw_str msg) {
+    fputs("rw: assertion failed: ", stderr);
+    if (msg.ptr && msg.len > 0) {
+        fwrite(msg.ptr, 1, (size_t)msg.len, stderr);
+    }
+    fputc('\n', stderr);
+    exit(1);
+}
+
 /* ---------- string helper ---------- */
 
 rw_str rw_str_from_cstr(const char *cstr, int64_t len) {

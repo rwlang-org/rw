@@ -80,6 +80,8 @@ class IRGen:
         self._rw_print_f64 = ir.Function(m, ir.FunctionType(ir.VoidType(), [F64]), "rw_print_f64")
         self._rw_print_bool = ir.Function(m, ir.FunctionType(ir.VoidType(), [I8]), "rw_print_bool")
         self._rw_print_str = ir.Function(m, ir.FunctionType(ir.VoidType(), [RW_STR_TY]), "rw_print_str")
+        # assertion failure
+        self._rw_panic = ir.Function(m, ir.FunctionType(ir.VoidType(), [RW_STR_TY]), "rw_panic")
         # string ops
         self._rw_str_len = ir.Function(
             m, ir.FunctionType(I64, [RW_STR_TY]), "rw_str_len")
@@ -309,6 +311,21 @@ class IRGen:
             return
         if isinstance(stmt, A.Continue):
             b.branch(ctx.loop_stack[-1][0])
+            return
+        if isinstance(stmt, A.Assert):
+            cond_i8 = self._emit_expr(stmt.cond, ctx)
+            cond_i1 = b.icmp_unsigned("!=", cond_i8, ir.Constant(I8, 0))
+            success_bb = ctx.function.append_basic_block("assert.ok")
+            fail_bb = ctx.function.append_basic_block("assert.fail")
+            b.cbranch(cond_i1, success_bb, fail_bb)
+            b.position_at_end(fail_bb)
+            if stmt.msg is not None:
+                msg_val = self._emit_expr(stmt.msg, ctx)
+            else:
+                msg_val = self._emit_string_literal("assertion failed", b)
+            b.call(self._rw_panic, [msg_val])
+            b.unreachable()
+            b.position_at_end(success_bb)
             return
         if isinstance(stmt, A.MatchStmt):
             v = self._emit_expr(stmt.target, ctx)

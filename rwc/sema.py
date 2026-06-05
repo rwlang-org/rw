@@ -265,6 +265,22 @@ class Sema:
                 ))
             return False
 
+        if isinstance(stmt, A.Assert):
+            cond_ty = self._check_expr(fn, stmt.cond, locals_)
+            if cond_ty is not T.BOOL:
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, 6,
+                    f"assert condition must be bool, found `{cond_ty}`",
+                ))
+            if stmt.msg is not None:
+                msg_ty = self._check_expr(fn, stmt.msg, locals_)
+                if msg_ty is not T.STRING:
+                    raise CompileError(Diagnostic(
+                        self.filename, stmt.line, stmt.col, 6,
+                        f"assert message must be string, found `{msg_ty}`",
+                    ))
+            return False
+
         if isinstance(stmt, A.MatchStmt):
             tt = self._check_expr(fn, stmt.target, locals_)
             if stmt.style == "option":

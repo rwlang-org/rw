@@ -20,6 +20,9 @@ void rw_print_f64(double v);
 void rw_print_bool(int8_t v);
 void rw_print_str(rw_str s);
 
+/* assertion failure: print message to stderr and exit(1) */
+void rw_panic(rw_str msg);
+
 /* string helper */
 rw_str rw_str_from_cstr(const char *cstr, int64_t len);
 
