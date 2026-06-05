@@ -307,3 +307,19 @@ def test_parse_unary_tilde():
     e = ret.value
     assert isinstance(e, A.UnaryOp) and e.op == "~"
     assert isinstance(e.operand, A.IntLit) and e.operand.value == 0
+
+
+def test_parse_assert_without_message():
+    src = "def f() -> void:\n    assert x\n"
+    stmt = parse_src(src).functions[0].body[0]
+    assert isinstance(stmt, A.Assert)
+    assert isinstance(stmt.cond, A.Name) and stmt.cond.name == "x"
+    assert stmt.msg is None
+
+
+def test_parse_assert_with_message():
+    src = "def f() -> void:\n    assert x, \"msg\"\n"
+    stmt = parse_src(src).functions[0].body[0]
+    assert isinstance(stmt, A.Assert)
+    assert isinstance(stmt.cond, A.Name) and stmt.cond.name == "x"
+    assert isinstance(stmt.msg, A.StringLit) and stmt.msg.value == "msg"
