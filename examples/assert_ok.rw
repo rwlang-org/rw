@@ -1,0 +1,6 @@
+def main() -> int:
+    x: int = 5
+    assert x == 5
+    assert x > 0, "x must be positive"
+    print(x)
+    return 0

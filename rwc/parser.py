@@ -274,6 +274,8 @@ class Parser:
             return self.parse_for()
         if t.kind == TokenKind.KW_MATCH:
             return self.parse_match()
+        if t.kind == TokenKind.KW_ASSERT:
+            return self.parse_assert()
         # IDENT followed by ':'  => var_decl
         # IDENT followed by '='  => assignment
         if t.kind == TokenKind.IDENT:
@@ -293,6 +295,15 @@ class Parser:
         expr = self.parse_expr()
         self.eat(TokenKind.NEWLINE)
         return A.Return(expr, kw.line, kw.col)
+
+    def parse_assert(self) -> A.Assert:
+        kw = self.eat(TokenKind.KW_ASSERT)
+        cond = self.parse_expr()
+        msg: Optional[A.Expr] = None
+        if self.match(TokenKind.COMMA):
+            msg = self.parse_expr()
+        self.eat(TokenKind.NEWLINE)
+        return A.Assert(cond, msg, kw.line, kw.col)
 
     def parse_if(self) -> A.If:
         kw = self.eat(TokenKind.KW_IF)

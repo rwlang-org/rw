@@ -215,6 +215,14 @@ class Continue:
 
 
 @dataclass
+class Assert:
+    cond: "Expr"
+    msg: Optional["Expr"]
+    line: int
+    col: int
+
+
+@dataclass
 class For:
     var: str               # loop variable name
     start: Expr            # int expr
@@ -242,7 +250,7 @@ class MatchStmt:
     col: int
 
 
-Stmt = Union[VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt, Break, Continue]
+Stmt = Union[VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt, Break, Continue, Assert]
 
 
 # ----- Top level -----
