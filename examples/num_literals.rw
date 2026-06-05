@@ -1,0 +1,8 @@
+def main() -> int:
+    print(0x1F)
+    print(0o17)
+    print(0b1010)
+    print(1_000_000)
+    a: float = 1.5e-3
+    print(a)
+    return 0
