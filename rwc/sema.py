@@ -36,29 +36,17 @@ class SemaResult:
     local_types: Dict[Tuple[str, str], T.Type] = field(default_factory=dict)
 
 
-def _resolve_type(filename: str, ty: A.TypeExpr) -> T.Type:
-    if isinstance(ty, A.TypeName):
-        m = {
-            "int": T.INT,
-            "float": T.FLOAT,
-            "bool": T.BOOL,
-            "string": T.STRING,
-            "Bytes": T.BYTES,
-            "List[int]": T.LIST_INT,
-            "Option[int]": T.OPTION_INT,
-            "Result[int, int]": T.RESULT_INT_INT,
-            "void": T.VOID,
-        }
-        if ty.name not in m:
-            raise CompileError(Diagnostic(filename, ty.line, ty.col, len(ty.name),
-                                          f"unknown type: {ty.name}"))
-        return m[ty.name]
-    if isinstance(ty, A.TypeFuture):
-        inner = _resolve_type(filename, ty.inner)
-        if inner is T.VOID:
-            return T.FutureType(T.VOID)
-        return T.FutureType(inner)
-    raise CompileError(Diagnostic(filename, 0, 0, 1, "internal: unknown type expr"))
+_BUILTIN_TYPES: Dict[str, T.Type] = {
+    "int": T.INT,
+    "float": T.FLOAT,
+    "bool": T.BOOL,
+    "string": T.STRING,
+    "Bytes": T.BYTES,
+    "List[int]": T.LIST_INT,
+    "Option[int]": T.OPTION_INT,
+    "Result[int, int]": T.RESULT_INT_INT,
+    "void": T.VOID,
+}
 
 
 class Sema:
@@ -68,9 +56,43 @@ class Sema:
         self.result = SemaResult(filename=filename, functions={})
         # Depth of enclosing loops; break/continue are only valid when > 0.
         self._loop_depth = 0
+        # User-declared type aliases (name -> resolved concrete Type).
+        self.type_alias_map: Dict[str, T.Type] = {}
+
+    def _resolve_type(self, ty: A.TypeExpr) -> T.Type:
+        if isinstance(ty, A.TypeName):
+            if ty.name in _BUILTIN_TYPES:
+                return _BUILTIN_TYPES[ty.name]
+            if ty.name in self.type_alias_map:
+                return self.type_alias_map[ty.name]
+            raise CompileError(Diagnostic(self.filename, ty.line, ty.col, len(ty.name),
+                                          f"unknown type: {ty.name}"))
+        if isinstance(ty, A.TypeFuture):
+            inner = self._resolve_type(ty.inner)
+            if inner is T.VOID:
+                return T.FutureType(T.VOID)
+            return T.FutureType(inner)
+        raise CompileError(Diagnostic(self.filename, 0, 0, 1,
+                                      "internal: unknown type expr"))
 
     # ---------- entry ----------
     def analyze(self) -> SemaResult:
+        # Phase 0: resolve top-level type aliases.
+        # Aliases are resolved in declaration order, so an alias may refer to
+        # an earlier alias (e.g. `type A = int; type B = A`). Forward
+        # references are not supported in this minimal implementation.
+        # Built-in type names (int, Bytes, List, ...) are lexer keywords, so
+        # they can never appear as an alias name (the parser requires IDENT).
+        # Hence no built-in-shadowing check is needed here.
+        for alias in self.module.type_aliases:
+            if alias.name in self.type_alias_map:
+                raise CompileError(Diagnostic(
+                    self.filename, alias.line, alias.col, len(alias.name),
+                    f"duplicate type alias: {alias.name}",
+                ))
+            resolved = self._resolve_type(alias.target)
+            self.type_alias_map[alias.name] = resolved
+
         # First pass: collect signatures.
         for fn in self.module.functions:
             if fn.name in self.result.functions:
@@ -87,14 +109,14 @@ class Sema:
                         f"duplicate parameter: {p.name}",
                     ))
                 seen.add(p.name)
-                pt = _resolve_type(self.filename, p.type_expr)
+                pt = self._resolve_type(p.type_expr)
                 if pt is T.VOID:
                     raise CompileError(Diagnostic(
                         self.filename, p.line, p.col, len(p.name),
                         "parameter type cannot be void",
                     ))
                 params.append((p.name, pt))
-            rt = _resolve_type(self.filename, fn.return_type)
+            rt = self._resolve_type(fn.return_type)
             self.result.functions[fn.name] = FuncSig(fn.name, params, rt, fn)
 
         # main is required.
@@ -167,7 +189,7 @@ class Sema:
                     self.filename, stmt.line, stmt.col, len(stmt.name),
                     f"variable `{stmt.name}` already declared",
                 ))
-            declared = _resolve_type(self.filename, stmt.type_expr)
+            declared = self._resolve_type(stmt.type_expr)
             if declared is T.VOID:
                 raise CompileError(Diagnostic(
                     self.filename, stmt.line, stmt.col, len(stmt.name),

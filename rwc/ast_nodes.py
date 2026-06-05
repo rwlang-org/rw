@@ -266,5 +266,14 @@ class FuncDef:
 
 
 @dataclass
+class TypeAlias:
+    name: str               # the new alias name, e.g. "UserId"
+    target: TypeExpr        # the existing type it aliases
+    line: int
+    col: int
+
+
+@dataclass
 class Module:
     functions: List[FuncDef] = field(default_factory=list)
+    type_aliases: List[TypeAlias] = field(default_factory=list)

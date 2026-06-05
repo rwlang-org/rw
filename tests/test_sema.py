@@ -1211,3 +1211,64 @@ def test_bitnot_on_float_is_error():
         "    return x\n"
     )
     assert "int" in e.diagnostic.message.lower()
+
+
+# ---- type aliases ----
+
+def test_type_alias_used_as_int():
+    src = (
+        "type UserId = int\n"
+        "def get(id: UserId) -> int:\n"
+        "    return id + 1\n"
+        "def main() -> int:\n"
+        "    u: UserId = 41\n"
+        "    return get(u)\n"
+    )
+    res = check(src)
+    assert res.functions["get"].params[0][1] is T.INT
+    assert res.functions["get"].return_type is T.INT
+    assert res.local_types[("main", "u")] is T.INT
+
+
+def test_type_alias_of_alias():
+    src = (
+        "type A = int\n"
+        "type B = A\n"
+        "def main() -> int:\n"
+        "    x: B = 5\n"
+        "    return x\n"
+    )
+    res = check(src)
+    assert res.local_types[("main", "x")] is T.INT
+
+
+def test_type_alias_unknown_target_is_error():
+    e = err(
+        "type Bad = NoSuchType\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    assert "unknown type" in e.diagnostic.message.lower()
+
+
+def test_type_alias_duplicate_is_error():
+    e = err(
+        "type X = int\n"
+        "type X = int\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    assert "duplicate" in e.diagnostic.message.lower()
+
+
+def test_type_alias_cannot_use_builtin_name():
+    # Built-in type names are lexer keywords, so `type int = ...` is rejected
+    # at parse time (an alias name must be a plain identifier).
+    from rwc.parser import ParserError
+
+    with pytest.raises(ParserError):
+        check(
+            "type int = float\n"
+            "def main() -> int:\n"
+            "    return 0\n"
+        )
