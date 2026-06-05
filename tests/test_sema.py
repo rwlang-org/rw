@@ -1185,3 +1185,29 @@ def test_ternary_branch_type_mismatch_is_error():
         "    return x\n"
     )
     assert "same type" in e.diagnostic.message.lower()
+
+
+def test_bitwise_int_ok():
+    res = check(
+        "def main() -> int:\n"
+        "    return (5 & 3) | (1 << 4) ^ ~0\n"
+    )
+    assert res.functions["main"].return_type is T.INT
+
+
+def test_bitwise_on_float_is_error():
+    e = err(
+        "def main() -> int:\n"
+        "    x: int = 1.0 & 2.0\n"
+        "    return x\n"
+    )
+    assert "int" in e.diagnostic.message.lower()
+
+
+def test_bitnot_on_float_is_error():
+    e = err(
+        "def main() -> int:\n"
+        "    x: int = ~1.0\n"
+        "    return x\n"
+    )
+    assert "int" in e.diagnostic.message.lower()

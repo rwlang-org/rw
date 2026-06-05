@@ -93,6 +93,12 @@ class TokenKind(Enum):
     LE = auto()
     GT = auto()
     GE = auto()
+    AMP = auto()  # &
+    PIPE = auto()  # |
+    CARET = auto()  # ^
+    TILDE = auto()  # ~
+    LSHIFT = auto()  # <<
+    RSHIFT = auto()  # >>
 
 
 KEYWORDS: dict[str, TokenKind] = {
@@ -301,9 +307,46 @@ class Lexer:
 
     def _read_number(self, line: int, col: int) -> None:
         start = self.i
-        while self.i < len(self.source) and self.source[self.i].isdigit():
-            self._advance()
+
+        # --- Prefixed integers: 0x.. / 0o.. / 0b.. ---
+        if self.source[self.i] == "0" and self.i + 1 < len(self.source):
+            prefix = self.source[self.i + 1]
+            base_digits: str | None = None
+            if prefix in ("x", "X"):
+                base_digits = "0123456789abcdefABCDEF"
+            elif prefix in ("o", "O"):
+                base_digits = "01234567"
+            elif prefix in ("b", "B"):
+                base_digits = "01"
+            if base_digits is not None:
+                self._advance()  # '0'
+                self._advance()  # prefix char
+                # Underscore right after the prefix is not allowed.
+                if self.i < len(self.source) and self.source[self.i] == "_":
+                    raise LexerError(
+                        "underscore not allowed right after numeric prefix",
+                        self.line,
+                        self.col,
+                        1,
+                    )
+                self._read_digit_run(base_digits)
+                # At least one base digit is required.
+                if self.i - start <= 2:
+                    raise LexerError(
+                        f"missing digits after '0{prefix}'",
+                        line,
+                        col,
+                        self.i - start,
+                    )
+                text = self.source[start : self.i]
+                self.tokens.append(Token(TokenKind.INT, text, line, col))
+                return
+
+        # --- Decimal integer part (with underscores) ---
+        self._read_digit_run("0123456789")
+
         is_float = False
+        # Fractional part: '.' followed by a digit.
         if (
             self.i < len(self.source)
             and self.source[self.i] == "."
@@ -312,12 +355,46 @@ class Lexer:
         ):
             is_float = True
             self._advance()  # consume '.'
-            while self.i < len(self.source) and self.source[self.i].isdigit():
-                self._advance()
+            self._read_digit_run("0123456789")
+
+        # --- Exponent part: e/E [ +/- ] digits ---
+        if self.i < len(self.source) and self.source[self.i] in ("e", "E"):
+            j = self.i + 1
+            if j < len(self.source) and self.source[j] in ("+", "-"):
+                j += 1
+            if j < len(self.source) and self.source[j].isdigit():
+                is_float = True
+                self._advance()  # 'e'/'E'
+                if self.source[self.i] in ("+", "-"):
+                    self._advance()  # sign
+                self._read_digit_run("0123456789")
+
         text = self.source[start : self.i]
         self.tokens.append(
             Token(TokenKind.FLOAT if is_float else TokenKind.INT, text, line, col)
         )
+
+    def _read_digit_run(self, digits: str) -> None:
+        """Consume a run of `digits` characters allowing single underscores
+        between digits. Rejects leading/trailing/consecutive underscores."""
+        while self.i < len(self.source):
+            c = self.source[self.i]
+            if c in digits:
+                self._advance()
+            elif c == "_":
+                # Underscore must be surrounded by valid digits.
+                prev = self.source[self.i - 1] if self.i > 0 else ""
+                nxt = self.source[self.i + 1] if self.i + 1 < len(self.source) else ""
+                if prev not in digits or nxt not in digits:
+                    raise LexerError(
+                        "invalid underscore placement in numeric literal",
+                        self.line,
+                        self.col,
+                        1,
+                    )
+                self._advance()
+            else:
+                break
 
     def _read_string(self, line: int, col: int) -> None:
         # Consume opening quote
@@ -358,6 +435,8 @@ class Lexer:
             "!=": TokenKind.NE,
             "<=": TokenKind.LE,
             ">=": TokenKind.GE,
+            "<<": TokenKind.LSHIFT,
+            ">>": TokenKind.RSHIFT,
         }
         one_char = {
             "(": TokenKind.LPAREN,
@@ -374,6 +453,10 @@ class Lexer:
             "%": TokenKind.PERCENT,
             "<": TokenKind.LT,
             ">": TokenKind.GT,
+            "&": TokenKind.AMP,
+            "|": TokenKind.PIPE,
+            "^": TokenKind.CARET,
+            "~": TokenKind.TILDE,
         }
         if two in two_char:
             self._advance()

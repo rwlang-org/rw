@@ -68,6 +68,23 @@ _MUL_TOKENS: dict[TokenKind, str] = {
     TokenKind.PERCENT: "%",
 }
 
+_SHIFT_TOKENS: dict[TokenKind, str] = {
+    TokenKind.LSHIFT: "<<",
+    TokenKind.RSHIFT: ">>",
+}
+
+_BITAND_TOKENS: dict[TokenKind, str] = {
+    TokenKind.AMP: "&",
+}
+
+_BITXOR_TOKENS: dict[TokenKind, str] = {
+    TokenKind.CARET: "^",
+}
+
+_BITOR_TOKENS: dict[TokenKind, str] = {
+    TokenKind.PIPE: "|",
+}
+
 
 class Parser:
     def __init__(self, tokens: List[Token]) -> None:
@@ -561,10 +578,50 @@ class Parser:
         return self.parse_cmp()
 
     def parse_cmp(self) -> A.Expr:
-        left = self.parse_add()
+        left = self.parse_bitor()
         if self.cur.kind in _CMP_TOKENS:
             t = self.cur
             op = _CMP_TOKENS[t.kind]
+            self.i += 1
+            right = self.parse_bitor()
+            left = A.BinOp(op, left, right, t.line, t.col)
+        return left
+
+    def parse_bitor(self) -> A.Expr:
+        left = self.parse_bitxor()
+        while self.cur.kind in _BITOR_TOKENS:
+            t = self.cur
+            op = _BITOR_TOKENS[t.kind]
+            self.i += 1
+            right = self.parse_bitxor()
+            left = A.BinOp(op, left, right, t.line, t.col)
+        return left
+
+    def parse_bitxor(self) -> A.Expr:
+        left = self.parse_bitand()
+        while self.cur.kind in _BITXOR_TOKENS:
+            t = self.cur
+            op = _BITXOR_TOKENS[t.kind]
+            self.i += 1
+            right = self.parse_bitand()
+            left = A.BinOp(op, left, right, t.line, t.col)
+        return left
+
+    def parse_bitand(self) -> A.Expr:
+        left = self.parse_shift()
+        while self.cur.kind in _BITAND_TOKENS:
+            t = self.cur
+            op = _BITAND_TOKENS[t.kind]
+            self.i += 1
+            right = self.parse_shift()
+            left = A.BinOp(op, left, right, t.line, t.col)
+        return left
+
+    def parse_shift(self) -> A.Expr:
+        left = self.parse_add()
+        while self.cur.kind in _SHIFT_TOKENS:
+            t = self.cur
+            op = _SHIFT_TOKENS[t.kind]
             self.i += 1
             right = self.parse_add()
             left = A.BinOp(op, left, right, t.line, t.col)
@@ -596,6 +653,10 @@ class Parser:
             self.i += 1
             inner = self.parse_unary()
             return A.UnaryOp("-", inner, t.line, t.col)
+        if t.kind == TokenKind.TILDE:
+            self.i += 1
+            inner = self.parse_unary()
+            return A.UnaryOp("~", inner, t.line, t.col)
         if t.kind == TokenKind.KW_AWAIT:
             self.i += 1
             inner = self.parse_unary()
@@ -653,7 +714,10 @@ class Parser:
         t = self.cur
         if t.kind == TokenKind.INT:
             self.i += 1
-            return A.IntLit(int(t.value), t.line, t.col)
+            # base=0 auto-detects 0x/0o/0b prefixes; underscores are accepted
+            # by Python's int(). Plain decimals (incl. "0") work too because
+            # the lexer never emits a leading-zero non-zero decimal.
+            return A.IntLit(int(t.value, 0), t.line, t.col)
         if t.kind == TokenKind.FLOAT:
             self.i += 1
             return A.FloatLit(float(t.value), t.line, t.col)
