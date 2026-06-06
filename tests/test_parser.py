@@ -309,6 +309,21 @@ def test_parse_unary_tilde():
     assert isinstance(e.operand, A.IntLit) and e.operand.value == 0
 
 
+def test_parse_type_alias():
+    src = (
+        "type Foo = int\n"
+        "def main() -> int:\n"
+        "    return 0\n"
+    )
+    mod = parse_src(src)
+    assert len(mod.type_aliases) == 1
+    alias = mod.type_aliases[0]
+    assert isinstance(alias, A.TypeAlias)
+    assert alias.name == "Foo"
+    assert isinstance(alias.target, A.TypeName)
+    assert alias.target.name == "int"
+
+
 def test_parse_assert_without_message():
     src = "def f() -> void:\n    assert x\n"
     stmt = parse_src(src).functions[0].body[0]

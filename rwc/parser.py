@@ -133,15 +133,26 @@ class Parser:
         while self.cur.kind != TokenKind.EOF:
             if self.cur.kind == TokenKind.KW_DEF:
                 mod.functions.append(self.parse_func_def())
+            elif self.cur.kind == TokenKind.KW_TYPE:
+                mod.type_aliases.append(self.parse_type_alias())
             else:
                 raise ParserError(
-                    "expected 'def' at module level",
+                    "expected 'def' or 'type' at module level",
                     self.cur.line,
                     self.cur.col,
                     max(1, len(self.cur.value)),
                 )
             self.skip_newlines()
         return mod
+
+    # ------- type aliases -------
+    def parse_type_alias(self) -> A.TypeAlias:
+        kw = self.eat(TokenKind.KW_TYPE, "'type'")
+        name_tok = self.eat(TokenKind.IDENT, "type alias name")
+        self.eat(TokenKind.ASSIGN, "'=' in type alias")
+        target = self.parse_type()
+        self.eat(TokenKind.NEWLINE)
+        return A.TypeAlias(name_tok.value, target, kw.line, kw.col)
 
     # ------- function definitions -------
     def parse_func_def(self) -> A.FuncDef:
@@ -230,6 +241,11 @@ class Parser:
             self.i += 1
             self.eat(TokenKind.RBRACK, "']' to close Result[int, int]")
             return A.TypeName("Result[int, int]", t.line, t.col)
+        # A bare identifier is a user-defined type name (e.g. a type alias).
+        # It is resolved against the alias table in Sema.
+        if t.kind == TokenKind.IDENT:
+            self.i += 1
+            return A.TypeName(t.value, t.line, t.col)
         raise ParserError(
             f"expected type, got {t.kind.name}", t.line, t.col, max(1, len(t.value))
         )

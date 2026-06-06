@@ -1,0 +1,9 @@
+type Celsius = int
+
+def to_f(c: Celsius) -> int:
+    return c * 9 / 5 + 32
+
+def main() -> int:
+    temp: Celsius = 100
+    print(to_f(temp))
+    return 0
