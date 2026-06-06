@@ -527,6 +527,12 @@ class Sema:
                         self.filename, expr.line, expr.col, 5,
                         "cannot spawn the builtin `file_open`",
                     ))
+                if call.callee in ("sqrt", "floor", "ceil", "exp", "log",
+                                   "sin", "cos", "fabs", "pow"):
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 5,
+                        f"cannot spawn the builtin `{call.callee}`",
+                    ))
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
                     f"undefined function: {call.callee}",
@@ -816,6 +822,40 @@ class Sema:
                     f"file_open second argument must be string, found `{t1}`",
                 ))
             return T.INT
+        # Builtin math: unary float -> float (LLVM intrinsics).
+        if call.callee in ("sqrt", "floor", "ceil", "exp", "log", "sin", "cos", "fabs"):
+            if len(call.args) != 1:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"{call.callee} takes exactly 1 argument, got {len(call.args)}",
+                ))
+            at = self._check_expr(fn, call.args[0], locals_)
+            if at is not T.FLOAT:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"{call.callee} argument must be float, found `{at}`",
+                ))
+            return T.FLOAT
+        # Builtin math: pow(float, float) -> float.
+        if call.callee == "pow":
+            if len(call.args) != 2:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"pow takes 2 arguments, got {len(call.args)}",
+                ))
+            t0 = self._check_expr(fn, call.args[0], locals_)
+            t1 = self._check_expr(fn, call.args[1], locals_)
+            if t0 is not T.FLOAT:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"pow first argument must be float, found `{t0}`",
+                ))
+            if t1 is not T.FLOAT:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"pow second argument must be float, found `{t1}`",
+                ))
+            return T.FLOAT
         if call.callee not in self.result.functions:
             raise CompileError(Diagnostic(
                 self.filename, call.line, call.col, len(call.callee),
