@@ -82,6 +82,7 @@ class TokenKind(Enum):
     RBRACK = auto()
     COMMA = auto()
     COLON = auto()
+    DOT = auto()  # . (qualified call: module.func)
     ARROW = auto()  # ->
     ASSIGN = auto()  # =
     PLUS = auto()
@@ -449,6 +450,7 @@ class Lexer:
             "]": TokenKind.RBRACK,
             ",": TokenKind.COMMA,
             ":": TokenKind.COLON,
+            ".": TokenKind.DOT,
             "=": TokenKind.ASSIGN,
             "+": TokenKind.PLUS,
             "-": TokenKind.MINUS,
