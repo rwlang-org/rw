@@ -1,0 +1,48 @@
+name: RFC
+description: 設計提案 (Request For Comments)
+labels: ["rfc", "documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        言語仕様・ランタイム・標準ライブラリなどの設計変更を提案するためのテンプレートです。
+        実装着手前に議論したい大きな変更はこちらでお願いします。
+  - type: input
+    id: title
+    attributes:
+      label: RFC タイトル
+      placeholder: "例: async generator の導入"
+  - type: textarea
+    id: summary
+    attributes:
+      label: 要約 (TL;DR)
+      description: 提案内容を 2-3 行で要約してください。
+  - type: textarea
+    id: motivation
+    attributes:
+      label: 動機・背景
+      description: 解決したい問題、現状の制約、ユースケースなど。
+    validations:
+      required: true
+  - type: textarea
+    id: design
+    attributes:
+      label: 詳細設計
+      description: 構文 / セマンティクス / 型システム / ABI など、変更点を可能な限り詳細に。
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 代替案
+      description: 検討した他の設計、それを採用しなかった理由。
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影響範囲・移行戦略
+      description: 既存コードへの影響、後方互換性、移行手順など。
+  - type: textarea
+    id: open_questions
+    attributes:
+      label: Open Questions
+      description: 議論したい未解決の論点を列挙してください。

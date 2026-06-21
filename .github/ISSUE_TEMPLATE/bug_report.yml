@@ -1,0 +1,57 @@
+name: バグ報告
+description: 不具合の報告
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        バグ報告ありがとうございます。以下のフォームを埋めてください。
+        再現可能な最小コードを添えていただけると助かります。
+  - type: input
+    id: version
+    attributes:
+      label: rwc のバージョン
+      description: "例: v0.0.4 (rwc --version の出力)"
+      placeholder: "v0.0.4"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - その他
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 再現手順
+      description: バグを再現するための手順を記載してください。
+      placeholder: |
+        1. 以下のコードを `bug.rw` に保存
+        2. `rwc bug.rw` を実行
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待される挙動
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の挙動
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: 追加情報
+      description: スタックトレース、IR ダンプ、関連ログなどがあれば貼り付けてください。
+      render: shell
