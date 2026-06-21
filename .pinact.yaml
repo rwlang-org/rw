@@ -1,0 +1,5 @@
+version: 2
+files:
+  - .github/workflows/*.yml
+  - .github/workflows/*.yaml
+ignore_actions: []
