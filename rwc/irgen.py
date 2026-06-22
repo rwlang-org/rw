@@ -11,13 +11,14 @@ delegated to a dedicated routine in Step 8.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from llvmlite import ir
 
 from . import ast_nodes as A
 from . import types as T
-from .sema import SemaResult
+from .loader import LoadedProgram
+from .sema import FuncKey, SemaResult
 
 
 # ---------- LLVM type helpers ----------
@@ -60,17 +61,31 @@ def llvm_type_of(t: T.Type) -> ir.Type:
 # ---------- IR generator ----------
 
 class IRGen:
-    def __init__(self, module: A.Module, sema: SemaResult) -> None:
-        self.ast_module = module
+    def __init__(self, program: "LoadedProgram", sema: SemaResult) -> None:
+        self.program = program
         self.sema = sema
         self.mod = ir.Module(name=sema.filename)
         # Use a generic target triple; the driver picks the host triple at codegen.
         self.mod.triple = ""
         self._string_const_counter = 0
         self._trampoline_counter = 0
-        # Map user function name -> ir.Function (LLVM symbol may be renamed).
-        self.funcs: Dict[str, ir.Function] = {}
+        # Map (module, name) -> ir.Function (LLVM symbol is renamed per module).
+        self.funcs: Dict[FuncKey, ir.Function] = {}
+        # All (module, A.Module) pairs: entry first (module=None), then imports.
+        self._all_modules: List[Tuple[Optional[str], A.Module]] = [
+            (None, program.root)
+        ] + [(name, mod) for name, mod in program.modules.items()]
         self._declare_runtime()
+
+    @staticmethod
+    def _symbol(key: FuncKey) -> str:
+        """LLVM symbol for a user function. Entry-module functions keep the
+        historical `rw_user_<name>`; imported functions are qualified with the
+        module name to avoid cross-module symbol clashes."""
+        module, name = key
+        if module is None:
+            return f"rw_user_{name}"
+        return f"rw_user_{module}_{name}"
 
     # ---------- runtime declarations ----------
     def _declare_runtime(self) -> None:
@@ -191,23 +206,23 @@ class IRGen:
 
     # ---------- entry ----------
     def generate(self) -> ir.Module:
-        # First pass: declare LLVM function symbols.
-        for ast_fn in self.ast_module.functions:
-            sig = self.sema.functions[ast_fn.name]
-            param_tys = [llvm_type_of(pt) for _, pt in sig.params]
-            ret_ll = llvm_type_of(sig.return_type)
-            fty = ir.FunctionType(ret_ll, param_tys)
-            # Rename user main to rw_user_main, others keep their names with rw_user_ prefix
-            # to avoid colliding with libc/runtime symbols.
-            sym = f"rw_user_{ast_fn.name}"
-            fn = ir.Function(self.mod, fty, sym)
-            for i, (pname, _) in enumerate(sig.params):
-                fn.args[i].name = pname
-            self.funcs[ast_fn.name] = fn
+        # First pass: declare LLVM function symbols for every module.
+        for mod_name, mod in self._all_modules:
+            for ast_fn in mod.functions:
+                key: FuncKey = (mod_name, ast_fn.name)
+                sig = self.sema.functions[key]
+                param_tys = [llvm_type_of(pt) for _, pt in sig.params]
+                ret_ll = llvm_type_of(sig.return_type)
+                fty = ir.FunctionType(ret_ll, param_tys)
+                fn = ir.Function(self.mod, fty, self._symbol(key))
+                for i, (pname, _) in enumerate(sig.params):
+                    fn.args[i].name = pname
+                self.funcs[key] = fn
 
         # Second pass: emit bodies.
-        for ast_fn in self.ast_module.functions:
-            self._emit_function(ast_fn)
+        for mod_name, mod in self._all_modules:
+            for ast_fn in mod.functions:
+                self._emit_function((mod_name, ast_fn.name), ast_fn)
 
         # Synthesize the real C @main.
         self._emit_c_main()
@@ -220,25 +235,26 @@ class IRGen:
         bb = main.append_basic_block("entry")
         b = ir.IRBuilder(bb)
         b.call(self._rw_init, [])
-        r = b.call(self.funcs["main"], [])
+        r = b.call(self.funcs[(None, "main")], [])
         b.call(self._rw_shutdown, [])
         r32 = b.trunc(r, I32)
         b.ret(r32)
 
     # ---------- per-function ----------
-    def _emit_function(self, ast_fn: A.FuncDef) -> None:
-        fn = self.funcs[ast_fn.name]
+    def _emit_function(self, key: FuncKey, ast_fn: A.FuncDef) -> None:
+        fn = self.funcs[key]
         entry = fn.append_basic_block("entry")
         b = ir.IRBuilder(entry)
         # Allocate locals for each parameter; copy in.
         locals_: Dict[str, ir.AllocaInstr] = {}
-        sig = self.sema.functions[ast_fn.name]
+        sig = self.sema.functions[key]
         for (pname, pty), llvm_arg in zip(sig.params, fn.args):
             slot = b.alloca(llvm_type_of(pty), name=pname)
             b.store(llvm_arg, slot)
             locals_[pname] = slot
 
-        ctx = FunctionCtx(builder=b, function=fn, locals=locals_, return_ty=sig.return_type, gen=self)
+        ctx = FunctionCtx(builder=b, function=fn, locals=locals_,
+                          return_ty=sig.return_type, gen=self, func_key=key)
         self._emit_block(ast_fn.body, ctx)
 
         # If the block didn't terminate, add a synthetic terminator (for void) or unreachable.
@@ -258,7 +274,8 @@ class IRGen:
     def _emit_stmt(self, stmt: A.Stmt, ctx: "FunctionCtx") -> None:
         b = ctx.builder
         if isinstance(stmt, A.VarDecl):
-            ty = self.sema.local_types[(ctx.function_name, stmt.name)]
+            mod_name, fn_name = ctx.func_key
+            ty = self.sema.local_types[(mod_name, fn_name, stmt.name)]
             slot = b.alloca(llvm_type_of(ty), name=stmt.name)
             val = self._emit_expr(stmt.value, ctx)
             b.store(val, slot)
@@ -567,6 +584,13 @@ class IRGen:
         raise RuntimeError(f"unknown binop {op}")
 
     def _emit_call(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
+        # User-function calls (qualified or not) are recorded by sema in
+        # call_resolution; builtins are not. This is the discriminator.
+        key = self.sema.call_resolution.get(id(call))
+        if key is not None:
+            fn = self.funcs[key]
+            args = [self._emit_expr(a, ctx) for a in call.args]
+            return ctx.builder.call(fn, args)
         if call.callee == "print":
             arg_ast = call.args[0]
             v = self._emit_expr(arg_ast, ctx)
@@ -665,17 +689,17 @@ class IRGen:
             base_v = self._emit_expr(call.args[0], ctx)
             exp_v = self._emit_expr(call.args[1], ctx)
             return ctx.builder.call(self._llvm_pow, [base_v, exp_v])
-        fn = self.funcs[call.callee]
-        args = [self._emit_expr(a, ctx) for a in call.args]
-        return ctx.builder.call(fn, args)
+        # Should be unreachable: sema records every user call in call_resolution
+        # and rejects unknown names.
+        raise RuntimeError(f"irgen: unresolved call to `{call.callee}`")
 
     # ---------- spawn / await ----------
     def _emit_spawn(self, expr: A.SpawnExpr, ctx: "FunctionCtx") -> ir.Value:
         """Generate a closure struct + trampoline + rw_spawn_* call."""
         b = ctx.builder
         call = expr.call
-        target_fn = self.funcs[call.callee]
-        sig = self.sema.functions[call.callee]
+        key = self.sema.call_resolution[id(call)]
+        sig = self.sema.functions[key]
         ret_ty = sig.return_type
 
         # 1. Build a closure struct type with the LLVM types of each argument.
@@ -702,7 +726,7 @@ class IRGen:
             b.store(v, field_ptr)
 
         # 3. Generate (or reuse) a trampoline for this callee.
-        tramp = self._get_or_make_trampoline(call.callee, sig)
+        tramp = self._get_or_make_trampoline(key, sig)
 
         # 4. Call rw_spawn_<retty>(tramp, raw)
         spawn_fn = self._decl_spawn(ret_ty)
@@ -720,9 +744,10 @@ class IRGen:
         await_fn = self._decl_await(target_ty.inner)
         return b.call(await_fn, [fut])
 
-    def _get_or_make_trampoline(self, callee: str, sig) -> ir.Function:
+    def _get_or_make_trampoline(self, key: FuncKey, sig) -> ir.Function:
         # Each callee gets exactly one trampoline reused at every spawn site.
-        name = f"rw_trampoline_{callee}"
+        module, callee = key
+        name = f"rw_trampoline_{callee}" if module is None else f"rw_trampoline_{module}_{callee}"
         if name in self.mod.globals:
             return self.mod.get_global(name)
         ret_ty = sig.return_type
@@ -740,7 +765,7 @@ class IRGen:
         for i, _ in enumerate(arg_llvm_types):
             field_ptr = b.gep(closure, [ir.Constant(I32, 0), ir.Constant(I32, i)])
             loaded.append(b.load(field_ptr))
-        result = b.call(self.funcs[callee], loaded)
+        result = b.call(self.funcs[key], loaded)
         # Free the closure memory.
         b.call(self._free, [fn.args[0]])
         if ret_ty is T.VOID:
@@ -778,17 +803,19 @@ class FunctionCtx:
         locals: Dict[str, ir.AllocaInstr],
         return_ty: T.Type,
         gen: "IRGen",
+        func_key: FuncKey,
     ) -> None:
         self.builder = builder
         self.function = function
         self.locals = locals
         self.return_ty = return_ty
         self.gen = gen
-        self.function_name = function.name.removeprefix("rw_user_")
+        # (module, name) of the function being emitted. Used to key local_types.
+        self.func_key = func_key
         # Stack of enclosing loops as (cond_bb, end_bb); continue -> cond_bb,
         # break -> end_bb. Pushed/popped around each While body emission.
         self.loop_stack: list = []
 
 
-def generate(module: A.Module, sema: SemaResult) -> ir.Module:
-    return IRGen(module, sema).generate()
+def generate(program: LoadedProgram, sema: SemaResult) -> ir.Module:
+    return IRGen(program, sema).generate()
