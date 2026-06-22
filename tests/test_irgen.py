@@ -7,16 +7,19 @@ generated IR — function names, the presence of runtime calls, etc.
 
 from __future__ import annotations
 
+from rwc.desugar import desugar_module
 from rwc.irgen import generate
 from rwc.lexer import tokenize
+from rwc.loader import LoadedProgram
 from rwc.parser import parse
-from rwc.sema import analyze
+from rwc.sema import analyze_program
 
 
 def ir_for(src: str) -> str:
-    ast = parse(tokenize(src))
-    res = analyze(ast)
-    mod = generate(ast, res)
+    ast = desugar_module(parse(tokenize(src)))
+    program = LoadedProgram(root=ast, root_name="<root>")
+    res = analyze_program(program)
+    mod = generate(program, res)
     return str(mod)
 
 
@@ -139,3 +142,18 @@ def test_file_io_emits_runtime_calls():
     assert "rw_read" in ir_text
     assert "rw_write" in ir_text
     assert "rw_close" in ir_text
+
+
+def test_qualified_call_emits_namespaced_symbol(tmp_path):
+    from rwc.loader import load_program
+    (tmp_path / "lib.rw").write_text(
+        "def add(a: int, b: int) -> int:\n    return a + b\n", encoding="utf-8"
+    )
+    entry_src = "import lib\n\ndef main() -> int:\n    return lib.add(1, 2)\n"
+    entry_path = tmp_path / "main.rw"
+    entry_path.write_text(entry_src, encoding="utf-8")
+    program = load_program(entry_src, str(entry_path))
+    res = analyze_program(program, filename=str(entry_path))
+    ir_text = str(generate(program, res))
+    assert "rw_user_lib_add" in ir_text
+    assert "rw_user_main" in ir_text

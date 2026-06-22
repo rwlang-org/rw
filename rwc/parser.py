@@ -131,19 +131,44 @@ class Parser:
         mod = A.Module()
         self.skip_newlines()
         while self.cur.kind != TokenKind.EOF:
-            if self.cur.kind == TokenKind.KW_DEF:
+            if self.cur.kind == TokenKind.KW_IMPORT:
+                if mod.functions or mod.type_aliases:
+                    raise ParserError(
+                        "import must appear before any 'def' or 'type'",
+                        self.cur.line,
+                        self.cur.col,
+                        max(1, len(self.cur.value)),
+                    )
+                mod.imports.append(self.parse_import())
+            elif self.cur.kind == TokenKind.KW_DEF:
                 mod.functions.append(self.parse_func_def())
             elif self.cur.kind == TokenKind.KW_TYPE:
                 mod.type_aliases.append(self.parse_type_alias())
             else:
                 raise ParserError(
-                    "expected 'def' or 'type' at module level",
+                    "expected 'import', 'def', or 'type' at module level",
                     self.cur.line,
                     self.cur.col,
                     max(1, len(self.cur.value)),
                 )
             self.skip_newlines()
         return mod
+
+    # ------- imports -------
+    def parse_import(self) -> A.Import:
+        # PR1: plain `import IDENT NEWLINE` only. `import x as m` (PR3) and
+        # `from x import y` (PR2) are not yet supported.
+        kw = self.eat(TokenKind.KW_IMPORT, "'import'")
+        name_tok = self.eat(TokenKind.IDENT, "module name after 'import'")
+        if self.cur.kind == TokenKind.KW_AS:
+            raise ParserError(
+                "`import x as y` is not yet supported",
+                self.cur.line,
+                self.cur.col,
+                max(1, len(self.cur.value)),
+            )
+        self.eat(TokenKind.NEWLINE)
+        return A.Import(name_tok.value, None, None, kw.line, kw.col)
 
     # ------- type aliases -------
     def parse_type_alias(self) -> A.TypeAlias:
@@ -725,17 +750,31 @@ class Parser:
 
     def parse_atom_postfix(self) -> A.Expr:
         atom = self.parse_atom()
+        # Qualified call `module.func(...)`: a bare Name followed by `.` must be
+        # a module-qualified call (rw has no member access otherwise). See spec 17.
+        if isinstance(atom, A.Name) and self.cur.kind == TokenKind.DOT:
+            self.i += 1  # consume '.'
+            method = self.eat(TokenKind.IDENT, "function name after '.'")
+            self.eat(TokenKind.LPAREN, "'(' after qualified call")
+            args = self._parse_arglist()
+            return A.Call(method.value, args, atom.line, atom.col, module=atom.name)
         # Only allow call when atom is a bare Name (MVP: no first-class fns).
         while self.cur.kind == TokenKind.LPAREN and isinstance(atom, A.Name):
             self.i += 1  # consume '('
-            args: List[A.Expr] = []
-            if self.cur.kind != TokenKind.RPAREN:
-                args.append(self.parse_expr())
-                while self.match(TokenKind.COMMA):
-                    args.append(self.parse_expr())
-            self.eat(TokenKind.RPAREN, "')'")
+            args = self._parse_arglist()
             atom = A.Call(atom.name, args, atom.line, atom.col)
         return atom
+
+    def _parse_arglist(self) -> List[A.Expr]:
+        """Parse a comma-separated argument list, with `(` already consumed,
+        up to and including the closing `)`."""
+        args: List[A.Expr] = []
+        if self.cur.kind != TokenKind.RPAREN:
+            args.append(self.parse_expr())
+            while self.match(TokenKind.COMMA):
+                args.append(self.parse_expr())
+        self.eat(TokenKind.RPAREN, "')'")
+        return args
 
     def parse_atom(self) -> A.Expr:
         t = self.cur

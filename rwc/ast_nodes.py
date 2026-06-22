@@ -100,6 +100,9 @@ class Call:
     args: List["Expr"]
     line: int
     col: int
+    # Module qualifier for `mod.func(...)` calls. None for unqualified calls
+    # (the common case: local functions and builtins). See spec 17.
+    module: Optional[str] = None
 
 
 @dataclass
@@ -282,6 +285,18 @@ class TypeAlias:
 
 
 @dataclass
+class Import:
+    module: str                                                  # e.g. "math_lib"
+    # `import x as m` (PR3). None for plain import.
+    alias: Optional[str]
+    # `from x import y[, z as w]` (PR2). List of (name, alias). None for plain import.
+    names: Optional[List["tuple[str, Optional[str]]"]]
+    line: int
+    col: int
+
+
+@dataclass
 class Module:
     functions: List[FuncDef] = field(default_factory=list)
     type_aliases: List[TypeAlias] = field(default_factory=list)
+    imports: List[Import] = field(default_factory=list)

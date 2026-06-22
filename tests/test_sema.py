@@ -24,8 +24,8 @@ def err(src: str) -> CompileError:
 
 def test_minimal_main_ok():
     res = check("def main() -> int:\n    return 0\n")
-    assert "main" in res.functions
-    assert res.functions["main"].return_type is T.INT
+    assert (None, "main") in res.functions
+    assert res.functions[(None, "main")].return_type is T.INT
 
 
 def test_function_call_and_return():
@@ -36,12 +36,12 @@ def test_function_call_and_return():
         "    return add(3, 4)\n"
     )
     res = check(src)
-    assert res.functions["add"].return_type is T.INT
+    assert res.functions[(None, "add")].return_type is T.INT
 
 
 def test_print_string_ok():
     res = check("def main() -> int:\n    print(\"hi\")\n    return 0\n")
-    assert "main" in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_if_else_must_return_all_paths():
@@ -67,8 +67,8 @@ def test_spawn_returns_future():
         "    return r\n"
     )
     res = check(src)
-    assert "add" in res.functions
-    assert "main" in res.functions
+    assert (None, "add") in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_void_return_bare():
@@ -262,8 +262,8 @@ def test_bytes_type_annotation_parses():
         "    return 0\n"
     )
     res = check(src)
-    assert "takes_bytes" in res.functions
-    assert res.functions["takes_bytes"].params[0][1] is T.BYTES
+    assert (None, "takes_bytes") in res.functions
+    assert res.functions[(None, "takes_bytes")].params[0][1] is T.BYTES
 
 
 # ---- Bytes builtin positive cases ----
@@ -393,8 +393,8 @@ def test_list_int_type_annotation_parses():
         "    return 0\n"
     )
     res = check(src)
-    assert "takes_list" in res.functions
-    assert res.functions["takes_list"].params[0][1] is T.LIST_INT
+    assert (None, "takes_list") in res.functions
+    assert res.functions[(None, "takes_list")].params[0][1] is T.LIST_INT
 
 
 def test_list_with_non_int_param_is_parser_error():
@@ -548,8 +548,8 @@ def test_option_int_type_annotation_parses():
         "    return 0\n"
     )
     res = check(src)
-    assert "takes_opt" in res.functions
-    assert res.functions["takes_opt"].params[0][1] is T.OPTION_INT
+    assert (None, "takes_opt") in res.functions
+    assert res.functions[(None, "takes_opt")].params[0][1] is T.OPTION_INT
 
 
 def test_option_with_non_int_param_is_parser_error():
@@ -729,8 +729,8 @@ def test_result_int_int_type_annotation_parses():
         "    return 0\n"
     )
     res = check(src)
-    assert "takes_res" in res.functions
-    assert res.functions["takes_res"].params[0][1] is T.RESULT_INT_INT
+    assert (None, "takes_res") in res.functions
+    assert res.functions[(None, "takes_res")].params[0][1] is T.RESULT_INT_INT
 
 
 def test_result_with_non_int_param_is_parser_error():
@@ -949,7 +949,7 @@ def test_read_returns_bytes():
         "    b: Bytes = read(fd, 4096)\n"
         "    return 0\n"
     )
-    assert "main" in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_write_returns_int():
@@ -959,7 +959,7 @@ def test_write_returns_int():
         "    n: int = write(fd, bytes_from_str(\"hi\"))\n"
         "    return 0\n"
     )
-    assert "main" in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_close_returns_int():
@@ -969,7 +969,7 @@ def test_close_returns_int():
         "    rc: int = close(fd)\n"
         "    return 0\n"
     )
-    assert "main" in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_file_open_returns_int():
@@ -978,7 +978,7 @@ def test_file_open_returns_int():
         "    fd: int = file_open(\"/tmp/x\", \"w\")\n"
         "    return 0\n"
     )
-    assert "main" in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_read_wrong_max_type():
@@ -1060,7 +1060,7 @@ def test_for_loop_int_args_ok():
         "    return total\n"
     )
     res = check(src)
-    assert "main" in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_for_loop_non_int_stop_is_error():
@@ -1156,7 +1156,7 @@ def test_ternary_int_branches_ok():
         "    x: int = 1 if true else 2\n"
         "    return x\n"
     )
-    assert res.functions["main"].return_type is T.INT
+    assert res.functions[(None, "main")].return_type is T.INT
 
 
 def test_ternary_string_branches_ok():
@@ -1166,7 +1166,7 @@ def test_ternary_string_branches_ok():
         "    print(s)\n"
         "    return 0\n"
     )
-    assert "main" in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_ternary_non_bool_cond_is_error():
@@ -1192,7 +1192,7 @@ def test_bitwise_int_ok():
         "def main() -> int:\n"
         "    return (5 & 3) | (1 << 4) ^ ~0\n"
     )
-    assert res.functions["main"].return_type is T.INT
+    assert res.functions[(None, "main")].return_type is T.INT
 
 
 def test_bitwise_on_float_is_error():
@@ -1221,7 +1221,7 @@ def test_sqrt_returns_float():
         "    x: float = sqrt(2.0)\n"
         "    return 0\n"
     )
-    assert "main" in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_pow_returns_float():
@@ -1230,7 +1230,7 @@ def test_pow_returns_float():
         "    x: float = pow(2.0, 3.0)\n"
         "    return 0\n"
     )
-    assert "main" in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_sqrt_int_arg_is_type_error():
@@ -1259,7 +1259,7 @@ def test_floor_ceil_fabs_return_float():
         "    c: float = fabs(0.0 - 1.0)\n"
         "    return 0\n"
     )
-    assert "main" in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_cannot_spawn_sqrt():
@@ -1283,9 +1283,9 @@ def test_type_alias_used_as_int():
         "    return get(u)\n"
     )
     res = check(src)
-    assert res.functions["get"].params[0][1] is T.INT
-    assert res.functions["get"].return_type is T.INT
-    assert res.local_types[("main", "u")] is T.INT
+    assert res.functions[(None, "get")].params[0][1] is T.INT
+    assert res.functions[(None, "get")].return_type is T.INT
+    assert res.local_types[(None, "main", "u")] is T.INT
 
 
 def test_type_alias_of_alias():
@@ -1297,7 +1297,7 @@ def test_type_alias_of_alias():
         "    return x\n"
     )
     res = check(src)
-    assert res.local_types[("main", "x")] is T.INT
+    assert res.local_types[(None, "main", "x")] is T.INT
 
 
 def test_type_alias_unknown_target_is_error():
@@ -1340,7 +1340,7 @@ def test_assert_bool_ok():
         "    assert 1 == 1\n"
         "    return 0\n"
     )
-    assert "main" in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_assert_with_message_ok():
@@ -1349,7 +1349,7 @@ def test_assert_with_message_ok():
         "    assert true, \"oops\"\n"
         "    return 0\n"
     )
-    assert "main" in res.functions
+    assert (None, "main") in res.functions
 
 
 def test_assert_non_bool_cond_is_error():
@@ -1368,3 +1368,69 @@ def test_assert_non_string_message_is_error():
         "    return 0\n"
     )
     assert "string" in e.diagnostic.message.lower()
+
+
+# ----- namespaced imports (spec 17) -----
+
+from rwc.loader import load_program
+from rwc.sema import analyze_program
+
+
+def _check_program(tmp_path, entry_src: str, **libs: str):
+    for name, src in libs.items():
+        (tmp_path / f"{name}.rw").write_text(src, encoding="utf-8")
+    entry_path = tmp_path / "main.rw"
+    entry_path.write_text(entry_src, encoding="utf-8")
+    prog = load_program(entry_src, str(entry_path))
+    return analyze_program(prog, filename=str(entry_path))
+
+
+def test_qualified_call_resolves(tmp_path):
+    res = _check_program(
+        tmp_path,
+        "import lib\n\ndef main() -> int:\n    return lib.add(1, 2)\n",
+        lib="def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+    assert (None, "main") in res.functions
+    assert ("lib", "add") in res.functions
+
+
+def test_call_to_unimported_module_errors(tmp_path):
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            "def main() -> int:\n    return lib.add(1, 2)\n",
+            lib="def add(a: int, b: int) -> int:\n    return a + b\n",
+        )
+    assert "not imported" in ei.value.diagnostic.message
+
+
+def test_qualified_call_unknown_func_errors(tmp_path):
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            "import lib\n\ndef main() -> int:\n    return lib.nope(1)\n",
+            lib="def add(a: int, b: int) -> int:\n    return a + b\n",
+        )
+    assert "no function" in ei.value.diagnostic.message
+
+
+def test_same_name_functions_coexist(tmp_path):
+    # Both entry and lib define `helper`; they must not collide.
+    res = _check_program(
+        tmp_path,
+        "import lib\n\ndef helper() -> int:\n    return 1\n\ndef main() -> int:\n    return helper() + lib.helper()\n",
+        lib="def helper() -> int:\n    return 2\n",
+    )
+    assert (None, "helper") in res.functions
+    assert ("lib", "helper") in res.functions
+
+
+def test_qualified_arg_type_mismatch_errors(tmp_path):
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            'import lib\n\ndef main() -> int:\n    return lib.add("x", 2)\n',
+            lib="def add(a: int, b: int) -> int:\n    return a + b\n",
+        )
+    assert "argument 1" in ei.value.diagnostic.message

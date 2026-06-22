@@ -18,12 +18,12 @@ from typing import Optional
 from llvmlite import binding as llvm_binding
 
 from .ast_nodes import Module as ASTModule
-from .desugar import desugar_module
 from .diagnostics import CompileError, Diagnostic
 from .irgen import generate as irgen_generate
-from .lexer import LexerError, tokenize
-from .parser import ParserError, parse
-from .sema import analyze
+from .lexer import LexerError
+from .loader import load_program
+from .parser import ParserError
+from .sema import analyze_program
 
 
 def _find_runtime_dir() -> Path:
@@ -79,11 +79,9 @@ def compile_source(
 ) -> CompileResult:
     """Compile a single rw source string to a native executable."""
     try:
-        tokens = tokenize(source, filename=filename)
-        ast = parse(tokens)
-        ast = desugar_module(ast)
-        sema = analyze(ast, filename=filename)
-        llmod = irgen_generate(ast, sema)
+        program = load_program(source, filename)
+        sema = analyze_program(program, filename=filename)
+        llmod = irgen_generate(program, sema)
     except LexerError as e:
         raise CompileError(Diagnostic(filename, e.line, e.col, e.length, e.message)) from e
     except ParserError as e:
@@ -130,18 +128,16 @@ def compile_source(
 
 def emit_ir(source: str, filename: str) -> str:
     """Generate LLVM IR text for a source string without invoking the linker."""
-    tokens = tokenize(source, filename=filename)
-    ast = parse(tokens)
-    ast = desugar_module(ast)
-    sema = analyze(ast, filename=filename)
-    llmod = irgen_generate(ast, sema)
+    program = load_program(source, filename)
+    sema = analyze_program(program, filename=filename)
+    llmod = irgen_generate(program, sema)
     llmod.triple = llvm_binding.get_default_triple()
     return str(llmod)
 
 
 def emit_ast(source: str, filename: str) -> ASTModule:
-    tokens = tokenize(source, filename=filename)
-    return desugar_module(parse(tokens))
+    """Return the entry module AST (imports resolved & parsed, not merged)."""
+    return load_program(source, filename).root
 
 
 def run_executable(path: Path) -> int:

@@ -11,11 +11,17 @@ A single diagnostic is raised via CompileError on the first error.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from . import ast_nodes as A
 from . import types as T
 from .diagnostics import CompileError, Diagnostic
+from .loader import LoadedProgram
+
+
+# A function is identified by (module, name). The entry (root) module uses
+# module=None; imported modules use their import name. See spec 17.
+FuncKey = Tuple[Optional[str], str]
 
 
 @dataclass
@@ -24,16 +30,31 @@ class FuncSig:
     params: List[Tuple[str, T.Type]]
     return_type: T.Type
     node: A.FuncDef
+    module: Optional[str] = None
 
 
 @dataclass
 class SemaResult:
     filename: str
-    functions: Dict[str, FuncSig]
+    functions: Dict[FuncKey, FuncSig]
     # id(expr_node) -> Type. We use object identity to avoid dataclass hash issues.
     expr_types: Dict[int, T.Type] = field(default_factory=dict)
-    # (func_name, var_name) -> declared Type
-    local_types: Dict[Tuple[str, str], T.Type] = field(default_factory=dict)
+    # (module, func_name, var_name) -> declared Type
+    local_types: Dict[Tuple[Optional[str], str, str], T.Type] = field(default_factory=dict)
+    # id(Call) -> resolved (module, name) of the target user function. irgen
+    # uses this to pick the right LLVM symbol regardless of how the call was
+    # written (qualified, unqualified, or — in later PRs — via from/as).
+    call_resolution: Dict[int, FuncKey] = field(default_factory=dict)
+
+
+# Names of builtin functions. Spawning a builtin is an error, and a qualified
+# call (`mod.name`) can never refer to a builtin.
+_BUILTIN_FUNCS: frozenset[str] = frozenset({
+    "print", "len", "bytes_from_str", "str_from_bytes",
+    "list_new", "list_push", "list_at", "list_at_opt",
+    "tcp_listen", "tcp_accept", "read", "write", "close", "file_open",
+    "sqrt", "floor", "ceil", "exp", "log", "sin", "cos", "fabs", "pow",
+})
 
 
 _BUILTIN_TYPES: Dict[str, T.Type] = {
@@ -50,14 +71,26 @@ _BUILTIN_TYPES: Dict[str, T.Type] = {
 
 
 class Sema:
-    def __init__(self, module: A.Module, filename: str) -> None:
-        self.module = module
+    def __init__(self, program: LoadedProgram, filename: str) -> None:
+        self.program = program
         self.filename = filename
         self.result = SemaResult(filename=filename, functions={})
         # Depth of enclosing loops; break/continue are only valid when > 0.
         self._loop_depth = 0
         # User-declared type aliases (name -> resolved concrete Type).
+        # Type aliases are module-local in spirit but PR1 keeps a single map
+        # (the entry module's aliases dominate; imported modules' aliases are
+        # processed when that module is checked). Type-alias import is a Non-Goal.
         self.type_alias_map: Dict[str, T.Type] = {}
+        # The module currently being collected/checked. None = entry (root).
+        self.current_module: Optional[str] = None
+        # Module names visible to the current module via `import`.
+        # PR1: a module can call `m.f()` only for an `m` it imported.
+        self._visible_imports: set[str] = set()
+        # All (module, A.Module) pairs in load order: entry first, then imports.
+        self._all_modules: List[Tuple[Optional[str], A.Module]] = [
+            (None, program.root)
+        ] + [(name, mod) for name, mod in program.modules.items()]
 
     def _resolve_type(self, ty: A.TypeExpr) -> T.Type:
         if isinstance(ty, A.TypeName):
@@ -84,50 +117,53 @@ class Sema:
         # Built-in type names (int, Bytes, List, ...) are lexer keywords, so
         # they can never appear as an alias name (the parser requires IDENT).
         # Hence no built-in-shadowing check is needed here.
-        for alias in self.module.type_aliases:
-            if alias.name in self.type_alias_map:
-                raise CompileError(Diagnostic(
-                    self.filename, alias.line, alias.col, len(alias.name),
-                    f"duplicate type alias: {alias.name}",
-                ))
-            resolved = self._resolve_type(alias.target)
-            self.type_alias_map[alias.name] = resolved
-
-        # First pass: collect signatures.
-        for fn in self.module.functions:
-            if fn.name in self.result.functions:
-                raise CompileError(Diagnostic(
-                    self.filename, fn.line, fn.col, len(fn.name),
-                    f"duplicate function: {fn.name}",
-                ))
-            params: List[Tuple[str, T.Type]] = []
-            seen: set[str] = set()
-            for p in fn.params:
-                if p.name in seen:
+        for mod_name, mod in self._all_modules:
+            for alias in mod.type_aliases:
+                if alias.name in self.type_alias_map:
                     raise CompileError(Diagnostic(
-                        self.filename, p.line, p.col, len(p.name),
-                        f"duplicate parameter: {p.name}",
+                        self.filename, alias.line, alias.col, len(alias.name),
+                        f"duplicate type alias: {alias.name}",
                     ))
-                seen.add(p.name)
-                pt = self._resolve_type(p.type_expr)
-                if pt is T.VOID:
-                    raise CompileError(Diagnostic(
-                        self.filename, p.line, p.col, len(p.name),
-                        "parameter type cannot be void",
-                    ))
-                params.append((p.name, pt))
-            rt = self._resolve_type(fn.return_type)
-            self.result.functions[fn.name] = FuncSig(fn.name, params, rt, fn)
+                resolved = self._resolve_type(alias.target)
+                self.type_alias_map[alias.name] = resolved
 
-        # main is required.
-        if "main" not in self.result.functions:
-            # Synthesize a diagnostic at line 1 if module is empty.
-            line = self.module.functions[0].line if self.module.functions else 1
+        # First pass: collect signatures across all modules, keyed by
+        # (module, name). Same-named functions in different modules coexist.
+        for mod_name, mod in self._all_modules:
+            for fn in mod.functions:
+                key: FuncKey = (mod_name, fn.name)
+                if key in self.result.functions:
+                    raise CompileError(Diagnostic(
+                        self.filename, fn.line, fn.col, len(fn.name),
+                        f"duplicate function: {fn.name}",
+                    ))
+                params: List[Tuple[str, T.Type]] = []
+                seen: set[str] = set()
+                for p in fn.params:
+                    if p.name in seen:
+                        raise CompileError(Diagnostic(
+                            self.filename, p.line, p.col, len(p.name),
+                            f"duplicate parameter: {p.name}",
+                        ))
+                    seen.add(p.name)
+                    pt = self._resolve_type(p.type_expr)
+                    if pt is T.VOID:
+                        raise CompileError(Diagnostic(
+                            self.filename, p.line, p.col, len(p.name),
+                            "parameter type cannot be void",
+                        ))
+                    params.append((p.name, pt))
+                rt = self._resolve_type(fn.return_type)
+                self.result.functions[key] = FuncSig(fn.name, params, rt, fn, mod_name)
+
+        # main is required, in the entry module only.
+        if (None, "main") not in self.result.functions:
+            line = self.program.root.functions[0].line if self.program.root.functions else 1
             raise CompileError(Diagnostic(
                 self.filename, line, 1, 1,
                 "every rw program must define `def main() -> int`",
             ))
-        main_sig = self.result.functions["main"]
+        main_sig = self.result.functions[(None, "main")]
         if main_sig.params:
             raise CompileError(Diagnostic(
                 self.filename, main_sig.node.line, main_sig.node.col, 4,
@@ -139,22 +175,26 @@ class Sema:
                 "main must return int",
             ))
 
-        # Second pass: check each function body.
-        for fn in self.module.functions:
-            self._check_func(fn)
+        # Second pass: check each function body, module by module, so that
+        # `current_module` / visible imports are scoped correctly.
+        for mod_name, mod in self._all_modules:
+            self.current_module = mod_name
+            self._visible_imports = {imp.module for imp in mod.imports}
+            for fn in mod.functions:
+                self._check_func(fn)
 
         return self.result
 
     # ---------- function body ----------
     def _check_func(self, fn: A.FuncDef) -> None:
-        sig = self.result.functions[fn.name]
+        sig = self.result.functions[(self.current_module, fn.name)]
         # Local scope: param name -> Type. New scopes are pushed for if/while bodies,
         # but in rw the entire function shares one flat scope. Re-declaring an
         # existing local is an error.
         locals_: Dict[str, T.Type] = {}
         for pname, pty in sig.params:
             locals_[pname] = pty
-            self.result.local_types[(fn.name, pname)] = pty
+            self.result.local_types[(self.current_module, fn.name, pname)] = pty
         ended = self._check_block(fn, fn.body, locals_, sig.return_type)
         if sig.return_type is not T.VOID and not ended:
             raise CompileError(Diagnostic(
@@ -202,7 +242,7 @@ class Sema:
                     f"type mismatch: declared `{declared}`, value has type `{val_ty}`",
                 ))
             locals_[stmt.name] = declared
-            self.result.local_types[(fn.name, stmt.name)] = declared
+            self.result.local_types[(self.current_module, fn.name, stmt.name)] = declared
             return False
 
         if isinstance(stmt, A.Assign):
@@ -456,90 +496,16 @@ class Sema:
         if isinstance(expr, A.SpawnExpr):
             # spawn requires a user-defined function call.
             call = expr.call
-            if call.callee not in self.result.functions:
-                if call.callee == "print":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `print`",
-                    ))
-                if call.callee == "len":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `len`",
-                    ))
-                if call.callee == "bytes_from_str":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `bytes_from_str`",
-                    ))
-                if call.callee == "str_from_bytes":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `str_from_bytes`",
-                    ))
-                if call.callee == "list_new":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `list_new`",
-                    ))
-                if call.callee == "list_push":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `list_push`",
-                    ))
-                if call.callee == "list_at":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `list_at`",
-                    ))
-                if call.callee == "list_at_opt":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `list_at_opt`",
-                    ))
-                if call.callee == "tcp_listen":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `tcp_listen`",
-                    ))
-                if call.callee == "tcp_accept":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `tcp_accept`",
-                    ))
-                if call.callee == "read":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `read`",
-                    ))
-                if call.callee == "write":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `write`",
-                    ))
-                if call.callee == "close":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `close`",
-                    ))
-                if call.callee == "file_open":
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        "cannot spawn the builtin `file_open`",
-                    ))
-                if call.callee in ("sqrt", "floor", "ceil", "exp", "log",
-                                   "sin", "cos", "fabs", "pow"):
-                    raise CompileError(Diagnostic(
-                        self.filename, expr.line, expr.col, 5,
-                        f"cannot spawn the builtin `{call.callee}`",
-                    ))
+            if call.module is None and call.callee in _BUILTIN_FUNCS:
                 raise CompileError(Diagnostic(
-                    self.filename, call.line, call.col, len(call.callee),
-                    f"undefined function: {call.callee}",
+                    self.filename, expr.line, expr.col, 5,
+                    f"cannot spawn the builtin `{call.callee}`",
                 ))
+            # Resolve to a user function (raises on undefined / unimported).
+            key = self._resolve_user_func(call)
             # Type-check the call as a normal call (we want arg types to flow through).
             self._check_call(fn, call, locals_)
-            ret_ty = self.result.functions[call.callee].return_type
+            ret_ty = self.result.functions[key].return_type
             return T.FutureType(ret_ty)
         if isinstance(expr, A.AwaitExpr):
             tgt = self._check_expr(fn, expr.target, locals_)
@@ -595,7 +561,40 @@ class Sema:
             self.filename, 0, 0, 1, f"internal: unknown expr {type(expr).__name__}",
         ))
 
+    def _resolve_user_func(self, call: A.Call) -> FuncKey:
+        """Resolve a (qualified or unqualified) call to a user function key, or
+        raise. Does not type-check arguments. Records the result in
+        call_resolution for irgen."""
+        if call.module is not None:
+            # Qualified call `mod.func`: `mod` must be imported by the current
+            # module; builtins can never be qualified.
+            if call.module not in self._visible_imports:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.module),
+                    f"module '{call.module}' is not imported here",
+                ))
+            key: FuncKey = (call.module, call.callee)
+            if key not in self.result.functions:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"module '{call.module}' has no function `{call.callee}`",
+                ))
+        else:
+            # Unqualified call: a function in the current module.
+            key = (self.current_module, call.callee)
+            if key not in self.result.functions:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"undefined function: {call.callee}",
+                ))
+        self.result.call_resolution[id(call)] = key
+        return key
+
     def _check_call(self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]) -> T.Type:
+        # Qualified calls (`mod.func`) are always user functions; skip the
+        # builtin dispatch entirely. See spec 17.
+        if call.module is not None:
+            return self._check_user_call(fn, call, locals_)
         # Builtin: print accepts any printable.
         if call.callee == "print":
             if len(call.args) != 1:
@@ -856,12 +855,13 @@ class Sema:
                     f"pow second argument must be float, found `{t1}`",
                 ))
             return T.FLOAT
-        if call.callee not in self.result.functions:
-            raise CompileError(Diagnostic(
-                self.filename, call.line, call.col, len(call.callee),
-                f"undefined function: {call.callee}",
-            ))
-        sig = self.result.functions[call.callee]
+        return self._check_user_call(fn, call, locals_)
+
+    def _check_user_call(self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]) -> T.Type:
+        """Resolve and type-check a call to a user-defined function (qualified
+        or not). Builtins must already have been dispatched."""
+        key = self._resolve_user_func(call)
+        sig = self.result.functions[key]
         if len(call.args) != len(sig.params):
             raise CompileError(Diagnostic(
                 self.filename, call.line, call.col, len(call.callee),
@@ -878,4 +878,10 @@ class Sema:
 
 
 def analyze(module: A.Module, filename: str = "<input>") -> SemaResult:
-    return Sema(module, filename).analyze()
+    """Analyze a single module (no imports). Convenience wrapper used by tests."""
+    program = LoadedProgram(root=module, root_name="<root>")
+    return Sema(program, filename).analyze()
+
+
+def analyze_program(program: LoadedProgram, filename: str = "<input>") -> SemaResult:
+    return Sema(program, filename).analyze()

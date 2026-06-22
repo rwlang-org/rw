@@ -338,3 +338,44 @@ def test_parse_assert_with_message():
     assert isinstance(stmt, A.Assert)
     assert isinstance(stmt.cond, A.Name) and stmt.cond.name == "x"
     assert isinstance(stmt.msg, A.StringLit) and stmt.msg.value == "msg"
+
+
+def test_parse_import_statement():
+    src = "import math_lib\n\ndef main() -> int:\n    return 0\n"
+    mod = parse_src(src)
+    assert len(mod.imports) == 1
+    imp = mod.imports[0]
+    assert isinstance(imp, A.Import)
+    assert imp.module == "math_lib"
+    assert imp.alias is None and imp.names is None
+
+
+def test_parse_qualified_call():
+    src = "def main() -> int:\n    return math_lib.add(1, 2)\n"
+    mod = parse_src(src)
+    ret = mod.functions[0].body[0]
+    assert isinstance(ret, A.Return)
+    call = ret.value
+    assert isinstance(call, A.Call)
+    assert call.module == "math_lib"
+    assert call.callee == "add"
+    assert len(call.args) == 2
+
+
+def test_unqualified_call_has_no_module():
+    src = "def main() -> int:\n    return add(1, 2)\n"
+    mod = parse_src(src)
+    call = mod.functions[0].body[0].value
+    assert isinstance(call, A.Call) and call.module is None
+
+
+def test_import_after_def_is_error():
+    src = "def main() -> int:\n    return 0\n\nimport math_lib\n"
+    with pytest.raises(ParserError):
+        parse_src(src)
+
+
+def test_import_as_not_yet_supported():
+    src = "import math_lib as m\n\ndef main() -> int:\n    return 0\n"
+    with pytest.raises(ParserError):
+        parse_src(src)
