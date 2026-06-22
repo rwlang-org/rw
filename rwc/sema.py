@@ -84,9 +84,10 @@ class Sema:
         self.type_alias_map: Dict[str, T.Type] = {}
         # The module currently being collected/checked. None = entry (root).
         self.current_module: Optional[str] = None
-        # Module names visible to the current module via `import`.
-        # PR1: a module can call `m.f()` only for an `m` it imported.
-        self._visible_imports: set[str] = set()
+        # Qualifiers visible to the current module via `import`/`import as`:
+        # visible name -> real module name. `import x` -> {x: x}; `import x as m`
+        # -> {m: x}. A qualified call `q.f()` is valid only for a `q` in here.
+        self._import_env: Dict[str, str] = {}
         # Names brought into the current module via `from x import y [as w]`:
         # local name -> resolved (module, name). PR2.
         self._from_env: Dict[str, FuncKey] = {}
@@ -182,12 +183,29 @@ class Sema:
         # `current_module` / visible imports / from-bindings are scoped correctly.
         for mod_name, mod in self._all_modules:
             self.current_module = mod_name
-            self._visible_imports = {imp.module for imp in mod.imports}
+            self._import_env = self._build_import_env(mod)
             self._from_env = self._build_from_env(mod_name, mod)
             for fn in mod.functions:
                 self._check_func(fn)
 
         return self.result
+
+    def _build_import_env(self, mod: A.Module) -> Dict[str, str]:
+        """Resolve module qualifiers for one module: visible name -> real
+        module. Only plain/aliased imports (names is None) contribute; from
+        imports bind individual names instead. Detects duplicate qualifiers."""
+        env: Dict[str, str] = {}
+        for imp in mod.imports:
+            if imp.names is not None:
+                continue  # `from x import ...` does not introduce a qualifier
+            visible = imp.alias or imp.module
+            if visible in env:
+                raise CompileError(Diagnostic(
+                    self.filename, imp.line, imp.col, max(1, len(visible)),
+                    f"duplicate import qualifier `{visible}`",
+                ))
+            env[visible] = imp.module
+        return env
 
     def _build_from_env(self, mod_name: Optional[str], mod: A.Module) -> Dict[str, FuncKey]:
         """Resolve `from x import y [as w]` bindings for one module: local name
@@ -605,14 +623,15 @@ class Sema:
         raise. Does not type-check arguments. Records the result in
         call_resolution for irgen."""
         if call.module is not None:
-            # Qualified call `mod.func`: `mod` must be imported by the current
-            # module; builtins can never be qualified.
-            if call.module not in self._visible_imports:
+            # Qualified call `q.func`: `q` must be a visible import qualifier
+            # (a module name or an `as` alias); builtins can never be qualified.
+            if call.module not in self._import_env:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.module),
                     f"module '{call.module}' is not imported here",
                 ))
-            key: FuncKey = (call.module, call.callee)
+            real_module = self._import_env[call.module]
+            key: FuncKey = (real_module, call.callee)
             if key not in self.result.functions:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
