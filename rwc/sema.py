@@ -87,6 +87,9 @@ class Sema:
         # Module names visible to the current module via `import`.
         # PR1: a module can call `m.f()` only for an `m` it imported.
         self._visible_imports: set[str] = set()
+        # Names brought into the current module via `from x import y [as w]`:
+        # local name -> resolved (module, name). PR2.
+        self._from_env: Dict[str, FuncKey] = {}
         # All (module, A.Module) pairs in load order: entry first, then imports.
         self._all_modules: List[Tuple[Optional[str], A.Module]] = [
             (None, program.root)
@@ -176,14 +179,50 @@ class Sema:
             ))
 
         # Second pass: check each function body, module by module, so that
-        # `current_module` / visible imports are scoped correctly.
+        # `current_module` / visible imports / from-bindings are scoped correctly.
         for mod_name, mod in self._all_modules:
             self.current_module = mod_name
             self._visible_imports = {imp.module for imp in mod.imports}
+            self._from_env = self._build_from_env(mod_name, mod)
             for fn in mod.functions:
                 self._check_func(fn)
 
         return self.result
+
+    def _build_from_env(self, mod_name: Optional[str], mod: A.Module) -> Dict[str, FuncKey]:
+        """Resolve `from x import y [as w]` bindings for one module: local name
+        -> (source_module, source_name). Detects collisions with local
+        functions, builtins, and other from-bindings."""
+        env: Dict[str, FuncKey] = {}
+        local_names = {fn.name for fn in mod.functions}
+        for imp in mod.imports:
+            if imp.names is None:
+                continue  # plain `import x` / `import x as m`
+            for src_name, alias in imp.names:
+                local = alias or src_name
+                src_key: FuncKey = (imp.module, src_name)
+                if src_key not in self.result.functions:
+                    raise CompileError(Diagnostic(
+                        self.filename, imp.line, imp.col, max(1, len(src_name)),
+                        f"module '{imp.module}' has no function `{src_name}`",
+                    ))
+                if local in _BUILTIN_FUNCS:
+                    raise CompileError(Diagnostic(
+                        self.filename, imp.line, imp.col, max(1, len(local)),
+                        f"imported name `{local}` collides with a builtin",
+                    ))
+                if local in local_names:
+                    raise CompileError(Diagnostic(
+                        self.filename, imp.line, imp.col, max(1, len(local)),
+                        f"imported name `{local}` collides with a local function",
+                    ))
+                if local in env:
+                    raise CompileError(Diagnostic(
+                        self.filename, imp.line, imp.col, max(1, len(local)),
+                        f"duplicate imported name `{local}`",
+                    ))
+                env[local] = src_key
+        return env
 
     # ---------- function body ----------
     def _check_func(self, fn: A.FuncDef) -> None:
@@ -579,6 +618,9 @@ class Sema:
                     self.filename, call.line, call.col, len(call.callee),
                     f"module '{call.module}' has no function `{call.callee}`",
                 ))
+        elif call.callee in self._from_env:
+            # Unqualified call to a `from x import y` name.
+            key = self._from_env[call.callee]
         else:
             # Unqualified call: a function in the current module.
             key = (self.current_module, call.callee)
