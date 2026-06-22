@@ -73,6 +73,7 @@ class TokenKind(Enum):
     KW_FOR = auto()
     KW_IN = auto()
     KW_AS = auto()
+    KW_FROM = auto()
     KW_TYPE = auto()
 
     # Punctuation / operators
@@ -143,6 +144,7 @@ KEYWORDS: dict[str, TokenKind] = {
     "for": TokenKind.KW_FOR,
     "in": TokenKind.KW_IN,
     "as": TokenKind.KW_AS,
+    "from": TokenKind.KW_FROM,
     "type": TokenKind.KW_TYPE,
 }
 
