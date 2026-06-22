@@ -379,3 +379,26 @@ def test_import_as_not_yet_supported():
     src = "import math_lib as m\n\ndef main() -> int:\n    return 0\n"
     with pytest.raises(ParserError):
         parse_src(src)
+
+
+def test_parse_from_import_single():
+    src = "from math_lib import add\n\ndef main() -> int:\n    return add(1, 2)\n"
+    mod = parse_src(src)
+    assert len(mod.imports) == 1
+    imp = mod.imports[0]
+    assert imp.module == "math_lib"
+    assert imp.alias is None
+    assert imp.names == [("add", None)]
+
+
+def test_parse_from_import_multiple_with_alias():
+    src = "from math_lib import add, mul as m\n\ndef main() -> int:\n    return add(1, m(2, 3))\n"
+    mod = parse_src(src)
+    imp = mod.imports[0]
+    assert imp.names == [("add", None), ("mul", "m")]
+
+
+def test_from_import_after_def_is_error():
+    src = "def main() -> int:\n    return 0\n\nfrom lib import add\n"
+    with pytest.raises(ParserError):
+        parse_src(src)

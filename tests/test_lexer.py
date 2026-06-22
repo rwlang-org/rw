@@ -262,3 +262,11 @@ def test_dot_does_not_break_float_literals():
     assert toks[0].kind == TokenKind.FLOAT and toks[0].value == "1.5"
     assert toks[1].kind == TokenKind.FLOAT and toks[1].value == "3.14e2"
     assert TokenKind.DOT not in [t.kind for t in toks]
+
+
+def test_from_and_as_keywords():
+    toks = tokenize("from lib import add as a\n")
+    kinds_list = [t.kind for t in toks]
+    assert TokenKind.KW_FROM in kinds_list
+    assert TokenKind.KW_IMPORT in kinds_list
+    assert TokenKind.KW_AS in kinds_list
