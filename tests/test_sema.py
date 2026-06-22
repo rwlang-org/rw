@@ -1485,3 +1485,36 @@ def test_from_import_collides_with_builtin(tmp_path):
             lib="def print(a: int) -> int:\n    return a\n",
         )
     assert "collides with a builtin" in ei.value.diagnostic.message
+
+
+# ----- import-as aliases (spec 17, PR3) -----
+
+def test_import_as_resolves_via_alias(tmp_path):
+    res = _check_program(
+        tmp_path,
+        "import lib as m\n\ndef main() -> int:\n    return m.add(1, 2)\n",
+        lib="def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+    assert ("lib", "add") in res.functions
+
+
+def test_import_as_original_name_not_visible(tmp_path):
+    # After `import lib as m`, the bare `lib.` qualifier is no longer valid.
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            "import lib as m\n\ndef main() -> int:\n    return lib.add(1, 2)\n",
+            lib="def add(a: int, b: int) -> int:\n    return a + b\n",
+        )
+    assert "not imported" in ei.value.diagnostic.message
+
+
+def test_duplicate_import_qualifier_errors(tmp_path):
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            "import lib\nimport other as lib\n\ndef main() -> int:\n    return lib.add(1, 2)\n",
+            lib="def add(a: int, b: int) -> int:\n    return a + b\n",
+            other="def add(a: int, b: int) -> int:\n    return a - b\n",
+        )
+    assert "duplicate import qualifier" in ei.value.diagnostic.message
