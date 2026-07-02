@@ -2,38 +2,38 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** rw に `for <var> in range(start, stop[, step])` ループを構文糖として導入する。
+**Goal:** Introduce a `for <var> in range(start, stop[, step])` loop into rw as syntactic sugar.
 
-**Architecture:** parser が新しい `For` AST ノードを生成し、parser 直後・sema 前に走る独立パス `desugar.py` が `For` を既存の `VarDecl` / `While` / `Assign` ノードへ書き換える。これにより sema・irgen・runtime は無改修。`range` は `for` ヘッダ位置でのみ受理し、値としては扱わない。`step==0` は desugar したループ条件が両辺 false になる性質で 0 回ループになる。
+**Architecture:** The parser produces a new `For` AST node, and an independent pass `desugar.py` — which runs immediately after parsing and before sema — rewrites `For` into the existing `VarDecl` / `While` / `Assign` nodes. This leaves sema, irgen, and the runtime unmodified. `range` is accepted only in the `for` header position and is never treated as a value. `step==0` yields a zero-iteration loop because the desugared loop condition is false on both sides.
 
-**Tech Stack:** Python (rwc コンパイラ: lexer/parser/sema/irgen)、llvmlite、pytest、C ランタイム (無改修)。
+**Tech Stack:** Python (rwc compiler: lexer/parser/sema/irgen), llvmlite, pytest, C runtime (unmodified).
 
-参照 spec: `docs/specs/13-for-range-loop.md`
+Reference spec: `docs/specs/13-for-range-loop.md`
 
 ---
 
 ## File Structure
 
-- **Modify** `rwc/ast_nodes.py` — `For` dataclass を追加、`Stmt` Union に追加
-- **Modify** `rwc/parser.py` — `parse_for()` 追加、`parse_stmt` のディスパッチに `KW_FOR` 追加
-- **Create** `rwc/desugar.py` — `desugar_module(mod)` パス。`For` を `While` 等へ展開
-- **Modify** `rwc/driver.py` — `compile_source` / `emit_ir` / `emit_ast` の parse 直後に desugar を挿入
-- **Modify** `tests/test_parser.py` — for のパース結果テスト
-- **Create** `tests/test_desugar.py` — desugar 展開のテスト
-- **Modify** `tests/test_sema.py` — for の negative テスト (型エラー)
-- **Create** `examples/for_count.rw` + `examples/for_count.rw.expected` — e2e サンプル
-- **Modify** `tests/test_e2e.py` — parametrize に `for_count` 追加
+- **Modify** `rwc/ast_nodes.py` — add the `For` dataclass; add it to the `Stmt` Union
+- **Modify** `rwc/parser.py` — add `parse_for()`; add `KW_FOR` to the `parse_stmt` dispatch
+- **Create** `rwc/desugar.py` — the `desugar_module(mod)` pass. Expand `For` into `While` etc.
+- **Modify** `rwc/driver.py` — insert desugar immediately after parse in `compile_source` / `emit_ir` / `emit_ast`
+- **Modify** `tests/test_parser.py` — tests for the for parse result
+- **Create** `tests/test_desugar.py` — tests for desugar expansion
+- **Modify** `tests/test_sema.py` — negative tests for for (type errors)
+- **Create** `examples/for_count.rw` + `examples/for_count.rw.expected` — e2e sample
+- **Modify** `tests/test_e2e.py` — add `for_count` to parametrize
 
 ---
 
-## Task 1: `For` AST ノードを追加
+## Task 1: Add the `For` AST node
 
 **Files:**
 - Modify: `rwc/ast_nodes.py`
 
-- [ ] **Step 1: `For` dataclass を `While` の直後 (L193 付近) に追加**
+- [ ] **Step 1: Add the `For` dataclass directly after `While` (around L193)**
 
-`rwc/ast_nodes.py` の `While` クラス定義の直後に挿入:
+Insert directly after the `While` class definition in `rwc/ast_nodes.py`:
 
 ```python
 @dataclass
@@ -47,18 +47,18 @@ class For:
     col: int
 ```
 
-- [ ] **Step 2: `Stmt` Union に `For` を追加**
+- [ ] **Step 2: Add `For` to the `Stmt` Union**
 
-`rwc/ast_nodes.py` の `Stmt = Union[...]` 行 (現 L212) を変更:
+Change the `Stmt = Union[...]` line (currently L212) in `rwc/ast_nodes.py`:
 
 ```python
 Stmt = Union[VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt]
 ```
 
-- [ ] **Step 3: import が壊れていないか確認**
+- [ ] **Step 3: Confirm the import is not broken**
 
 Run: `uv run python -c "from rwc import ast_nodes as A; A.For"`
-Expected: エラーなし (何も出力されない)
+Expected: no error (nothing printed)
 
 - [ ] **Step 4: Commit**
 
@@ -69,15 +69,15 @@ git commit -m "ast: add For node for range-based loops"
 
 ---
 
-## Task 2: parser に `for ... in range(...)` を追加
+## Task 2: Add `for ... in range(...)` to the parser
 
 **Files:**
 - Modify: `rwc/parser.py`
 - Test: `tests/test_parser.py`
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [ ] **Step 1: Write a failing test**
 
-`tests/test_parser.py` の末尾に追加:
+Append to the end of `tests/test_parser.py`:
 
 ```python
 def test_parse_for_two_args():
@@ -129,23 +129,23 @@ def test_parse_for_four_args_is_error():
         parse_src(src)
 ```
 
-- [ ] **Step 2: テストが失敗することを確認**
+- [ ] **Step 2: Confirm the test fails**
 
 Run: `uv run pytest tests/test_parser.py -k for_ -v`
-Expected: FAIL (`for` がパースできず ParserError、または For ノードが生成されない)
+Expected: FAIL (`for` cannot be parsed, raising ParserError, or no For node is produced)
 
-- [ ] **Step 3: `parse_stmt` のディスパッチに `KW_FOR` を追加**
+- [ ] **Step 3: Add `KW_FOR` to the `parse_stmt` dispatch**
 
-`rwc/parser.py` の `parse_stmt` (現 L239 付近)、`KW_WHILE` の分岐の直後に追加:
+Add directly after the `KW_WHILE` branch in `parse_stmt` (around L239) of `rwc/parser.py`:
 
 ```python
         if t.kind == TokenKind.KW_FOR:
             return self.parse_for()
 ```
 
-- [ ] **Step 4: `parse_for()` を実装**
+- [ ] **Step 4: Implement `parse_for()`**
 
-`rwc/parser.py` の `parse_while` メソッド (現 L302) の直後に追加:
+Add directly after the `parse_while` method (currently L302) in `rwc/parser.py`:
 
 ```python
     def parse_for(self) -> A.For:
@@ -189,18 +189,20 @@ Expected: FAIL (`for` がパースできず ParserError、または For ノー�
         return A.For(var_tok.value, start, stop, step, body, kw.line, kw.col)
 ```
 
-> 注: `range` を for 外で使うと、通常の式パスで `Call("range", ...)` が生成され
-> sema が「未定義の関数 range」で弾く。parser でも for ヘッダ以外では `range`
-> をビルトイン化していないため、`x = range(0,5)` は sema の段階でエラーになる。
-> ただし negative テスト `test_parse_range_outside_for_is_error` は ParserError を
-> 期待しているので、Step 5 で挙動を確認し、ParserError でなく CompileError に
-> なる場合はテスト側を `test_sema.py` の負ケースへ移す (Step 5 参照)。
+> Note: If `range` is used outside a for, the ordinary expression path
+> produces `Call("range", ...)` and sema rejects it with "undefined function
+> range". Since the parser does not treat `range` as a builtin outside the
+> for header either, `x = range(0,5)` becomes an error at the sema stage.
+> However, the negative test `test_parse_range_outside_for_is_error` expects a
+> ParserError, so verify the behavior in Step 5; if it becomes a CompileError
+> rather than a ParserError, move that test to the negative cases in
+> `test_sema.py` (see Step 5).
 
-- [ ] **Step 5: テストを実行して確認**
+- [ ] **Step 5: Run the tests and confirm**
 
 Run: `uv run pytest tests/test_parser.py -k for_ -v`
-Expected: positive 3 件 PASS。`test_parse_for_zero_args_is_error` / `test_parse_for_four_args_is_error` PASS。
-`test_parse_range_outside_for_is_error` は `range` が式として通ってしまう場合 FAIL する。その場合は当該テストを `tests/test_parser.py` から削除し、Task 5 の sema negative テスト (`test_for_range_outside_is_sema_error`) でカバーする。実際の挙動に合わせてどちらか一方に置く。
+Expected: the 3 positive cases PASS. `test_parse_for_zero_args_is_error` / `test_parse_for_four_args_is_error` PASS.
+`test_parse_range_outside_for_is_error` FAILs if `range` passes as an expression. In that case, remove that test from `tests/test_parser.py` and cover it with the sema negative test in Task 5 (`test_for_range_outside_is_sema_error`). Place it in one location or the other according to the actual behavior.
 
 - [ ] **Step 6: Commit**
 
@@ -211,15 +213,15 @@ git commit -m "parser: parse for-in-range loop header into For node"
 
 ---
 
-## Task 3: desugar パスを実装
+## Task 3: Implement the desugar pass
 
 **Files:**
 - Create: `rwc/desugar.py`
 - Test: `tests/test_desugar.py`
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [ ] **Step 1: Write failing tests**
 
-`tests/test_desugar.py` を新規作成:
+Create `tests/test_desugar.py`:
 
 ```python
 from __future__ import annotations
@@ -266,14 +268,14 @@ def test_for_body_ends_with_increment():
     assert isinstance(last.value, A.BinOp) and last.value.op == "+"
 ```
 
-- [ ] **Step 2: テストが失敗することを確認**
+- [ ] **Step 2: Confirm the tests fail**
 
 Run: `uv run pytest tests/test_desugar.py -v`
 Expected: FAIL (`ModuleNotFoundError: rwc.desugar`)
 
-- [ ] **Step 3: `rwc/desugar.py` を実装**
+- [ ] **Step 3: Implement `rwc/desugar.py`**
 
-`rwc/desugar.py` を新規作成:
+Create `rwc/desugar.py`:
 
 ```python
 """Desugaring pass: lower syntactic-sugar AST nodes to core nodes.
@@ -373,10 +375,10 @@ def desugar_module(mod: A.Module) -> A.Module:
     return _Desugarer().module(mod)
 ```
 
-- [ ] **Step 4: テストを実行して確認**
+- [ ] **Step 4: Run the tests and confirm**
 
 Run: `uv run pytest tests/test_desugar.py -v`
-Expected: 3 件すべて PASS
+Expected: all 3 PASS
 
 - [ ] **Step 5: Commit**
 
@@ -387,22 +389,22 @@ git commit -m "desugar: lower For range loops to While + assignments"
 
 ---
 
-## Task 4: driver に desugar を組み込む
+## Task 4: Wire desugar into the driver
 
 **Files:**
 - Modify: `rwc/driver.py`
 
-- [ ] **Step 1: import を追加**
+- [ ] **Step 1: Add the import**
 
-`rwc/driver.py` の import 群 (現 L24 `from .parser import ...` の直後) に追加:
+Add to the imports in `rwc/driver.py` (directly after L24 `from .parser import ...`):
 
 ```python
 from .desugar import desugar_module
 ```
 
-- [ ] **Step 2: `compile_source` の parse 直後に desugar を挿入**
+- [ ] **Step 2: Insert desugar immediately after parse in `compile_source`**
 
-`rwc/driver.py` の `compile_source` 内、`ast = parse(tokens)` の直後 (現 L82) を:
+In `compile_source` of `rwc/driver.py`, directly after `ast = parse(tokens)` (currently L82):
 
 ```python
         tokens = tokenize(source, filename=filename)
@@ -412,9 +414,9 @@ from .desugar import desugar_module
         llmod = irgen_generate(ast, sema)
 ```
 
-- [ ] **Step 3: `emit_ir` にも同じ挿入**
+- [ ] **Step 3: Make the same insertion in `emit_ir`**
 
-`rwc/driver.py` の `emit_ir` 内 (現 L128-131) を:
+In `emit_ir` of `rwc/driver.py` (currently L128-131):
 
 ```python
     tokens = tokenize(source, filename=filename)
@@ -424,9 +426,9 @@ from .desugar import desugar_module
     llmod = irgen_generate(ast, sema)
 ```
 
-- [ ] **Step 4: `emit_ast` にも同じ挿入**
+- [ ] **Step 4: Make the same insertion in `emit_ast`**
 
-`rwc/driver.py` の `emit_ast` 内 (現 L136-138) を:
+In `emit_ast` of `rwc/driver.py` (currently L136-138):
 
 ```python
 def emit_ast(source: str, filename: str) -> ASTModule:
@@ -434,7 +436,7 @@ def emit_ast(source: str, filename: str) -> ASTModule:
     return desugar_module(parse(tokens))
 ```
 
-- [ ] **Step 5: パイプライン全体が通ることを確認 (一時ファイルで)**
+- [ ] **Step 5: Confirm the full pipeline passes (with a temporary file)**
 
 Run:
 ```bash
@@ -445,7 +447,7 @@ ir = emit_ir(src, filename='t.rw')
 print('rw_user_main' in ir)
 "
 ```
-Expected: `True` (for が desugar→sema→irgen を通って IR 生成される)
+Expected: `True` (the for goes through desugar → sema → irgen and IR is generated)
 
 - [ ] **Step 6: Commit**
 
@@ -456,18 +458,18 @@ git commit -m "driver: run desugar pass between parse and sema on all paths"
 
 ---
 
-## Task 5: sema の negative テストを追加
+## Task 5: Add sema negative tests
 
 **Files:**
 - Test: `tests/test_sema.py`
 
-> 目的: for 引数が非 int のとき型エラーになること、および `range` を for 外で
-> 使うとエラーになること (parser か sema のどちらで弾かれるかは Task 2 Step 5 の
-> 実挙動に従う) を固定する。
+> Purpose: pin down that a type error occurs when a for argument is non-int,
+> and that using `range` outside a for is an error (whether it is rejected by
+> the parser or sema follows the actual behavior from Task 2 Step 5).
 
-- [ ] **Step 1: テストを追加**
+- [ ] **Step 1: Add the tests**
 
-`tests/test_sema.py` の末尾に追加 (`check` / `err` ヘルパは既存):
+Append to the end of `tests/test_sema.py` (the `check` / `err` helpers already exist):
 
 ```python
 def test_for_loop_int_args_ok():
@@ -503,10 +505,10 @@ def test_for_loop_non_int_stop_is_error():
         analyze(desugar_module(parse(tokenize(src))), filename="t.rw")
 ```
 
-- [ ] **Step 2: テストを実行して確認**
+- [ ] **Step 2: Run the tests and confirm**
 
 Run: `uv run pytest tests/test_sema.py -k for_loop -v`
-Expected: 2 件 PASS
+Expected: 2 PASS
 
 - [ ] **Step 3: Commit**
 
@@ -517,16 +519,16 @@ git commit -m "sema: tests for for-loop int typing"
 
 ---
 
-## Task 6: e2e サンプルと期待値
+## Task 6: e2e sample and expected values
 
 **Files:**
 - Create: `examples/for_count.rw`
 - Create: `examples/for_count.rw.expected`
 - Modify: `tests/test_e2e.py`
 
-- [ ] **Step 1: サンプルを作成**
+- [ ] **Step 1: Create the sample**
 
-`examples/for_count.rw` を新規作成:
+Create `examples/for_count.rw`:
 
 ```
 def main() -> int:
@@ -549,21 +551,21 @@ def main() -> int:
     return 0
 ```
 
-> total = 0+1+...+9 = 45、down = 10+9+...+1 = 55、step2 = 0+2+4+6+8 = 20、
-> empty は 0 回ループなので 0。
+> total = 0+1+...+9 = 45, down = 10+9+...+1 = 55, step2 = 0+2+4+6+8 = 20,
+> empty is a zero-iteration loop so it is 0.
 
-- [ ] **Step 2: print の出力フォーマットを確認して期待値を作る**
+- [ ] **Step 2: Check print's output format and build the expected value**
 
 Run:
 ```bash
 uv run python -m rwc.cli run examples/for_count.rw
 ```
-Expected: 4 行の数値出力。実際の出力 (改行・整形含む) を確認する。
+Expected: four lines of numeric output. Verify the actual output (including newlines and formatting).
 
-- [ ] **Step 3: 確認した出力で `.expected` を作る**
+- [ ] **Step 3: Build `.expected` from the verified output**
 
-Step 2 の実出力をそのまま `examples/for_count.rw.expected` に保存する。
-他の例 (`examples/while_count.rw.expected`) と同じ整形である想定。想定値:
+Save the actual output from Step 2 verbatim into `examples/for_count.rw.expected`.
+It is expected to use the same formatting as the other examples (`examples/while_count.rw.expected`). Expected value:
 
 ```
 45
@@ -572,11 +574,11 @@ Step 2 の実出力をそのまま `examples/for_count.rw.expected` に保存す
 0
 ```
 
-(Step 2 の実出力と差異があれば実出力を正とする)
+(If there is any difference from the actual output in Step 2, treat the actual output as authoritative.)
 
-- [ ] **Step 4: parametrize に追加**
+- [ ] **Step 4: Add to parametrize**
 
-`tests/test_e2e.py` の `@pytest.mark.parametrize` リスト (現 L52 付近) の末尾に `"for_count"` を追加:
+Add `"for_count"` to the end of the `@pytest.mark.parametrize` list (around L52) in `tests/test_e2e.py`:
 
 ```python
 @pytest.mark.parametrize(
@@ -585,7 +587,7 @@ Step 2 の実出力をそのまま `examples/for_count.rw.expected` に保存す
 )
 ```
 
-- [ ] **Step 5: e2e テストを実行**
+- [ ] **Step 5: Run the e2e test**
 
 Run: `uv run pytest tests/test_e2e.py -k for_count -v`
 Expected: PASS
@@ -599,34 +601,34 @@ git commit -m "examples: add for_count exercising for-in-range loops"
 
 ---
 
-## Task 7: 全テスト緑を確認
+## Task 7: Confirm all tests green
 
-**Files:** なし (検証のみ)
+**Files:** none (verification only)
 
-- [ ] **Step 1: 全テストを実行**
+- [ ] **Step 1: Run all tests**
 
 Run: `uv run pytest -q`
-Expected: 全 PASS (既存テストの回帰なし、新規テストすべて緑)
+Expected: all PASS (no regression in existing tests, all new tests green)
 
-- [ ] **Step 2: emit-ast で desugar 後の姿を目視確認 (任意)**
+- [ ] **Step 2: Visually inspect the post-desugar form with emit-ast (optional)**
 
 Run: `uv run python -m rwc.cli emit-ast examples/for_count.rw`
-Expected: `For` ノードが現れず、`While` + `VarDecl` + `Assign` に展開されている
+Expected: no `For` node appears; it is expanded into `While` + `VarDecl` + `Assign`
 
 ---
 
-## Self-Review (記入済み)
+## Self-Review (completed)
 
 **Spec coverage:**
-- 1〜3 引数 range → Task 2 (parser でデフォルト補完)
-- 任意 int 式 → Task 2 (`parse_expr` で引数を取る) + Task 5 (型チェック)
-- 負 step / 半開区間 → Task 3 (条件式 `(step>0 and v<stop) or (step<0 and v>stop)`)
-- step==0 が 0 回ループ → Task 3 (条件両辺 false) + Task 6 (empty で検証)
-- `range` を値として使わせない → Task 2 (for ヘッダ以外で range をビルトイン化しない)
-- 二重評価防止 → Task 3 (`__for_stop_N` / `__for_step_N` に束縛)
-- sema/irgen/runtime 無改修 → Task 3/4 (desugar が core ノードのみ生成)
-- 3 経路で desugar → Task 4 (compile_source / emit_ir / emit_ast)
+- 1-to-3-argument range → Task 2 (parser fills in defaults)
+- Arbitrary int expressions → Task 2 (arguments taken via `parse_expr`) + Task 5 (type checking)
+- Negative step / half-open interval → Task 3 (condition `(step>0 and v<stop) or (step<0 and v>stop)`)
+- step==0 yields a zero-iteration loop → Task 3 (both sides of the condition false) + Task 6 (verified via empty)
+- Do not allow `range` to be used as a value → Task 2 (range is not made a builtin outside the for header)
+- Prevent double evaluation → Task 3 (bound to `__for_stop_N` / `__for_step_N`)
+- No changes to sema/irgen/runtime → Task 3/4 (desugar produces only core nodes)
+- Desugar on 3 paths → Task 4 (compile_source / emit_ir / emit_ast)
 
-**Placeholder scan:** プレースホルダなし。`.expected` の値のみ Task 6 Step 2 で実出力を正とする旨を明記 (想定値も提示)。
+**Placeholder scan:** No placeholders. Only the `.expected` value is explicitly noted as taking the real output from Task 6 Step 2 as authoritative (the anticipated value is also provided).
 
-**Type consistency:** `For(var, start, stop, step, body, line, col)` は Task 1 で定義し Task 2/3 で同一シグネチャを使用。`desugar_module` は Task 3 で定義し Task 4/5 で使用。一致。
+**Type consistency:** `For(var, start, stop, step, body, line, col)` is defined in Task 1 and used with the same signature in Tasks 2/3. `desugar_module` is defined in Task 3 and used in Tasks 4/5. Consistent.

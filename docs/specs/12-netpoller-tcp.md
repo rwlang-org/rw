@@ -1,72 +1,71 @@
-# rw netpoller + 最小 TCP API
+# rw netpoller + minimal TCP API
 
 ## Context
 
-ロードマップの **最終目標**「rw で echo server が書ける」を達成する PR。
-これまでの言語拡張 (string / Bytes / List / Option / Result / match) と
-ランタイム拡張 (M:N スケジューラ) を組み合わせ、**fiber が `recv` で
-ブロックしているように見えて裏で kqueue/epoll が回る** という Go 風の
-書き味を実現する。
+The PR that achieves the roadmap's **final goal**: "you can write an echo server in rw."
+It combines the language extensions built so far (string / Bytes / List / Option / Result / match)
+with the runtime extension (the M:N scheduler) to deliver a Go-style feel where **a fiber
+appears to block on `recv` while kqueue/epoll spins underneath**.
 
-これまでに揃った道具:
+Tools assembled so far:
 
-- M:N スケジューラ (#90): pthread worker + work-stealing + fiber 間 wait list
-- 文字列 / Bytes (#91, #92): バイトデータの表現
-- List[int] (#93): クライアント fd の配列が持てる
-- Option / Result (#94, #95): エラー表現の土台 (ただし今回は使わない)
+- M:N scheduler (#90): pthread workers + work-stealing + inter-fiber wait list
+- string / Bytes (#91, #92): representation of byte data
+- List[int] (#93): can hold an array of client fds
+- Option / Result (#94, #95): the foundation for error representation (not used this time)
 
-最後に必要なのは:
+What remains:
 
-- **nonblocking I/O + fd readiness 監視**: `kqueue(2)` / `epoll(7)`
-- **fiber を fd 監視に紐づけて park / wake**: netpoller スレッド
-- **rw 言語からの TCP API**: `tcp_listen` / `tcp_accept` / `tcp_read` / `tcp_write` / `tcp_close`
-  *(注: `tcp_read` / `tcp_write` / `tcp_close` は後に `read` / `write` / `close` へ統合、後述)*
+- **nonblocking I/O + fd readiness monitoring**: `kqueue(2)` / `epoll(7)`
+- **park / wake a fiber tied to fd monitoring**: the netpoller thread
+- **TCP API from the rw language**: `tcp_listen` / `tcp_accept` / `tcp_read` / `tcp_write` / `tcp_close`
+  *(Note: `tcp_read` / `tcp_write` / `tcp_close` were later consolidated into `read` / `write` / `close`, described below.)*
 
-ロードマップ:
+Roadmap:
 
-1. 文字列 `len` / `==` / `+` (#91)
-2. Bytes 型 (#92)
+1. string `len` / `==` / `+` (#91)
+2. Bytes type (#92)
 3. List[int] (#93)
 4a. Option[int] + match (#94)
 4b. Result[int, int] (#95)
-4c. (将来) 真のジェネリクス化
-5. **このサブプロジェクト**: netpoller + TCP API → echo server
+4c. (future) true generics
+5. **this sub-project**: netpoller + TCP API -> echo server
 
 ## Goals
 
-- ランタイムに netpoller スレッドを追加 (kqueue/epoll、専用 pthread 1 つ)
-- fiber を fd readiness で park / wake する内部 API (`rw_net_park_read/write`)
-- rw 言語に TCP 組込み:
+- Add a netpoller thread to the runtime (kqueue/epoll, one dedicated pthread)
+- An internal API to park / wake a fiber on fd readiness (`rw_net_park_read/write`)
+- TCP builtins in the rw language:
   - `tcp_listen(port: int) -> int`
   - `tcp_accept(listen_fd: int) -> int`
-  - `read(fd: int, max: int) -> Bytes`  *(旧 `tcp_read`、fd 汎用に統合)*
-  - `write(fd: int, b: Bytes) -> int`   *(旧 `tcp_write`、fd 汎用に統合)*
-  - `close(fd: int) -> int`             *(旧 `tcp_close`、fd 汎用に統合)*
-- `examples/tcp_echo.rw` が動く (1 接続 + 10 並列接続を Python から検証)
-- 公開既存 ABI と既存 example はすべて回帰なし
+  - `read(fd: int, max: int) -> Bytes`  *(formerly `tcp_read`, consolidated as generic fd)*
+  - `write(fd: int, b: Bytes) -> int`   *(formerly `tcp_write`, consolidated as generic fd)*
+  - `close(fd: int) -> int`             *(formerly `tcp_close`, consolidated as generic fd)*
+- `examples/tcp_echo.rw` works (verified from Python with 1 connection + 10 concurrent connections)
+- No regressions to the existing public ABI or any existing example
 
 ## Non-Goals
 
 - IPv6 / UDP / TLS / Unix domain socket
-- `tcp_listen` のホスト指定 (`0.0.0.0` 固定 IPv4)
-- 詳細エラー (errno 取得 API)
-- graceful shutdown / SIGINT ハンドラ (Ctrl-C で殺す前提)
-- partial write の自動 retry (`write` は実際に書いたバイト数を返すだけ、
-  全部書ききるのはユーザコードの責任)
-- 同一 fd への複数 fiber 同時 park (protocol で 1 fd = 1 fiber 規約)
-- Result 型でのエラー表現 (`read` は `Bytes` を返し len==0 で EOF/エラー
-  両方を表現)
-- 接続数の C10k ベンチ (最小 e2e のみ。1 接続成功 + 10 並列接続)
-- ファイル I/O / pipe / TTY (今回 socket のみ、kqueue/epoll で監視可能な
-  fd でも他種類はスコープ外)
-- fd 上限の自動引き上げ (シェルで `ulimit -n` を上げる前提、ランタイムが
-  `setrlimit` を呼ぶことはしない)
-- main thread の fiber 化 (main は worker でも fiber でもない単独 thread
-  のまま、`tcp_accept` を main から呼ぶと blocking accept で kernel sleep)
+- Host specification for `tcp_listen` (fixed to IPv4 `0.0.0.0`)
+- Detailed errors (an errno-retrieval API)
+- Graceful shutdown / SIGINT handler (assume the process is killed with Ctrl-C)
+- Automatic retry of partial writes (`write` only returns the number of bytes actually
+  written; writing everything out is the user code's responsibility)
+- Multiple fibers parking on the same fd simultaneously (protocol convention: 1 fd = 1 fiber)
+- Error representation via the Result type (`read` returns `Bytes` and uses len==0 to represent
+  both EOF and error)
+- A C10k connection-count benchmark (minimal e2e only: 1 successful connection + 10 concurrent connections)
+- File I/O / pipe / TTY (socket only this time; other fd kinds, even those monitorable by
+  kqueue/epoll, are out of scope)
+- Automatic raising of the fd limit (assume `ulimit -n` is raised in the shell; the runtime
+  does not call `setrlimit`)
+- Turning the main thread into a fiber (main stays a standalone thread that is neither a worker
+  nor a fiber; calling `tcp_accept` from main does a blocking accept that sleeps in the kernel)
 
-## 設計
+## Design
 
-### システム全体図
+### System overview diagram
 
 ```
                                  +---------------------+
@@ -87,47 +86,47 @@
                           +---+----+ +---+----+ +---+----+
                               |          |          |
                               v          v          v
-                          fiber 実行 (read / write / ...)
+                          fiber execution (read / write / ...)
                               |
                               | EAGAIN → rw_net_park_read(fd)
                               |   ↓
-                              | netpoller に登録、fiber WAITING、worker M は次の fiber へ
+                              | register with netpoller, fiber WAITING, worker M moves to next fiber
                               |
-                              | (netpoller が ready を検知すると上の矢印に戻る)
+                              | (when the netpoller detects ready, control returns to the arrow above)
 ```
 
-スレッド本数:
+Thread counts:
 
-| 種類 | 本数 | 役割 |
+| Kind | Count | Role |
 |---|---|---|
-| main | 1 | `rw_user_main` 実行、`tcp_accept` で blocking sleep |
-| worker M | `sysconf(_SC_NPROCESSORS_ONLN)`、上限 64 | fiber を `find_runnable` + `rw_fiber_swap` で実行 |
-| netpoller | 1 | `kevent` / `epoll_wait` で fd ready を監視し、対応 fiber を `enqueue_ready` |
+| main | 1 | Runs `rw_user_main`, blocking-sleeps in `tcp_accept` |
+| worker M | `sysconf(_SC_NPROCESSORS_ONLN)`, capped at 64 | Runs fibers via `find_runnable` + `rw_fiber_swap` |
+| netpoller | 1 | Watches fd readiness with `kevent` / `epoll_wait` and `enqueue_ready`s the corresponding fiber |
 
-= **`nproc + 2` 本** (接続数に依存しない)。
+= **`nproc + 2` threads** (independent of the connection count).
 
-### netpoller スレッドの動き
+### How the netpoller thread works
 
 ```c
 void *rw_netpoller_main(void *arg) {
     while (!atomic_load(&g_netpoller_shutdown)) {
-        // 1 回の syscall で最大 128 event を取得 (kernel が sleep してくれる)
+        // Fetch up to 128 events per syscall (the kernel sleeps for us)
         int n = kevent(g_kq, NULL, 0, events, 128, NULL);
         for (int i = 0; i < n; i++) {
             rw_fiber_handle *f = (rw_fiber_handle *)events[i].udata;
-            // 1 fd = 1 fiber (protocol 規約)、ONESHOT なので再登録なし
-            enqueue_ready(f);   // 既存の M:N スケジューラを再利用
+            // 1 fd = 1 fiber (protocol convention); ONESHOT means no re-registration
+            enqueue_ready(f);   // Reuse the existing M:N scheduler
         }
     }
     return NULL;
 }
 ```
 
-ONESHOT モード (`EV_ONESHOT` / `EPOLLONESHOT`) を使う理由:
+Why ONESHOT mode (`EV_ONESHOT` / `EPOLLONESHOT`) is used:
 
-- 一度 ready 通知したら kernel が自動的に監視から外す
-- 同じ fd を再 park したいときは fiber が改めて `rw_net_park_*` を呼んで登録
-- 「fiber が close する前に複数 fiber が park してしまう」race の窓を最小化
+- Once readiness is signaled, the kernel automatically removes the fd from monitoring
+- To park the same fd again, the fiber calls `rw_net_park_*` once more to re-register
+- Minimizes the race window where "multiple fibers park before the fiber closes"
 
 ### park / wake API
 
@@ -136,7 +135,7 @@ ONESHOT モード (`EV_ONESHOT` / `EPOLLONESHOT`) を使う理由:
 void rw_netpoller_init(void);
 void rw_netpoller_shutdown(void);
 
-int  rw_set_nonblocking(int fd);    // O_NONBLOCK を立てる (idempotent)
+int  rw_set_nonblocking(int fd);    // Set O_NONBLOCK (idempotent)
 
 // Block current fiber until fd is readable / writable.
 // Must be called from a fiber (tls_m != NULL).
@@ -144,20 +143,20 @@ void rw_net_park_read(int fd);
 void rw_net_park_write(int fd);
 ```
 
-`rw_net_park_read` の実装:
+Implementation of `rw_net_park_read`:
 
 ```c
 void rw_net_park_read(int fd) {
     rw_M *m = tls_m;
     rw_fiber_handle *me = m->current;
     atomic_store_explicit(&me->state, RW_FIBER_WAITING, memory_order_relaxed);
-    register_for_read(fd, me);     // kqueue / epoll に EV_ONESHOT で登録
+    register_for_read(fd, me);     // Register with kqueue / epoll using EV_ONESHOT
     rw_fiber_swap(&me->ctx, &m->sched_ctx);
-    // ここから戻った時点で netpoller がこの fiber を enqueue_ready している
+    // By the time control returns here, the netpoller has enqueue_ready'd this fiber
 }
 ```
 
-`register_for_read` のプラットフォーム別実装:
+Platform-specific implementations of `register_for_read`:
 
 ```c
 // netpoller_kqueue.c
@@ -173,22 +172,23 @@ static void register_for_read(int fd, rw_fiber_handle *f) {
         .events = EPOLLIN | EPOLLONESHOT,
         .data.ptr = f,
     };
-    // 既に登録済みなら MOD、未登録なら ADD。両方試して片方を成功とする。
+    // MOD if already registered, ADD if not. Try both and accept whichever succeeds.
     if (epoll_ctl(g_ep, EPOLL_CTL_MOD, fd, &ev) != 0) {
         epoll_ctl(g_ep, EPOLL_CTL_ADD, fd, &ev);
     }
 }
 ```
 
-epoll は ADD/MOD で挙動が違うので両方試行。kqueue は EV_ADD だけで十分。
+epoll behaves differently for ADD vs. MOD, so try both. For kqueue, EV_ADD alone suffices.
 
-### tcp_* helper の実装パターン
+### Implementation pattern for the tcp_* helpers
 
-> **注 (#33):** `rw_tcp_read` / `rw_tcp_write` / `rw_tcp_close` は `runtime/io.c` の
-> `rw_read` / `rw_write` / `rw_close` に統合・削除済み。以下は設計時の参考実装。
+> **Note (#33):** `rw_tcp_read` / `rw_tcp_write` / `rw_tcp_close` have been consolidated into
+> `rw_read` / `rw_write` / `rw_close` in `runtime/io.c` and removed. The following is the
+> reference implementation from design time.
 
 ```c
-// runtime/net/tcp.c (歴史的参考実装 — 現在は runtime/io.c に統合)
+// runtime/net/tcp.c (historical reference implementation — now consolidated into runtime/io.c)
 
 int64_t rw_tcp_listen(int64_t port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -203,22 +203,22 @@ int64_t rw_tcp_listen(int64_t port) {
     if (bind(fd, (void*)&addr, sizeof(addr)) < 0) { close(fd); return -1; }
     if (listen(fd, 128) < 0)                       { close(fd); return -1; }
     return fd;
-    // 注: listen fd は blocking のまま。main thread が tcp_accept で
-    // 待つときに kernel sleep できるよう。fiber 経由で呼ばれた最初の
-    // tcp_accept で nonblocking に切り替える。
+    // Note: the listen fd stays blocking, so the main thread can kernel-sleep
+    // while it waits in tcp_accept. It is switched to nonblocking on the first
+    // tcp_accept invoked from a fiber.
 }
 
 int64_t rw_tcp_accept(int64_t listen_fd) {
     if (tls_m == NULL) {
-        // main thread: blocking accept (kernel が main を寝かす、
-        // worker M / netpoller は別 thread なので影響なし)
+        // main thread: blocking accept (kernel puts main to sleep; worker M /
+        // netpoller run on separate threads, so they are unaffected)
         int c = accept(listen_fd, NULL, NULL);
         if (c < 0) return -1;
         rw_set_nonblocking(c);
         return c;
     }
-    // fiber 内: nonblocking accept + netpoller park
-    rw_set_nonblocking(listen_fd);   // idempotent (初回のみ effect)
+    // in a fiber: nonblocking accept + netpoller park
+    rw_set_nonblocking(listen_fd);   // idempotent (effect only on first call)
     for (;;) {
         int c = accept(listen_fd, NULL, NULL);
         if (c >= 0) { rw_set_nonblocking(c); return c; }
@@ -240,8 +240,8 @@ void rw_tcp_read(rw_str *out, int64_t fd, int64_t max) {
         if (n == 0) { free(buf); out->len = 0; out->ptr = NULL; return; }
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             if (tls_m) { rw_net_park_read((int)fd); continue; }
-            // main thread (blocking でない fd を main が読む通常はないが、
-            // 念のため) は EAGAIN を error 扱い
+            // main thread (it is unusual for main to read a nonblocking fd, but
+            // just in case) treats EAGAIN as an error
             free(buf); out->len = 0; out->ptr = NULL; return;
         }
         free(buf); out->len = 0; out->ptr = NULL; return;
@@ -266,67 +266,67 @@ int64_t rw_tcp_close(int64_t fd) {
 }
 ```
 
-### rw 言語側の組込み
+### Builtins on the rw language side
 
-> **更新 (#33 / [15-file-io](15-file-io.md)):** `tcp_read` / `tcp_write` /
-> `tcp_close` は fd 汎用の `read` / `write` / `close` に統合された。ソケットの
-> 読み書き・クローズはこれらを使う (実装は `runtime/io.c`)。ソケット固有の
-> `tcp_listen` / `tcp_accept` はそのまま。詳細は
-> [`15-file-io.md`](15-file-io.md) を参照。
+> **Update (#33 / [15-file-io](15-file-io.md)):** `tcp_read` / `tcp_write` /
+> `tcp_close` have been consolidated into the generic-fd `read` / `write` / `close`.
+> Reading, writing, and closing a socket use these (implemented in `runtime/io.c`). The
+> socket-specific `tcp_listen` / `tcp_accept` remain as-is. See
+> [`15-file-io.md`](15-file-io.md) for details.
 
-組込み関数を Sema / irgen に追加。シグネチャは:
+Add the builtin functions to Sema / irgen. Signatures:
 
 ```
 tcp_listen(int)     -> int
 tcp_accept(int)     -> int
-read(int, int)      -> Bytes   # 旧 tcp_read
-write(int, Bytes)   -> int     # 旧 tcp_write
-close(int)          -> int     # 旧 tcp_close
+read(int, int)      -> Bytes   # formerly tcp_read
+write(int, Bytes)   -> int     # formerly tcp_write
+close(int)          -> int     # formerly tcp_close
 ```
 
-全部 `spawn` 禁止 (組込みは spawn できない既存ルール)。
+All forbid `spawn` (existing rule: builtins cannot be spawned).
 
-irgen は既存パターン:
-- `read` は **pointer-out** (16 byte 戻り値だが alloca + load パターンに揃える)
-- `write` は Bytes (16 byte) を value 渡し
-- 残り 3 つはスカラ
+irgen follows the existing patterns:
+- `read` is **pointer-out** (a 16-byte return value, but aligned with the alloca + load pattern)
+- `write` passes Bytes (16 bytes) by value
+- The remaining three are scalar
 
-### ファイル構成
+### File structure
 
 ```
-runtime/net/                          (新規ディレクトリ)
-├── netpoller.h                       (共通 API 宣言)
-├── netpoller.c                       (init / shutdown / park / 共通ロジック)
-├── netpoller_kqueue.c                (macOS 固有: kevent ベース)
-├── netpoller_epoll.c                 (Linux 固有: epoll ベース)
+runtime/net/                          (new directory)
+├── netpoller.h                       (shared API declarations)
+├── netpoller.c                       (init / shutdown / park / shared logic)
+├── netpoller_kqueue.c                (macOS-specific: kevent-based)
+├── netpoller_epoll.c                 (Linux-specific: epoll-based)
 ├── tcp.h
 └── tcp.c
 
-runtime/runtime.h                     (tcp_listen/tcp_accept + read/write/close/file_open + 2 つの park プロトタイプ追加)
-runtime/runtime.c                     (rw_init / rw_shutdown に netpoller 呼び出し追加)
-runtime/Makefile                      (net/*.o + uname 分岐)
+runtime/runtime.h                     (add tcp_listen/tcp_accept + read/write/close/file_open + the two park prototypes)
+runtime/runtime.c                     (add netpoller calls to rw_init / rw_shutdown)
+runtime/Makefile                      (net/*.o + uname branching)
 
-runtime/fiber/test_netpoller_pipe.c   (新規 C テスト)
-runtime/fiber/test_tcp_loopback.c     (新規 C テスト)
+runtime/fiber/test_netpoller_pipe.c   (new C test)
+runtime/fiber/test_tcp_loopback.c     (new C test)
 
-rwc/sema.py                           (tcp_listen/tcp_accept/read/write/close + spawn 禁止)
-rwc/irgen.py                          (tcp_listen/tcp_accept/read/write/close emit)
+rwc/sema.py                           (tcp_listen/tcp_accept/read/write/close + spawn prohibition)
+rwc/irgen.py                          (emit tcp_listen/tcp_accept/read/write/close)
 
-examples/tcp_echo.rw                  (echo server デモ)
-examples/tcp_echo.rw.expected         (今回は使わない、後述)
+examples/tcp_echo.rw                  (echo server demo)
+examples/tcp_echo.rw.expected         (not used this time, described below)
 
-tests/test_e2e_tcp.py                 (Python から socket で接続して echo を検証)
+tests/test_e2e_tcp.py                 (connect via socket from Python and verify echo)
 
-docs/specs/12-netpoller-tcp.md        (本ファイル)
-docs/plans/2026-05-23-netpoller-tcp.md (writing-plans で作成)
+docs/specs/12-netpoller-tcp.md        (this file)
+docs/plans/2026-05-23-netpoller-tcp.md (created with writing-plans)
 ```
 
-### e2e テスト戦略
+### e2e test strategy
 
-通常の `tests/test_e2e.py` のような「stdout を `.expected` と比較」は echo
-server には合わない (echo server は無限ループで stdout も無い)。
+The usual "compare stdout against `.expected`" approach of `tests/test_e2e.py` does not fit an
+echo server (an echo server runs an infinite loop and produces no stdout).
 
-新規ファイル `tests/test_e2e_tcp.py`:
+New file `tests/test_e2e_tcp.py`:
 
 ```python
 import socket, subprocess, time, signal, os
@@ -339,16 +339,16 @@ def _free_port():
     return port
 
 def _start_server(port):
-    # examples/tcp_echo.rw をビルドして起動
-    # ただし port は環境変数 RW_ECHO_PORT で渡せるよう example 側も対応
-    # (もしくは tcp_listen の引数を埋め込んだ tmp .rw を生成)
+    # Build and launch examples/tcp_echo.rw
+    # The example side also accepts the port via the RW_ECHO_PORT env var
+    # (or generate a tmp .rw with the tcp_listen argument baked in)
     ...
 
 def test_echo_single():
     port = _free_port()
     proc = _start_server(port)
     try:
-        time.sleep(0.2)  # サーバ起動待ち
+        time.sleep(0.2)  # wait for the server to start
         s = socket.create_connection(('127.0.0.1', port))
         s.sendall(b"hello\n")
         assert s.recv(1024) == b"hello\n"
@@ -372,51 +372,51 @@ def test_echo_concurrent_10():
         proc.terminate(); proc.wait()
 ```
 
-port は `socket.bind(0)` で空きを確保。example の port をハードコードできない
-ので、`tcp_echo.rw` の最終形は **port を `argv` か環境変数から読む** 必要が
-ある。
+The port is reserved as a free one via `socket.bind(0)`. Since the example's port cannot be
+hardcoded, the final form of `tcp_echo.rw` needs to **read the port from `argv` or an
+environment variable**.
 
-ただし rw 言語に argv / env 読み取り API はまだ無い → **e2e 用に
-`examples/tcp_echo.rw` を毎回テキスト置換** する形にする (port 数字だけ
-書き換える簡易テンプレ)。これが最小コスト。
+However, rw does not yet have an argv / env reading API -> instead, **text-substitute
+`examples/tcp_echo.rw` for each e2e run** (a simple template that only rewrites the port
+number). This is the lowest-cost approach.
 
-### コミット構成 (1 PR、6 commits)
+### Commit structure (1 PR, 6 commits)
 
-1. **runtime: netpoller スケルトン (init/shutdown のみ)**
+1. **runtime: netpoller skeleton (init/shutdown only)**
    - `runtime/net/netpoller.{c,h}`, `netpoller_kqueue.c`, `netpoller_epoll.c`
-   - `rw_netpoller_init` で pthread を起動、`rw_netpoller_shutdown` で join
-   - Makefile に `net/*.o` 追加、`uname -s` で kqueue/epoll を分岐
-   - `runtime/runtime.c` の `rw_init` / `rw_shutdown` に呼び出し追加
-   - C テスト `test_netpoller_init.c` (init/shutdown を 10 回回す)
+   - `rw_netpoller_init` starts the pthread, `rw_netpoller_shutdown` joins it
+   - Add `net/*.o` to the Makefile, branch on kqueue/epoll via `uname -s`
+   - Add calls to `rw_init` / `rw_shutdown` in `runtime/runtime.c`
+   - C test `test_netpoller_init.c` (run init/shutdown 10 times)
 
-2. **runtime: park/wake と pipe テスト**
-   - `rw_set_nonblocking`、`rw_net_park_read/write` の本実装
-   - netpoller スレッド本体のループ
-   - C テスト `test_netpoller_pipe.c`: pipe 2 つを作り、reader fiber が
-     `rw_net_park_read` で park、writer fiber が write、reader が起きるか
+2. **runtime: park/wake and pipe test**
+   - Real implementation of `rw_set_nonblocking` and `rw_net_park_read/write`
+   - The netpoller thread's main loop
+   - C test `test_netpoller_pipe.c`: create two pipes; the reader fiber parks via
+     `rw_net_park_read`, the writer fiber writes, and check that the reader wakes up
 
-3. **runtime: tcp_* helper**
+3. **runtime: tcp_* helpers**
    - `runtime/net/tcp.{c,h}`
-   - 5 関数の実装
-   - C テスト `test_tcp_loopback.c`: localhost で listen → connect → recv/send
+   - Implementation of the 5 functions
+   - C test `test_tcp_loopback.c`: listen -> connect -> recv/send on localhost
 
-4. **rwc: 組込みを sema + irgen**
-   - `_check_call` に分岐 + spawn 禁止
-   - `_emit_call` に分岐 (`read` は pointer-out shim)
-   - positive / negative テスト (引数型エラー、spawn 禁止)
+4. **rwc: builtins in sema + irgen**
+   - Branches in `_check_call` + spawn prohibition
+   - Branches in `_emit_call` (`read` uses the pointer-out shim)
+   - positive / negative tests (argument-type errors, spawn prohibition)
 
 5. **examples + e2e**
    - `examples/tcp_echo.rw`
    - `tests/test_e2e_tcp.py` (single + concurrent 10)
-   - `tests/test_e2e.py` には追加しない (echo server は stdout 比較に
-     合わないので別 e2e ファイル)
+   - Not added to `tests/test_e2e.py` (an echo server does not fit stdout comparison, so a
+     separate e2e file)
 
-6. **plan ファイル commit**
+6. **commit the plan file**
 
-### 検証
+### Verification
 
 ```sh
-# ランタイム単体
+# runtime alone
 make -C runtime clean && make -C runtime
 cd runtime
 cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_netpoller_pipe.c librw.a -o fiber/test_netpoller_pipe && ./fiber/test_netpoller_pipe
@@ -425,25 +425,25 @@ cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_tcp_loopback.c l
 # pytest
 cd ..
 uv run pytest -q
-# 期待: 既存 131 + sema 新規 10 + e2e_tcp 新規 2 = 143 件
+# Expected: existing 131 + 10 new sema + 2 new e2e_tcp = 143 total
 
-# 手動 echo 確認
+# manual echo check
 RW_ECHO_PORT=18080 uv run rwc run examples/tcp_echo.rw &
 sleep 0.2
 nc 127.0.0.1 18080 <<< 'hello'   # => hello
 kill %1
 ```
 
-## リスクと対処
+## Risks and mitigations
 
-| リスク | 対処 |
+| Risk | Mitigation |
 |---|---|
-| kqueue と epoll の API 差異が漏れる | netpoller.h で共通 API、`netpoller_kqueue.c` / `netpoller_epoll.c` を `#if defined(__APPLE__)` で完全分離。Linux CI で epoll パスを検証、ローカル macOS で kqueue パス |
-| fiber が park 直後 close されると ONESHOT 登録が garbage に | ONESHOT は kernel が自動で外す。close 後に kevent が ready を返してきても fiber pointer は無効でない (fiber handle は join まで生きる)。double-wake のリスクのみで実害なし |
-| main thread が tcp_accept で sleep 中に Ctrl-C が来る | OS が SIGINT で main を起こす、accept が EINTR で返る → rw_tcp_accept は -1 を返してユーザコードがループから抜ける。これは spec の現状動作 |
-| ephemeral port を CI で確保するときの port 衝突 | Python 側で `socket.bind(0)` で空き port を取り、それを env 経由で rw に渡す |
-| 接続失敗時の `tcp_accept` リトライ無限ループ | accept が EAGAIN 以外のエラー (ECONNABORTED など) を返したら -1 を返す。ユーザコードが `if c < 0: break` で抜ける責任 |
-| netpoller スレッドが kevent でずっと寝続けて shutdown シグナルに気づかない | shutdown 時に `g_netpoller_shutdown = 1` をセットし、self-pipe または eventfd で netpoller を起こす (kqueue は EVFILT_USER、epoll は eventfd) |
-| 既存 e2e (`test_e2e.py`) は無限ループサーバを実行しないので問題なし | parametrize に tcp_echo は追加しない。新規 `test_e2e_tcp.py` で扱う |
-| Linux で `epoll_ctl` の MOD/ADD どっち呼ぶか | ADD 失敗 (EEXIST) のときに MOD にフォールバック、または逆。両方試す形で吸収 |
-| fd 上限 (`ulimit -n`) を超えた接続で accept が EMFILE | エラー扱い (`-1` 返す)。ユーザコードで対処。spec で「ulimit -n を上げる前提」明示 |
+| API differences between kqueue and epoll leak through | Shared API in netpoller.h; fully separate `netpoller_kqueue.c` / `netpoller_epoll.c` with `#if defined(__APPLE__)`. Verify the epoll path in Linux CI and the kqueue path locally on macOS |
+| The ONESHOT registration becomes garbage if a fiber is closed right after parking | ONESHOT is auto-removed by the kernel. Even if kevent returns ready after close, the fiber pointer is not invalid (the fiber handle lives until join). Only a double-wake risk, with no real harm |
+| Ctrl-C arrives while the main thread sleeps in tcp_accept | The OS wakes main with SIGINT, accept returns with EINTR -> rw_tcp_accept returns -1 and the user code breaks out of the loop. This is the current spec behavior |
+| Port collision when reserving an ephemeral port in CI | Take a free port on the Python side with `socket.bind(0)` and pass it to rw via env |
+| Infinite `tcp_accept` retry loop on connection failure | If accept returns an error other than EAGAIN (such as ECONNABORTED), return -1. The user code is responsible for breaking out with `if c < 0: break` |
+| The netpoller thread stays asleep in kevent and never notices the shutdown signal | On shutdown, set `g_netpoller_shutdown = 1` and wake the netpoller with a self-pipe or eventfd (EVFILT_USER for kqueue, eventfd for epoll) |
+| The existing e2e (`test_e2e.py`) is fine since it does not run an infinite-loop server | Do not add tcp_echo to the parametrize list; handle it in the new `test_e2e_tcp.py` |
+| Whether to call MOD or ADD for `epoll_ctl` on Linux | On ADD failure (EEXIST) fall back to MOD, or vice versa. Absorb by trying both |
+| accept returns EMFILE for connections beyond the fd limit (`ulimit -n`) | Treat as an error (return `-1`). Handle in user code. The spec makes the "assume ulimit -n is raised" assumption explicit |

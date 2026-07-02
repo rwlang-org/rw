@@ -543,7 +543,7 @@ Confirm output matches spec #15 (`hello file` / `second line` / blank / `23`).
 - **Concurrency protocol is load-bearing:** the submit→`park_current` /
   worker→`enqueue_ready` order must match the netpoller exactly. Do not add
   a publish-before-save shortcut. See `docs/specs/16-async-file-io.md` →
-  "並行性の正しさ" and the stackful-coroutine-scheduling skill.
+  "Concurrency correctness" and the stackful-coroutine-scheduling skill.
 - **Task struct on the stack:** `rw_aio_task t;` lives on the calling
   fiber's stack; a pointer is queued. The fiber is parked (alive, stack
   retained) until the worker wakes it, so the pointer stays valid. Do not

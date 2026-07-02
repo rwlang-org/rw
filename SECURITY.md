@@ -1,32 +1,32 @@
 # Security Policy
 
-## サポート対象のバージョン
+## Supported Versions
 
-最新の minor リリースのみセキュリティ修正の対象です。
+Only the latest minor release receives security fixes.
 
 | Version | Supported          |
 | ------- | ------------------ |
 | 0.0.x   | :white_check_mark: |
 
-## 脆弱性の報告
+## Reporting a Vulnerability
 
-セキュリティ上の問題を見つけた場合は、**公開 issue として報告しないでください**。代わりに次のいずれかで報告してください。
+If you find a security issue, **please do not report it as a public issue**. Instead, report it through one of the following channels.
 
-1. (推奨) GitHub Security Advisory:
+1. (Recommended) GitHub Security Advisory:
    https://github.com/ryuichi1208/rw/security/advisories/new
 
-2. メールでの報告: `r_watanabe@ivry.jp`
+2. By email: `r_watanabe@ivry.jp`
 
-報告には次の情報を含めてください:
+Please include the following information in your report:
 
-- 脆弱性の概要と影響範囲
-- 再現手順 / PoC
-- 影響を受けるバージョン
-- 既知の緩和策（あれば）
+- A summary of the vulnerability and its impact
+- Reproduction steps / PoC
+- Affected versions
+- Any known mitigations (if applicable)
 
-## 対応プロセス
+## Response Process
 
-- 受領: 7 日以内に確認のリプライ
-- 評価: 14 日以内に深刻度の評価と対応方針の連絡
-- 修正: 重大度に応じて 30〜90 日以内にパッチをリリース予定
-- 公表: 修正リリース後、GitHub Security Advisory として公開
+- Acknowledgment: we will reply to confirm receipt within 7 days
+- Assessment: we will share a severity assessment and remediation plan within 14 days
+- Fix: depending on severity, we plan to release a patch within 30–90 days
+- Disclosure: after the fix is released, we will publish it as a GitHub Security Advisory

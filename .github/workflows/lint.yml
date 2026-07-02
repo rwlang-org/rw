@@ -1,4 +1,4 @@
-# 段階適用方針: 当初は warning として運用し、PR ごとに対象を絞って fail に切り替える
+# Gradual rollout policy: start as warnings, then switch to failures for targeted scopes per PR
 name: lint
 
 on:

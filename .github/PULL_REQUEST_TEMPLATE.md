@@ -1,19 +1,19 @@
-## 概要
+## Overview
 
-<!-- このPRの目的を1-3行で -->
+<!-- Describe the purpose of this PR in 1-3 lines -->
 
-## 変更点
+## Changes
 
 - 
 
-## 関連 issue
+## Related issues
 
 Closes #
 
-## チェックリスト
+## Checklist
 
-- [ ] テストを追加 / 既存テストを更新した
-- [ ] ドキュメントを更新した（必要に応じて）
-- [ ] ローカルで `uv run pytest` が通る
-- [ ] C runtime を変更した場合 `make -C runtime test` が通る
-- [ ] 破壊的変更がある場合は CHANGELOG.md / docs に記載
+- [ ] Added tests / updated existing tests
+- [ ] Updated documentation (if needed)
+- [ ] `uv run pytest` passes locally
+- [ ] `make -C runtime test` passes if the C runtime was changed
+- [ ] Documented breaking changes in CHANGELOG.md / docs, if any

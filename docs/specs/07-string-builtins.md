@@ -1,60 +1,61 @@
-# rw 文字列拡張: len / == / +
+# rw string extensions: len / == / +
 
 ## Context
 
-rw は `print` と `spawn`/`await` 以外に組込み機能がほとんど無く、`string` は
-**リテラルを `print` するだけ** の存在になっている。
+Apart from `print` and `spawn`/`await`, rw has almost no built-in features, and
+`string` exists only to **`print` a literal**.
 
 ```rw
 def main() -> int:
     name: string = "alice"
-    # ここから先が書けない:
-    #   - len(name) で長さを取りたい
-    #   - if name == "alice": の分岐がしたい
-    #   - print("hello, " + name) でログを組み立てたい
+    # You cannot write anything beyond this point:
+    #   - len(name) to get the length
+    #   - if name == "alice": to branch
+    #   - print("hello, " + name) to build a log
     print(name)
     return 0
 ```
 
-この PR は **netpoller / TCP API** を将来入れる前提で、その手前にある
-「言語の最小拡張」の 1 ステップ目を入れる。echo server を rw コードで
-書くのに必要なのは「読んだ文字列を書き戻す」「長さで条件分岐する」
-「ログを組み立てる」の 3 つで、これらは `len` / `==` / `+` だけで足りる。
+This PR, on the premise of adding a **netpoller / TCP API** in the future, adds
+the first step of the "minimal language extension" that precedes it. What you
+need to write an echo server in rw code is the three things "write back the
+string you read," "branch on the length," and "build a log," and these are
+covered by just `len` / `==` / `+`.
 
-長期計画はこの spec の外で進める:
+The long-term plan proceeds outside this spec:
 
-1. **このサブプロジェクト**: string の `len` / `==` / `+`
-2. Bytes 型と buffer API
+1. **This sub-project**: `len` / `==` / `+` for string
+2. Bytes type and buffer API
 3. List[T]
 4. Result[T, E] / Option[T]
 5. netpoller + TCP API
 
 ## Goals
 
-- 組込み関数 `len(s: string) -> int` を追加
-- 演算子 `==` / `!=` を string 同士で許可 (バイト一致)
-- 演算子 `+` を string 同士で許可 (連結、新しい string を確保)
-- 既存テスト (66 件 + C テスト) を緑のまま維持
-- 公開 ABI (`rw_spawn_*` / `rw_await_*` / `rw_str`) は変更しない
+- Add the built-in function `len(s: string) -> int`
+- Allow the operators `==` / `!=` between two strings (byte equality)
+- Allow the operator `+` between two strings (concatenation, allocating a new string)
+- Keep the existing tests (66 + C tests) green
+- Do not change the public ABI (`rw_spawn_*` / `rw_await_*` / `rw_str`)
 
 ## Non-Goals
 
-- `s.len` のドット記法 (rw に struct 経由のメンバアクセスが無いため筋が悪い)
-- 辞書順比較 `<` / `<=` / `>` / `>=` (echo server に不要)
-- `*` (string 反復) や `s[i]` (index)
-- 文字列の mutate (`rw_str` は const ポインタ前提)
-- メモリ回収 (連結結果は malloc しっぱなし、リーク許容。学習・実験用なので OK)
-- 国際化、Unicode 正規化 (バイト列としての扱いのみ)
+- The `s.len` dot notation (rw has no member access via structs, so it is a bad fit)
+- Lexicographic comparison `<` / `<=` / `>` / `>=` (not needed for an echo server)
+- `*` (string repetition) or `s[i]` (indexing)
+- String mutation (`rw_str` assumes a const pointer)
+- Memory reclamation (concatenation results are left malloc'd, leaks tolerated; fine because this is for learning/experimentation)
+- Internationalization, Unicode normalization (treated only as byte sequences)
 
-## 設計
+## Design
 
-### 言語レベルから見た挙動
+### Behavior seen from the language level
 
 ```rw
 def main() -> int:
     a: string = "hello"
     b: string = ", world"
-    c: string = a + b               # "hello, world" (新規 allocate)
+    c: string = a + b               # "hello, world" (newly allocated)
     print(len(c))                   # 12
     if c == "hello, world":         # true
         print("matched")
@@ -63,9 +64,9 @@ def main() -> int:
     return 0
 ```
 
-### ランタイム追加関数 (`runtime.c` / `runtime.h`)
+### Runtime helper functions to add (`runtime.c` / `runtime.h`)
 
-3 つの helper 関数を C ABI で追加する。
+Add three helper functions with the C ABI.
 
 ```c
 /* New helpers — internal but exposed for irgen. */
@@ -74,127 +75,132 @@ int8_t  rw_str_eq    (rw_str a, rw_str b);
 rw_str  rw_str_concat(rw_str a, rw_str b);
 ```
 
-実装方針:
+Implementation approach:
 
-- `rw_str_len`: `s.len` をそのまま返すワンライナー。irgen が `extractvalue`
-  を直接出してもよかったが、ABI を 1 本に揃えるため C 関数で出す。後で
-  「\0 終端でない場合の境界チェック」を入れる余地もできる。
-- `rw_str_eq`: `a.len != b.len` → 0 即返し。同じなら `memcmp(a.ptr, b.ptr, a.len) == 0`
-  を `int8_t` (0/1) で返す。`rw_print_bool` と同じ i8 表現に合わせる。
-- `rw_str_concat`: `malloc(a.len + b.len)` で確保、`memcpy(p, a.ptr, a.len)`、
-  `memcpy(p + a.len, b.ptr, b.len)`、`{len = a.len+b.len, ptr = p}` を返す。
-  両方 len=0 の場合は ptr=NULL, len=0 を返す (malloc(0) を呼ばない)。
-  解放はしない (リーク許容)。
+- `rw_str_len`: a one-liner that just returns `s.len`. irgen could have emitted
+  `extractvalue` directly, but we emit it via a C function to keep the ABI
+  uniform. This also leaves room to later add a "bounds check for the case where
+  it is not \0-terminated."
+- `rw_str_eq`: `a.len != b.len` → immediately return 0. If they are equal,
+  return `memcmp(a.ptr, b.ptr, a.len) == 0` as an `int8_t` (0/1), matching the
+  same i8 representation as `rw_print_bool`.
+- `rw_str_concat`: allocate with `malloc(a.len + b.len)`, `memcpy(p, a.ptr, a.len)`,
+  `memcpy(p + a.len, b.ptr, b.len)`, and return `{len = a.len+b.len, ptr = p}`.
+  If both have len=0, return ptr=NULL, len=0 (do not call malloc(0)).
+  It does not free (leaks tolerated).
 
-これらは pthread-safe (各呼び出しは局所的)、副作用なし (concat の malloc
-を除く)、シングルスレッド・マルチスレッドどちらでも安全。
+These are pthread-safe (each call is local), side-effect-free (except for
+concat's malloc), and safe under both single-threaded and multi-threaded
+execution.
 
-### コンパイラ変更点
+### Compiler changes
 
 #### lexer / parser
 
-変更なし。`len(s)` は既存の `Call` ノードでパースされ、`s1 + s2` と
-`s1 == s2` は既存の二項演算子ノードでパースされる。
+No change. `len(s)` parses as the existing `Call` node, and `s1 + s2` and
+`s1 == s2` parse as the existing binary-operator nodes.
 
 #### sema (`rwc/sema.py`)
 
-3 ヶ所:
+Three places:
 
-1. **組込み関数テーブル** に `len(string) -> int` を追加。現状 `print` の
-   特例処理が `analyze_call` 周辺にあるので、同じ場所に `len` を追加。
-   `print` は引数型が「printable な型なら何でも」だが、`len` は
-   「引数 1 つ、型は string、戻り値は int」と厳密。
-2. **`==` / `!=` の型チェック** で、両辺が string なら結果型 bool を許可。
-   既存コードに `# We could allow string equality later; disallow for MVP simplicity.`
-   というコメントとともに弾く分岐がある。これを「string も OK」に変更。
-3. **`+` の型チェック** で、両辺が string なら結果型 string を許可。
-   `int + int -> int` / `float + float -> float` の隣に同じパターンで
-   `string + string -> string` を足す。
+1. Add `len(string) -> int` to the **built-in function table**. The special
+   handling for `print` is currently around `analyze_call`, so add `len` in the
+   same place. `print`'s argument type is "anything as long as it's a printable
+   type," but `len` is strict: "one argument, of type string, returning int."
+2. In the **type check for `==` / `!=`**, allow the result type bool when both
+   sides are string. The existing code has a branch that rejects it along with
+   the comment `# We could allow string equality later; disallow for MVP simplicity.`.
+   Change this to "string is also OK."
+3. In the **type check for `+`**, allow the result type string when both sides
+   are string. Add `string + string -> string` with the same pattern next to
+   `int + int -> int` / `float + float -> float`.
 
-ネガティブテストを `tests/test_sema.py` に足す:
-- `"a" + 1` → 型エラー
-- `"a" == 1` → 型エラー
-- `len(1)` → 型エラー (引数型違い)
-- `len("a", "b")` → 型エラー (引数数違い)
+Add negative tests to `tests/test_sema.py`:
+- `"a" + 1` → type error
+- `"a" == 1` → type error
+- `len(1)` → type error (wrong argument type)
+- `len("a", "b")` → type error (wrong argument count)
 
 #### irgen (`rwc/irgen.py`)
 
-3 ヶ所:
+Three places:
 
-1. **外部関数宣言** に `rw_str_len`, `rw_str_eq`, `rw_str_concat` を追加
-   (既存の `rw_print_*` と同じ形)。
-2. **`len(s)` 呼び出し** の生成。Sema で「組込み `len` の呼び出し」と
-   印が付いた `Call` を `_emit_call` で受けたら、`rw_str_len` を呼び出す
-   IR を出す。
-3. **二項演算子の string ケース** の生成。`==` / `!=` は `rw_str_eq` を
-   呼んで結果 i8 を `icmp` で i1 に変換 (`!=` の場合は `xor` で反転)。
-   `+` は `rw_str_concat` を呼んで返り値 `rw_str` をそのまま使う。
+1. Add `rw_str_len`, `rw_str_eq`, `rw_str_concat` to the **external function
+   declarations** (in the same form as the existing `rw_print_*`).
+2. Generate the **`len(s)` call**. When `_emit_call` receives a `Call` marked by
+   Sema as "a call to the built-in `len`," emit IR that calls `rw_str_len`.
+3. Generate the **string case for binary operators**. `==` / `!=` call
+   `rw_str_eq` and convert the resulting i8 to i1 with `icmp` (for `!=`, invert
+   with `xor`). `+` calls `rw_str_concat` and uses the returned `rw_str` as is.
 
-### コンポーネント間の境界
+### Boundaries between components
 
-- ランタイム側は **C ABI 関数 3 本** のみ追加。テストは C レベルでも可能。
-- Sema/irgen の変更は **既存パターンの拡張のみ**。新しい AST ノードや
-  IR 命令を導入しない。
-- 公開 ABI (`rw_spawn_*` 等) は無変更。`librw.a` のシンボル増加のみ。
+- The runtime side only adds **three C ABI functions**. Testing is also possible
+  at the C level.
+- The Sema/irgen changes are **only extensions of existing patterns**. No new
+  AST node or IR instruction is introduced.
+- The public ABI (`rw_spawn_*`, etc.) is unchanged. Only the symbols in
+  `librw.a` increase.
 
-## ファイル別変更
+## Changes by file
 
-### 変更
+### Changed
 
-- `runtime/runtime.c` — 3 関数の実装を追加
-- `runtime/runtime.h` — 3 プロトタイプを追加
-- `rwc/sema.py` — `len` 組込み、`+`/`==`/`!=` の string 許可
-- `rwc/irgen.py` — `rw_str_*` の外部宣言と呼び出し生成
-- `tests/test_sema.py` — string オペレーションの型検査ケース追加
-- `tests/test_e2e.py` — `string_ops` を parametrize に追加
+- `runtime/runtime.c` — add the implementations of the 3 functions
+- `runtime/runtime.h` — add the 3 prototypes
+- `rwc/sema.py` — `len` built-in, allow `+`/`==`/`!=` for strings
+- `rwc/irgen.py` — external declarations and call generation for `rw_str_*`
+- `tests/test_sema.py` — add type-check cases for string operations
+- `tests/test_e2e.py` — add `string_ops` to the parametrize list
 
-### 新規
+### New
 
-- `examples/string_ops.rw` — len / `==` / `+` を 1 つの main で使うサンプル
-- `examples/string_ops.rw.expected` — 期待出力
+- `examples/string_ops.rw` — a sample that uses len / `==` / `+` in a single main
+- `examples/string_ops.rw.expected` — the expected output
 
-### 変更なし
+### Unchanged
 
 - lexer, parser, driver
-- fiber 関連 (`runtime/fiber/*`)
-- 既存の examples / spec docs
+- fiber-related (`runtime/fiber/*`)
+- existing examples / spec docs
 
-## 検証
+## Verification
 
 ```sh
-# ランタイム単体
+# runtime alone
 make -C runtime clean && make -C runtime
 
-# 全テスト
+# all tests
 uv run pytest -q
 
-# 新しい example が単独で動く
+# the new example runs on its own
 uv run rwc run examples/string_ops.rw
 
-# 既存 example が壊れていない
+# existing examples are not broken
 uv run rwc run examples/hello.rw
 uv run rwc run examples/spawn_many.rw
 ```
 
-成功基準: 全テスト緑、`string_ops.rw` の出力が `.expected` と一致、
-新規 ネガティブ Sema テストが期待通り型エラーを返す。
+Success criteria: all tests green, the output of `string_ops.rw` matches
+`.expected`, and the new negative Sema tests return type errors as expected.
 
-## コミット構成
+## Commit structure
 
 3 commits:
 
-1. **runtime**: `rw_str_len` / `rw_str_eq` / `rw_str_concat` を追加。
-   C レベルから直接呼んで動作確認。
-2. **rwc**: Sema で string の `len` / `==` / `+` を許可し、irgen で
-   ランタイム helper を呼ぶ IR を生成。Sema ネガティブテスト追加。
-3. **examples + e2e**: `string_ops.rw` を追加、`tests/test_e2e.py` の
-   parametrize に組み込む。
+1. **runtime**: add `rw_str_len` / `rw_str_eq` / `rw_str_concat`. Verify by
+   calling them directly at the C level.
+2. **rwc**: allow string `len` / `==` / `+` in Sema, and generate IR in irgen
+   that calls the runtime helpers. Add Sema negative tests.
+3. **examples + e2e**: add `string_ops.rw` and wire it into the parametrize list
+   of `tests/test_e2e.py`.
 
-## リスクと対処
+## Risks and remedies
 
-| リスク | 対処 |
+| Risk | Remedy |
 |---|---|
-| `rw_str` の `ptr` が NULL のケース (空文字列リテラル) | concat と eq は len=0 を最初に分岐して NULL deref を避ける |
-| Sema で `+` の型推論が壊れる (int 計算が string 経路にハマる等) | 既存の `+` ハンドラを「両辺 int / 両辺 float / 両辺 string」の 3 分岐に明示。テストで `1 + 1` / `1.0 + 2.0` / `"a" + "b"` を網羅 |
-| `len` を変数名としてユーザが使っているコード | rw リポジトリ内の `examples/*.rw` に `len` を変数として使っている箇所は無い (grep 確認済み)。Sema で「組込み名と衝突する変数定義」は別途エラーにしてもよいが今回はやらない (shadowing 許可、組込みは「呼び出される時に組込み」というだけ) |
-| 連結リークが long-running echo server で問題化 | このサブプロジェクトの非ゴール。netpoller 統合より前に GC を入れる判断をするなら別 PR で対処 |
+| The case where `rw_str`'s `ptr` is NULL (empty string literal) | concat and eq branch on len=0 first to avoid a NULL deref |
+| Sema's type inference for `+` breaks (e.g. integer arithmetic falls into the string path) | make the existing `+` handler explicitly three branches: "both int / both float / both string." Cover `1 + 1` / `1.0 + 2.0` / `"a" + "b"` in tests |
+| Code where the user uses `len` as a variable name | there is no place in the repo's `examples/*.rw` that uses `len` as a variable (confirmed by grep). Sema could separately error on "a variable definition that collides with a built-in name," but we do not do that this time (shadowing allowed; a built-in is a built-in "only when it is called") |
+| Concatenation leaks become a problem in a long-running echo server | a non-goal of this sub-project. If we decide to add GC before integrating the netpoller, we address it in a separate PR |

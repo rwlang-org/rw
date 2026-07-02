@@ -1,42 +1,38 @@
-# rw 言語 概要
+# rw Language Overview
 
-## 何の言語か
+## What kind of language is it?
 
-rw は **Python の書き味で書ける、非同期ファーストの静的型コンパイル言語** である。
-LLVM をバックエンドに用い、macOS arm64 / Linux x86_64 のネイティブ実行ファイルを
-生成する。
+rw is a **statically typed, async-first, compiled language with the ergonomics of Python**.
+It uses LLVM as its backend and produces native executables for macOS arm64 / Linux x86_64.
 
-## 設計の柱
+## Design pillars
 
-1. **非同期が中心**: `Future[T]` は型システムの一級市民。`spawn`/`await` は予約語。
-2. **Python 似の見た目**: インデントベース、`def`、`elif`、`and/or/not`、`true/false`。
-3. **静的型・型注釈必須**: 引数・戻り値・ローカル変数すべて型注釈を書く。MVP は
-   型推論なし。
-4. **薄いランタイム + LLVM**: Cで書いた `librw.a` をリンクし、コア機能(スレッド、
-   Future、print)を提供。
-5. **学習・実験フレンドリー**: コンパイラは Python 製。`rwc emit-ir` / `emit-ast`
-   で内部を覗ける。
+1. **Async at the core**: `Future[T]` is a first-class citizen of the type system. `spawn`/`await` are reserved words.
+2. **Python-like appearance**: indentation-based, `def`, `elif`, `and/or/not`, `true/false`.
+3. **Static typing with mandatory type annotations**: arguments, return values, and local variables all require type annotations. The MVP has no type inference.
+4. **Thin runtime + LLVM**: a `librw.a` written in C is linked in to provide core features (threads, Future, print).
+5. **Learning- and experiment-friendly**: the compiler is written in Python. `rwc emit-ir` / `emit-ast` let you inspect the internals.
 
-## ターゲット
+## Targets
 
 - macOS arm64
 - Linux x86_64
 
-Windows と組み込みは MVP では対象外。
+Windows and embedded targets are out of scope for the MVP.
 
-## ツールチェーン
+## Toolchain
 
-| ツール | 用途 |
+| Tool | Purpose |
 |---|---|
-| Python 3.11 | コンパイラ本体 |
-| llvmlite | LLVM IR 構築 |
-| clang | リンカ呼び出し + librw.a とのリンク |
-| make + cc | librw.a のビルド |
+| Python 3.11 | The compiler itself |
+| llvmlite | Building LLVM IR |
+| clang | Invoking the linker + linking against librw.a |
+| make + cc | Building librw.a |
 
-## パイプライン
+## Pipeline
 
 ```
-.rw → Lexer → Parser → Sema → IRGen → Driver → 実行ファイル
+.rw → Lexer → Parser → Sema → IRGen → Driver → executable
                                           ↓
                                      librw.a (C)
 ```
@@ -50,17 +46,17 @@ rwc emit-ir  foo.rw
 rwc emit-ast foo.rw
 ```
 
-## MVP のゴール
+## MVP goal
 
-`examples/` 配下の 7 本(hello, arith, fib, while_count, spawn_basic, spawn_many,
-spawn_string)が **macOS arm64 と Linux x86_64 の両方で緑** になること。
+The 7 programs under `examples/` (hello, arith, fib, while_count, spawn_basic, spawn_many,
+spawn_string) should be **green on both macOS arm64 and Linux x86_64**.
 
-## やらないこと(将来拡張)
+## Non-goals (future extensions)
 
 - list / dict / for / class / import
-- 型推論
-- GC(現状はリーク許容、Future と malloc/free ペアのみ)
-- 文字列連結・スライス
-- Python 直接呼び出し(将来は `extern "c"` + プロセス分離で対応)
-- 例外 / Result 型
-- 複数エラー回復(MVP は最初のエラーで停止)
+- Type inference
+- GC (leaks are tolerated for now; only Future and malloc/free pairs are managed)
+- String concatenation / slicing
+- Direct Python calls (to be supported later via `extern "c"` + process isolation)
+- Exceptions / Result type
+- Multi-error recovery (the MVP stops at the first error)

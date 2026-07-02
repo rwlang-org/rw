@@ -1,217 +1,249 @@
-# rw 非同期ファイル I/O（抽象 + thread pool バックエンド）
+# rw async file I/O (abstraction + thread pool backend)
 
 ## Context
 
-rw はファイル I/O ([[15-file-io]]) を fd 汎用の `read` / `write` / `close` で
-提供している。実装は `runtime/io.c` の `rw_read` / `rw_write` で、`EAGAIN` のとき
-fiber を netpoller に park する completion-ish なロジックを持つ。
+rw provides file I/O ([[15-file-io]]) via the fd-generic `read` / `write` /
+`close`. The implementation is `rw_read` / `rw_write` in `runtime/io.c`, which
+has completion-ish logic that parks the fiber on the netpoller on `EAGAIN`.
 
-しかしこのロジックは **ノンブロッキングソケット**にしか効かない。正規ファイルの
-fd は `read(2)` / `write(2)` で `EAGAIN` を返さず、データが揃うまでカーネルが
-ブロックして完了する。その間、その `read` を呼んだ fiber が乗っている
-**ワーカースレッド M が 1 本まるごとブロックされる**。fiber を 100k 走らせる
-ランタイムにとって、ファイル read 1 つでワーカーが止まるのは弱点である。
+However, this logic only works for **non-blocking sockets**. A regular file fd
+does not return `EAGAIN` on `read(2)` / `write(2)`; the kernel blocks until the
+data is ready and then completes. During that time, the **worker thread M on
+which the fiber that called that `read` is running is blocked entirely**. For a
+runtime that runs 100k fibers, having a worker stop for a single file read is a
+weakness.
 
-このサブプロジェクトは、ファイル I/O を「別スレッドにオフロードして fiber を
-park し、完了したら起こす」非同期モデルにする。fiber はファイル read 中も
-ワーカーを明け渡し、他の fiber が同じワーカーで走り続けられる。
+This sub-project turns file I/O into an async model that "offloads to another
+thread, parks the fiber, and wakes it when complete". The fiber yields the worker
+even during a file read, so other fibers can keep running on the same worker.
 
-### ロードマップ上の位置
+### Position on the roadmap
 
-ユーザーの最終目標は「ファイル I/O で io_uring を使えるようにする」こと。
-io_uring は **completion モデル**（read 操作をカーネルに submit し、完了通知を
-受ける）で、現在の readiness ベース netpoller とは根本的に異なる。そこで:
+The user's ultimate goal is "to be able to use io_uring for file I/O". io_uring
+is a **completion model** (submit a read operation to the kernel and receive a
+completion notification), which is fundamentally different from the current
+readiness-based netpoller. Therefore:
 
-1. **このサブプロジェクト (PR 1)**: 非同期ファイル I/O の**抽象インターフェース**
-   を定義し、最初の実体を **thread pool バックエンド**（全 OS 共通）で実装する。
-2. **次のサブプロジェクト (PR 2)**: io_uring を **Linux でのより高速な実体**と
-   して抽象の下に差し替え追加する。macOS は thread pool のまま。
+1. **This sub-project (PR 1)**: Define the **abstract interface** for async file
+   I/O and implement the first concrete instance with a **thread pool backend**
+   (common to all OSes).
+2. **Next sub-project (PR 2)**: Add io_uring as a **faster concrete instance on
+   Linux** under the abstraction, swapping it in. macOS stays on the thread pool.
 
-抽象を先に置くことで、両 OS で「ファイル I/O が fiber をブロックしない」同じ
-挙動を先に達成し、io_uring 導入時には完成済みの park/完了プロトコルへ実体を
-差し込むだけにできる。
+By putting the abstraction in place first, we achieve the same "file I/O does not
+block the fiber" behavior on both OSes first, and when io_uring is introduced we
+only need to plug the concrete instance into the already-completed park/completion
+protocol.
 
 ## Goals
 
-- 非同期ファイル I/O の抽象 `runtime/aio.h` / `runtime/aio.c` を導入:
+- Introduce the async file I/O abstraction `runtime/aio.h` / `runtime/aio.c`:
   - `void rw_aio_read(rw_str *out, int64_t fd, int64_t max)`
   - `int64_t rw_aio_write(int64_t fd, rw_str b)`
-- 最初のバックエンドを **thread pool**（固定数の pthread + タスクキュー）で実装。
-  worker が `read(2)` / `write(2)` を実行し、完了後に呼び出し fiber を起こす。
-- `runtime/io.c` の `rw_read` / `rw_write` で `fstat(fd)` により fd 種別を判定し:
-  - **正規ファイル (`S_ISREG`)** → `rw_aio_read` / `rw_aio_write`（thread pool）
-  - **それ以外（ソケット等）** → 従来の netpoller 経路（`EAGAIN`→park、無改修）
-- fiber を park して完了で起こすのに、既存スケジューラの
-  `rw_sched_park_current()` / `rw_sched_enqueue_ready()` をそのまま使う。
-- `rw_init` / `rw_shutdown` で thread pool のライフサイクルを管理。
-- 呼び出し側（rw コード・sema・irgen）は**一切変更しない**。`read`/`write` が
-  fd 種別に応じて透過的に最適経路を選ぶ。
+- Implement the first backend with a **thread pool** (a fixed number of pthreads
+  + a task queue). Workers execute `read(2)` / `write(2)` and wake the calling
+  fiber after completion.
+- In `rw_read` / `rw_write` of `runtime/io.c`, determine the fd kind via
+  `fstat(fd)`:
+  - **Regular file (`S_ISREG`)** → `rw_aio_read` / `rw_aio_write` (thread pool)
+  - **Otherwise (sockets, etc.)** → the traditional netpoller path
+    (`EAGAIN`→park, unchanged)
+- To park the fiber and wake it on completion, use the existing scheduler's
+  `rw_sched_park_current()` / `rw_sched_enqueue_ready()` as-is.
+- Manage the thread pool lifecycle in `rw_init` / `rw_shutdown`.
+- The caller side (rw code, sema, irgen) is **not changed at all**. `read`/`write`
+  transparently choose the optimal path depending on the fd kind.
 
 ## Non-Goals
 
-- **io_uring 本体の実装** — PR 2 で行う。本 PR は抽象 + thread pool のみ。
-- ファイル I/O 以外（ソケット）の経路変更 — netpoller はそのまま。
-- `read` 以外のファイル操作（seek/stat/truncate 等）の非同期化。
-- fixed buffer / バッチ submit / ゼロコピーなど io_uring 固有の最適化。
-- thread pool のサイズ自動調整・ワークスティーリング（固定数で十分）。
-- メインスレッド（fiber 外）での非同期化 — park できないので同期 `read(2)`
-  にフォールバックする。
+- **Implementing io_uring itself** — done in PR 2. This PR is abstraction +
+  thread pool only.
+- Changing the path for anything other than file I/O (sockets) — the netpoller is
+  unchanged.
+- Making file operations other than `read` (seek/stat/truncate, etc.)
+  asynchronous.
+- io_uring-specific optimizations such as fixed buffers / batch submit /
+  zero-copy.
+- Auto-tuning the thread pool size / work stealing (a fixed number is enough).
+- Async on the main thread (outside a fiber) — since it cannot park, it falls
+  back to synchronous `read(2)`.
 
-## アーキテクチャ
+## Architecture
 
 ```
-rw_read(fd, max)  ──┐  io.c で fstat(fd) 判定
+rw_read(fd, max)  ──┐  fstat(fd) decision in io.c
 rw_write(fd, b)   ──┤
-                    ├── S_ISREG（ファイル） ──→ rw_aio_read / rw_aio_write (aio.c)
-                    │                              │ fiber 上なら:
-                    │                              │   task を submit → rw_sched_park_current()
-                    │                              │   worker が read(2) → 結果格納
+                    ├── S_ISREG (file) ──→ rw_aio_read / rw_aio_write (aio.c)
+                    │                              │ if on a fiber:
+                    │                              │   submit task → rw_sched_park_current()
+                    │                              │   worker does read(2) → store result
                     │                              │   → rw_sched_enqueue_ready(handle)
-                    │                              │ fiber 外なら: 同期 read(2)
-                    └── それ以外（socket 等） ──→ 従来の EAGAIN→rw_net_park_*（無改修）
+                    │                              │ if outside a fiber: synchronous read(2)
+                    └── otherwise (socket, etc.) ──→ traditional EAGAIN→rw_net_park_* (unchanged)
 ```
 
-### コンポーネント
+### Components
 
-**`runtime/aio.h`** — 公開インターフェース（プロトタイプは runtime.h に集約せず
-aio.h に置く。net/tcp.h と異なり aio は独立した抽象なので自前ヘッダを持つ）:
+**`runtime/aio.h`** — the public interface (prototypes are placed in aio.h rather
+than being consolidated into runtime.h; unlike net/tcp.h, aio is an independent
+abstraction, so it has its own header):
 - `void rw_aio_init(void);` / `void rw_aio_shutdown(void);`
 - `void rw_aio_read(rw_str *out, int64_t fd, int64_t max);`
 - `int64_t rw_aio_write(int64_t fd, rw_str b);`
 
-**`runtime/aio.c`** — thread pool バックエンド:
-- 固定数（既定 4、`RW_AIO_THREADS` 環境変数で上書き可）の worker pthread。
-- ロック付きタスクキュー（`pthread_mutex_t` + `pthread_cond_t`）。
-- タスク構造体: 操作種別（READ/WRITE）、fd、バッファ/サイズ、結果格納先、
-  待っている `rw_fiber_handle *`。
-- `rw_aio_read` / `rw_aio_write` の流れ（fiber 上）:
-  1. タスクを構築（結果を書き戻すスロットと自分の fiber handle を持たせる）
-  2. キューに push して condvar で worker を起こす
-  3. `rw_sched_park_current()` で park（WAITING になりワーカーを明け渡す）
-  4. worker が `read(2)`/`write(2)` を実行 → 結果をタスクのスロットに格納 →
-     `rw_sched_enqueue_ready(task->handle)` で fiber を ready に戻す
-  5. park から戻った fiber がタスクのスロットから結果を読み取り、呼び出し元へ
-- fiber 外（`rw_sched_current_fiber() == NULL`）では park できないので、その場で
-  同期 `read(2)`/`write(2)` を実行して返す（netpoller の park 同様の安全策）。
+**`runtime/aio.c`** — the thread pool backend:
+- A fixed number (default 4, overridable via the `RW_AIO_THREADS` environment
+  variable) of worker pthreads.
+- A locked task queue (`pthread_mutex_t` + `pthread_cond_t`).
+- Task struct: operation kind (READ/WRITE), fd, buffer/size, result storage
+  slot, and the waiting `rw_fiber_handle *`.
+- Flow of `rw_aio_read` / `rw_aio_write` (on a fiber):
+  1. Build the task (giving it a slot to write the result back and its own fiber
+     handle)
+  2. push to the queue and wake a worker via the condvar
+  3. `rw_sched_park_current()` to park (becomes WAITING and yields the worker)
+  4. The worker executes `read(2)`/`write(2)` → stores the result in the task's
+     slot → `rw_sched_enqueue_ready(task->handle)` to return the fiber to ready
+  5. The fiber, returning from park, reads the result from the task's slot and
+     returns it to the caller
+- Outside a fiber (`rw_sched_current_fiber() == NULL`), it cannot park, so it
+  executes a synchronous `read(2)`/`write(2)` on the spot and returns (the same
+  safety measure as the netpoller's park).
 
-**`runtime/io.c`**（変更）:
-- `rw_read` / `rw_write` の冒頭で `fstat(fd)` し、`S_ISREG` なら `rw_aio_*` に委譲。
-  それ以外は既存ロジック（ソケット向け EAGAIN+netpoller park）をそのまま実行。
-- `fstat` 失敗時は安全側で既存ロジックにフォールバック。
+**`runtime/io.c`** (changed):
+- At the start of `rw_read` / `rw_write`, `fstat(fd)`, and if `S_ISREG` delegate
+  to `rw_aio_*`. Otherwise execute the existing logic (socket-oriented
+  EAGAIN+netpoller park) as-is.
+- On `fstat` failure, fall back to the existing logic on the safe side.
 
-**`runtime/runtime.c`**（変更）:
-- `rw_init` で `rw_netpoller_init()` の隣に `rw_aio_init()`。
-- `rw_shutdown` で `rw_aio_shutdown()`（worker を止め join）。
+**`runtime/runtime.c`** (changed):
+- `rw_aio_init()` next to `rw_netpoller_init()` in `rw_init`.
+- `rw_aio_shutdown()` in `rw_shutdown` (stop and join the workers).
 
-### データフローと所有権
+### Data flow and ownership
 
-- `rw_aio_read` のバッファ: 既存 `rw_read` と同じく `out->ptr` に malloc した
-  バッファの所有権を呼び出し元へ渡す（n>0 のとき）。malloc は aio.c 側で行い、
-  worker が read 後に len を設定する。EOF/エラーは len=0 / ptr=NULL。
-- タスク構造体は呼び出し fiber のスタック上に確保し、ポインタをキューに積む。
-  fiber は完了まで park しているのでスタックは生存している（park 中も fiber の
-  スタックは保持される）。worker は完了時にスロットへ書き、handle を enqueue。
-- 結果の可視性: worker のスロット書き込みは `rw_sched_enqueue_ready` の前に行い、
-  enqueue/park 復帰の happens-before（既存 netpoller と同じ acquire/release
-  規約）に乗せる。
+- Buffer of `rw_aio_read`: as with the existing `rw_read`, transfer ownership of
+  the malloc'd buffer to the caller via `out->ptr` (when n>0). The malloc is done
+  on the aio.c side, and the worker sets len after reading. EOF/error is len=0 /
+  ptr=NULL.
+- The task struct is allocated on the calling fiber's stack, and a pointer to it
+  is pushed onto the queue. Since the fiber is parked until completion, the stack
+  is alive (the fiber's stack is retained even while parked). On completion the
+  worker writes to the slot and enqueues the handle.
+- Result visibility: the worker's slot write is done before
+  `rw_sched_enqueue_ready`, riding on the happens-before of enqueue/park-return
+  (the same acquire/release convention as the existing netpoller).
 
-## 並行性の正しさ
+## Concurrency correctness
 
-このプロトコルは既存の 2 つの「park して別スレッドが起こす」経路と**完全に
-同型**にする。実コードを確認済み（`runtime/fiber/sched.c`,
-`runtime/net/netpoller*.c`）:
+This protocol is made **completely isomorphic** to the two existing "park and let
+another thread wake" paths. The real code has been verified
+(`runtime/fiber/sched.c`, `runtime/net/netpoller*.c`):
 
-- **netpoller** (`rw_net_park_read`): `rw_netpoller_register_read(fd, h)` で
-  kqueue/epoll に登録 → `rw_sched_park_current()`。poll スレッドがイベント時に
-  `rw_sched_enqueue_ready(h)`。
-- **join** (`park_on`): `wait_lock` 内で wait list に自分を入れ `state=WAITING`
-  → 解放 → `rw_fiber_swap`。完了側 `finalize_fiber` が `state=DONE`(release) →
-  `wait_lock` で list を一括 take → 各 waiter を `enqueue_ready`。
-- **aio (本 PR)**: handle を確定 → タスクを submit → `rw_sched_park_current()`。
-  worker が `read(2)`/`write(2)` 完了後、結果をスロットに格納 →
-  `rw_sched_enqueue_ready(task->handle)`。
+- **netpoller** (`rw_net_park_read`): register on kqueue/epoll with
+  `rw_netpoller_register_read(fd, h)` → `rw_sched_park_current()`. The poll thread
+  does `rw_sched_enqueue_ready(h)` on the event.
+- **join** (`park_on`): put itself on the wait list inside `wait_lock` and set
+  `state=WAITING` → release → `rw_fiber_swap`. The completing side
+  `finalize_fiber` sets `state=DONE` (release) → takes the list en masse under
+  `wait_lock` → `enqueue_ready` for each waiter.
+- **aio (this PR)**: fix the handle → submit the task → `rw_sched_park_current()`.
+  After the worker completes `read(2)`/`write(2)`, it stores the result in the
+  slot → `rw_sched_enqueue_ready(task->handle)`.
 
-`rw_sched_enqueue_ready` は「別スレッドから安全に呼べる」と sched.h に明記され、
-`enqueue_ready` は `state=READY` にして ready キューへ push する
-(`sched.c:206`)。`rw_sched_park_current` は `state=WAITING` にして
-`rw_fiber_swap` でスケジューラへ戻る (`sched.c:339`)。worker_main は swap から
-戻った fiber を **`state==RUNNING` のときだけ** ready へ戻し、WAITING/DONE は
-戻さない (`sched.c:373`)。これが鉄則「WAITING の fiber は ready queue に居て
-はならない」を担保する。
+`rw_sched_enqueue_ready` is documented in sched.h as "safe to call from another
+thread", and `enqueue_ready` sets `state=READY` and pushes to the ready queue
+(`sched.c:206`). `rw_sched_park_current` sets `state=WAITING` and returns to the
+scheduler via `rw_fiber_swap` (`sched.c:339`). worker_main returns a fiber that
+returned from swap to ready **only when `state==RUNNING`**, and does not return
+WAITING/DONE (`sched.c:373`). This guarantees the ironclad rule "a WAITING fiber
+must not be in the ready queue".
 
-### ctx 公開タイミングの競合について
+### On the race in ctx publication timing
 
-stackful coroutine スケジューラには「`rw_sched_park_current` 内の
-`rw_fiber_swap`（ctx 保存）が完了する前に、別スレッドが `enqueue_ready` →
-別ワーカーが steal → half-written ctx を resume して PC=0 SEGV」という古典的
-競合がある（[[stackful-coroutine-scheduling]]）。
+A stackful coroutine scheduler has the classic race where "before the
+`rw_fiber_swap` (ctx save) inside `rw_sched_park_current` completes, another
+thread does `enqueue_ready` → another worker steals → resumes a half-written ctx
+→ PC=0 SEGV" ([[stackful-coroutine-scheduling]]).
 
-本 PR の aio はこの競合を**新規に持ち込まない**。理由: 上記のとおり netpoller /
-join と**同一のプロトコル**（handle 確定 → 登録/submit → park、相手スレッドは
-park 後に enqueue）を使い、独自の publish-before-save パターンを作らないから。
-worker が park より先に enqueue する可能性の有無・その安全性は、netpoller の
-register→park（登録直後に fd が ready なら poll スレッドが即 enqueue しうる）と
-**完全に同じ条件**であり、本 PR が既存コードの安全性水準を上下させることはない。
+The aio in this PR does **not newly introduce** this race. Reason: as above, it
+uses the **same protocol** as netpoller / join (fix handle → register/submit →
+park; the other thread enqueues after park) and does not create its own
+publish-before-save pattern. Whether the worker can enqueue before park, and its
+safety, is under **exactly the same conditions** as the netpoller's register→park
+(if the fd is ready right after registration, the poll thread can enqueue
+immediately), and this PR does not raise or lower the safety level of the
+existing code.
 
-したがって本 PR の責務は「netpoller と寸分違わぬ順序でプロトコルを書く」こと。
-もし将来この同型競合が顕在化するなら、それは netpoller・join・aio に共通の
-スケジューラ層の課題であり、`park.c` の `wait_lock` 相当を park_current に
-組み込む別タスクとして 3 経路まとめて対処する（本 PR のスコープ外）。
+Therefore this PR's responsibility is "to write the protocol in an order
+indistinguishable from the netpoller's". Should this isomorphic race ever
+materialize in the future, it is an issue of the scheduler layer common to
+netpoller, join, and aio, and is addressed for all three paths together as a
+separate task that builds the equivalent of `park.c`'s `wait_lock` into
+park_current (out of scope for this PR).
 
-### 検証で competition を炙り出す
+### Flush out races in verification
 
-[[stackful-coroutine-scheduling]] の検証手順に従い、複数 fiber が並行で
-ファイル I/O する e2e を **`RW_WORKERS=1` と `RW_WORKERS≥2`（steal が起きる）の
-両方**で回し、SEGV/ハングなく結果が揃うことを確認する。これは aio 経路が
-既存スケジューラと正しく協調できている証拠になる。
+Following the verification procedure of [[stackful-coroutine-scheduling]], run an
+e2e where multiple fibers do file I/O concurrently, in **both `RW_WORKERS=1` and
+`RW_WORKERS≥2` (where stealing occurs)**, and confirm that the results come out
+correctly without SEGV/hang. This is evidence that the aio path cooperates
+correctly with the existing scheduler.
 
-## 触るレイヤー
+## Layers touched
 
-| レイヤー | ファイル | 変更 |
+| Layer | File | Change |
 |---|---|---|
-| Runtime (新規) | `runtime/aio.h` / `runtime/aio.c` | 抽象 + thread pool バックエンド |
-| Runtime | `runtime/io.c` | `rw_read`/`rw_write` に `fstat` 判定を追加し、ファイルは aio に委譲 |
-| Runtime | `runtime/runtime.c` | `rw_init`/`rw_shutdown` に aio init/shutdown |
-| Runtime | `runtime/Makefile` | `aio.o` を OBJS とビルドルールに追加 |
-| Compiler | `rwc/` | **無改修**（`read`/`write` の組み込みは不変、内部経路だけ変わる） |
-| Examples | 既存 `examples/file_io.rw` で回帰確認 | 新規サンプルは任意 |
-| Tests | `tests/` | 既存 e2e（file_io / tcp）が緑のまま。並行ファイル read の e2e を 1 本追加 |
+| Runtime (new) | `runtime/aio.h` / `runtime/aio.c` | Abstraction + thread pool backend |
+| Runtime | `runtime/io.c` | Add an `fstat` decision to `rw_read`/`rw_write`, and delegate files to aio |
+| Runtime | `runtime/runtime.c` | aio init/shutdown in `rw_init`/`rw_shutdown` |
+| Runtime | `runtime/Makefile` | Add `aio.o` to OBJS and the build rules |
+| Compiler | `rwc/` | **Unchanged** (the `read`/`write` built-ins are unchanged; only the internal path changes) |
+| Examples | Regression-check with the existing `examples/file_io.rw` | A new example is optional |
+| Tests | `tests/` | The existing e2e (file_io / tcp) stays green. Add 1 e2e for concurrent file read |
 
-`rwc/` を一切触らないのが本 PR の特徴。言語仕様は変わらず、ランタイムの
-ファイル I/O 実装が同期ブロッキングから非同期オフロードに変わるだけ。
+The characteristic of this PR is that it does not touch `rwc/` at all. The
+language specification does not change; only the runtime's file I/O implementation
+changes from synchronous blocking to asynchronous offload.
 
-## 検証
+## Verification
 
 ```sh
 make -C runtime
-uv run pytest -q                       # 既存 169 + 新規が全緑
-uv run rwc run examples/file_io.rw     # round-trip が従来どおり一致
+uv run pytest -q                       # existing 169 + new all green
+uv run rwc run examples/file_io.rw     # round-trip matches as before
 ```
 
-- 回帰: `examples/file_io.rw`（round-trip）と `tests/test_e2e_tcp.py`（ソケット
-  経路が無改修で動く）が緑。
-- 非同期性の確認 (新規 e2e): 複数 fiber がそれぞれファイルを read/write する
-  rw サンプルを `spawn` で並行実行し、全 fiber の結果が正しく揃うこと。
-  thread pool 経由で正しく park/再開できている証拠になる。
-  （タイミング依存にならないよう、出力は決定的な内容にする。）
-- メインスレッド経路: fiber 外から `read`/`write` を呼ぶ既存サンプル（main 直下
-  での file_io）が同期フォールバックで動くこと（file_io.rw が該当）。
+- Regression: `examples/file_io.rw` (round-trip) and `tests/test_e2e_tcp.py` (the
+  socket path works unchanged) are green.
+- Confirming asynchrony (new e2e): run an rw example where multiple fibers each
+  read/write a file concurrently via `spawn`, and confirm that the results of all
+  fibers come out correctly. This is evidence that park/resume via the thread pool
+  works correctly. (To avoid being timing-dependent, make the output
+  deterministic content.)
+- Main thread path: an existing example that calls `read`/`write` from outside a
+  fiber (file_io directly under main) works via the synchronous fallback
+  (file_io.rw qualifies).
 
-## リスクと対処
+## Risks and mitigations
 
-- **park/enqueue の競合 (ctx 公開タイミング)**: netpoller / join と**同一
-  プロトコル**（handle 確定 → submit → `park_current`、worker は結果格納後
-  `enqueue_ready`）を厳守し、独自の publish-before-save を作らない。本 PR は
-  既存の安全性水準を変えない（上記「並行性の正しさ」参照）。実装時に
-  `RW_WORKERS≥2` + steal 負荷で SEGV/ハングがないことを必ず確認する。
-- **fiber スタック上のタスク生存**: park 中も fiber スタックは保持されるため、
-  タスクをスタックに置きポインタを渡して安全。worker は完了書き込みのみ行い、
-  タスクを free しない（呼び出し fiber が所有）。
-- **fstat のコスト**: ファイル/ソケット判定に毎回 `fstat` を 1 回呼ぶ。read 1 回
-  あたり syscall 1 増だが、ブロッキング read の代替としては無視できる。PR2 の
-  io_uring 化でも同じ判定を流用できる。
-- **メインスレッドのブロック**: fiber 外では同期 read にフォールバックするため、
-  メインスレッドは従来どおりブロックしうる（Non-Goal）。ただし netpoller 同様、
-  ワーカー M と netpoller/aio スレッドは別なので並行タスクは進む。
-- **「ついでに」誘惑**: io_uring・fixed buffer・seek 等には手を出さない
-  (Non-Goals)。本 PR は抽象 + thread pool の最小実装に閉じる。
+- **park/enqueue race (ctx publication timing)**: strictly follow the **same
+  protocol** as netpoller / join (fix handle → submit → `park_current`; the worker
+  does `enqueue_ready` after storing the result), and do not create your own
+  publish-before-save. This PR does not change the existing safety level (see
+  "Concurrency correctness" above). During implementation, always confirm there is
+  no SEGV/hang under `RW_WORKERS≥2` + steal load.
+- **Task survival on the fiber stack**: since the fiber stack is retained even
+  while parked, it is safe to place the task on the stack and pass a pointer. The
+  worker only performs the completion write and does not free the task (the calling
+  fiber owns it).
+- **Cost of fstat**: one `fstat` is called each time to decide file/socket. This is
+  1 extra syscall per read, but negligible as a replacement for a blocking read.
+  The same decision can be reused when moving to io_uring in PR2.
+- **Blocking the main thread**: outside a fiber it falls back to synchronous read,
+  so the main thread can block as before (Non-Goal). However, as with the
+  netpoller, the worker M and the netpoller/aio threads are separate, so concurrent
+  tasks make progress.
+- **The "while we're at it" temptation**: do not touch io_uring, fixed buffers,
+  seek, etc. (Non-Goals). This PR is confined to the minimal implementation of
+  abstraction + thread pool.

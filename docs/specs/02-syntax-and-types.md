@@ -1,39 +1,39 @@
-# rw 構文と型システム
+# rw Syntax and Type System
 
-## リテラルと基本型
+## Literals and primitive types
 
-| 型 | リテラル例 | LLVM 表現 |
+| Type | Literal examples | LLVM representation |
 |---|---|---|
 | `int` | `42`, `-7`, `0` | `i64` |
 | `float` | `3.14`, `-0.5` | `double` |
-| `bool` | `true`, `false` | `i1`(関数 ABI 上は `i8`) |
-| `string` | `"hello"` | `{i64 len, i8* ptr}`(不変、連結不可) |
-| `Future[T]` | リテラルなし | `i8*`(不透明) |
+| `bool` | `true`, `false` | `i1` (`i8` in the function ABI) |
+| `string` | `"hello"` | `{i64 len, i8* ptr}` (immutable, not concatenable) |
+| `Future[T]` | no literal | `i8*` (opaque) |
 
-## 演算子
+## Operators
 
-- 算術: `+ - * / %`(同じ型同士のみ)
-- 比較: `== != < <= > >=`
-- 論理: `and`, `or`, `not`
-- 条件式(三項): `then if cond else els`(最も低い優先度、右結合)
-- 代入: `=`(再代入可、ただし型は不変)
+- Arithmetic: `+ - * / %` (only between operands of the same type)
+- Comparison: `== != < <= > >=`
+- Logical: `and`, `or`, `not`
+- Conditional expression (ternary): `then if cond else els` (lowest precedence, right-associative)
+- Assignment: `=` (reassignment is allowed, but the type is fixed)
 
-### 条件式(三項演算子)
+### Conditional expression (ternary operator)
 
-Python 互換の `then if cond else els`。`cond` は `bool`、`then` と `els` は
-同じ型で、その型が式全体の型になる(暗黙の型昇格はしない)。選ばれたブランチ
-のみが評価される。
+The Python-compatible `then if cond else els`. `cond` is a `bool`; `then` and `els` must
+have the same type, which becomes the type of the whole expression (there is no implicit
+type promotion). Only the selected branch is evaluated.
 
 ```python
 larger: int = a if a > b else b
 label: string = "even" if a % 2 == 0 else "odd"
-# 右結合: a if p else (b if q else c)
+# right-associative: a if p else (b if q else c)
 sign: int = 1 if n > 0 else 0 if n == 0 else -1
 ```
 
-詳細は [`14-ternary-expr.md`](14-ternary-expr.md) を参照。
+See [`14-ternary-expr.md`](14-ternary-expr.md) for details.
 
-## 関数定義
+## Function definitions
 
 ```python
 def add(a: int, b: int) -> int:
@@ -43,14 +43,14 @@ def greet(name: string) -> void:
     print(name)
 ```
 
-- 引数と戻り値の型注釈は **必須**
-- 戻り値なしは `-> void`
-- ローカル変数も型注釈必須:
+- Type annotations on arguments and return values are **mandatory**
+- No return value is written as `-> void`
+- Local variables also require type annotations:
   ```python
   x: int = 1 + 2
   ```
 
-## 制御構文
+## Control flow
 
 ```python
 if x > 0:
@@ -64,17 +64,18 @@ while i < 10:
     i = i + 1
 ```
 
-条件で値を選ぶときは、文の `if`/`else` の代わりに条件式(三項演算子)も使える:
+When choosing a value based on a condition, you can use a conditional expression (ternary
+operator) instead of a statement-level `if`/`else`:
 
 ```python
 larger: int = a if a > b else b
 ```
 
-`for ... in range(...)` のカウントループも利用できる(詳細は
-[`13-for-range-loop.md`](13-for-range-loop.md))。`for <var> in <list>` の
-イテレータ形式は未対応。
+A `for ... in range(...)` counting loop is also available (see
+[`13-for-range-loop.md`](13-for-range-loop.md)). The `for <var> in <list>` iterator form
+is not yet supported.
 
-## 非同期構文
+## Async syntax
 
 ```python
 def fetch(n: int) -> int:
@@ -85,11 +86,11 @@ result: int = await f
 print(result)
 ```
 
-- `spawn 式` は **関数呼び出しを別スレッドで実行** し、`Future[T]` を返す
-- `await 式` は `Future[T]` を完了まで待ち `T` を取り出す
-- `spawn` の対象は **関数呼び出しのみ**(任意の式ではない)
+- `spawn expr` **runs a function call on a separate thread** and returns a `Future[T]`
+- `await expr` waits for the `Future[T]` to complete and extracts the `T`
+- The target of `spawn` must be **a function call only** (not an arbitrary expression)
 
-## main 関数
+## The main function
 
 ```python
 def main() -> int:
@@ -97,26 +98,26 @@ def main() -> int:
     return 0
 ```
 
-`main` は必須。戻り値はプロセス終了コード(`i64` → `i32` に切り詰め)。
+`main` is required. Its return value is the process exit code (`i64` truncated to `i32`).
 
-## コメント
+## Comments
 
 ```python
-# 行コメント。複数行は # を連ねる。
+# Line comment. Use consecutive # for multiple lines.
 ```
 
-## 予約語
+## Reserved words
 
 ```
 def return if elif else while and or not true false void
 spawn await Future
 int float bool string
-# 将来用に予約(MVP では構文エラー):
+# Reserved for future use (syntax error in the MVP):
 extern class import for in as None
 ```
 
-## 字句構造の注意点
+## Notes on lexical structure
 
-- インデントはスペース 4 個推奨だが、ファイル内で一貫していれば 2 でも tab でもよい
-- タブとスペースの混在は **同じブロック内で禁止**(Lexer がエラー)
-- 空行・コメント行はインデント計算から除外
+- 4 spaces of indentation is recommended, but 2 spaces or tabs are fine as long as they are consistent within the file
+- Mixing tabs and spaces **within the same block is forbidden** (the Lexer errors out)
+- Blank lines and comment-only lines are excluded from indentation computation

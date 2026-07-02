@@ -1,69 +1,74 @@
-# rw Bytes 型 (immutable, echo 最小セット)
+# rw Bytes type (immutable, minimal echo set)
 
 ## Context
 
-`docs/specs/07-string-builtins.md` で `string` の `len` / `==` / `+` を入れた。
-次に必要なのは **バイナリセーフな可変長バイト列** の表現で、これは将来の
-netpoller + TCP API で `read(fd, n)` (旧 `tcp_read`、#33 で fd 汎用に統合) の
-戻り値型として使われる。
+In `docs/specs/07-string-builtins.md` we added `len` / `==` / `+` for `string`.
+The next thing we need is a representation for **binary-safe variable-length
+byte sequences**, which will be used as the return type of `read(fd, n)`
+(formerly `tcp_read`, unified to be fd-generic in #33) in the future
+netpoller + TCP API.
 
-`string` だとダメな理由:
-- `string` は実質 immutable な `{i64 len, i8* ptr}` で、**型システム上は「文字列」**。
-  バイナリ (\0 を含む、UTF-8 でないデータ) を `string` で持つと意味論が壊れる
-- 「`print(s)` できる」「`s + s` で連結できる」前提でテキストデータが想定されている
+Why `string` won't do:
+- `string` is effectively an immutable `{i64 len, i8* ptr}`, and **in the type
+  system it is a "string."** Holding binary data (containing \0, non-UTF-8 data)
+  in a `string` breaks the semantics
+- Text data is assumed on the premise that "you can `print(s)`" and "you can
+  concatenate with `s + s`"
 
-`Bytes` を **別の型** として導入し、`string` と区別する。echo server に必要な
-最小操作 (`len`, `==`, string との相互変換) だけを今回入れる。
+We introduce `Bytes` as a **separate type**, distinct from `string`. This time
+we add only the minimal operations an echo server needs (`len`, `==`, mutual
+conversion with string).
 
-長期計画 (再掲):
+Long-term plan (restated):
 
-1. 文字列 `len` / `==` / `+` (済)
-2. **このサブプロジェクト**: Bytes 型 + 最小 API
+1. String `len` / `==` / `+` (done)
+2. **This sub-project**: Bytes type + minimal API
 3. List[T]
 4. Result[T, E] / Option[T]
 5. netpoller + TCP API
 
 ## Goals
 
-- 新しいプリミティブ型 `Bytes` を導入 (キーワード `Bytes`)
-- 組込み:
-  - `len(b: Bytes) -> int` (既存 `len(string)` をオーバーロード)
-  - `b1 == b2`, `b1 != b2` (Bytes 同士のみ、`string` と Bytes の比較は禁止)
+- Introduce a new primitive type `Bytes` (keyword `Bytes`)
+- Built-ins:
+  - `len(b: Bytes) -> int` (overloads the existing `len(string)`)
+  - `b1 == b2`, `b1 != b2` (only between Bytes; comparing `string` and Bytes is forbidden)
   - `bytes_from_str(s: string) -> Bytes`
   - `str_from_bytes(b: Bytes) -> string`
-- `Bytes` を `spawn fn() -> Bytes` の戻り値型としても使える
-  (= `Future[Bytes]` が動く)
-- 公開 ABI 不変、既存テスト緑
+- `Bytes` can also be used as the return type of `spawn fn() -> Bytes`
+  (i.e. `Future[Bytes]` works)
+- Public ABI unchanged, existing tests green
 
 ## Non-Goals
 
-- `b"..."` のような Bytes リテラル構文 (lexer 拡張が必要、後で)
-- `bytes_at(b, i)` / `bytes_slice(b, i, j)` / Bytes 連結 (`+`) — プロトコル
-  解析用、echo server には不要、別 PR
-- `print(b: Bytes)` を許可する — UTF-8 でないかもしれないデータを直接出力する
-  運用は型システムで禁止。必要なら `str_from_bytes(b)` で明示変換
-- `Bytes` と `string` の暗黙変換 / `==` の混合
+- Bytes literal syntax like `b"..."` (needs a lexer extension, later)
+- `bytes_at(b, i)` / `bytes_slice(b, i, j)` / Bytes concatenation (`+`) — for
+  protocol parsing, not needed for an echo server, a separate PR
+- Allowing `print(b: Bytes)` — directly outputting data that may not be UTF-8 is
+  forbidden by the type system. If needed, convert explicitly with
+  `str_from_bytes(b)`
+- Implicit conversion between `Bytes` and `string` / mixing them in `==`
 
-## 設計
+## Design
 
-### 内部表現
+### Internal representation
 
-LLVM IR レベルでは `Bytes` も `string` と **同じ `{i64 len, i8* ptr}` (= `RW_STR_TY`)**
-として表現する。Sema レベルで `T.STRING` と `T.BYTES` を別物として扱い、
-型混同を Sema が静的に弾く。
+At the LLVM IR level, `Bytes` is represented as the **same `{i64 len, i8* ptr}`
+(= `RW_STR_TY`) as `string`**. At the Sema level, `T.STRING` and `T.BYTES` are
+treated as distinct, and Sema statically rejects type confusion.
 
-利点:
-- ランタイムには新しい関数を 1 つも追加しなくて済む。`rw_str_len` / `rw_str_eq`
-  をそのまま流用
-- `bytes_from_str` / `str_from_bytes` は型情報だけが変わる **noop** —
-  irgen は引数の SSA 値をそのまま返す
-- `Future[Bytes]` も `rw_spawn_str` / `rw_await_str` をそのまま使える
+Benefits:
+- No new runtime function needs to be added at all. `rw_str_len` / `rw_str_eq`
+  are reused as is
+- `bytes_from_str` / `str_from_bytes` are **noops** where only the type
+  information changes — irgen returns the argument's SSA value as is
+- `Future[Bytes]` can also use `rw_spawn_str` / `rw_await_str` as is
 
-注意: 同じ表現を使う以上、**`Bytes` と `string` を取り違えると Sema が
-失敗するだけで、不正アクセスはしない**。安全性ではなく言語のクリーンさのための
-区別。
+Note: since they use the same representation, **mixing up `Bytes` and `string`
+only causes Sema to fail; it does not cause an invalid access**. The distinction
+is for language cleanliness, not for safety.
 
-### 言語レベルから見た挙動
+### Behavior seen from the language level
 
 ```rw
 def main() -> int:
@@ -76,7 +81,7 @@ def main() -> int:
     return 0
 ```
 
-エラーになるケース:
+Cases that become errors:
 
 ```rw
 def main() -> int:
@@ -88,164 +93,169 @@ def main() -> int:
     return 0
 ```
 
-### コンポーネント別の変更
+### Changes by component
 
 #### `rwc/types.py`
+
+Add
 
 ```python
 BYTES = _Primitive("Bytes")
 ```
 
-を追加。`is_printable` / `is_numeric` には**含めない**。
+Do **not** include it in `is_printable` / `is_numeric`.
 
 #### `rwc/lexer.py`
+
+Add
 
 ```python
 KW_BYTES = auto()
 ```
 
-を `TokenKind` に追加し、`KEYWORDS` に `"Bytes": TokenKind.KW_BYTES` を入れる。
-キーワード命名は大文字始まり (`Future` と同様、`int`/`string` 等の小文字
-プリミティブとは別グループ)。
+to `TokenKind`, and add `"Bytes": TokenKind.KW_BYTES` to `KEYWORDS`. The keyword
+naming starts with an uppercase letter (like `Future`, a separate group from the
+lowercase primitives such as `int`/`string`).
 
 #### `rwc/parser.py`
 
-`parse_type` の `kind_to_name` dict に `TokenKind.KW_BYTES: "Bytes"` を追加。
-1 行。
+Add `TokenKind.KW_BYTES: "Bytes"` to the `kind_to_name` dict in `parse_type`.
+One line.
 
 #### `rwc/sema.py`
 
-3 ヶ所:
+Three places:
 
-1. `_resolve_type` の dict に `"Bytes": T.BYTES` を追加。
-2. `_check_call` の `len` ハンドラを `string` または `Bytes` に拡張:
+1. Add `"Bytes": T.BYTES` to the dict in `_resolve_type`.
+2. Extend the `len` handler in `_check_call` to `string` or `Bytes`:
    ```python
    if at is not T.STRING and at is not T.BYTES:
        raise ... f"len argument must be string or Bytes, found `{at}`"
    ```
-3. `_check_call` に 2 つの新組込みを追加:
+3. Add two new built-ins to `_check_call`:
    ```python
    if call.callee == "bytes_from_str":
        # arity 1, arg is string, returns Bytes
    if call.callee == "str_from_bytes":
        # arity 1, arg is Bytes, returns string
    ```
-   どちらも `spawn bytes_from_str(...)` / `spawn str_from_bytes(...)` を
-   `print` / `len` と同様に禁止する分岐を `SpawnExpr` 経路に追加。
+   For both, add a branch on the `SpawnExpr` path that forbids
+   `spawn bytes_from_str(...)` / `spawn str_from_bytes(...)`, the same as
+   `print` / `len`.
 
-二項演算子の `==` / `!=` は既に「両辺同じ型」を要求しており、`T.BYTES ==
-T.BYTES` も自動的に通る。irgen 側で string と同じく `rw_str_eq` ルートに乗せる
-分岐を追加するだけでよい。
+The binary operators `==` / `!=` already require "both sides the same type," so
+`T.BYTES == T.BYTES` passes automatically. On the irgen side, you only need to
+add a branch that routes it through `rw_str_eq`, the same as string.
 
 #### `rwc/irgen.py`
 
-- `llvm_type_of` に Bytes を追加:
+- Add Bytes to `llvm_type_of`:
   ```python
   if t is T.BYTES:
       return RW_STR_TY
   ```
-- `_emit_binop` の `==`/`!=` 分岐で `is_str` の代わりに `is_strlike = lty in (T.STRING, T.BYTES)` を判定基準にし、`rw_str_eq` に渡す。
+- In the `==`/`!=` branch of `_emit_binop`, use `is_strlike = lty in (T.STRING, T.BYTES)` as the decision criterion instead of `is_str`, and pass it to `rw_str_eq`.
 - `_emit_call`:
-  - `len` の呼び出し: 引数が `T.STRING` でも `T.BYTES` でも `rw_str_len` を呼ぶ。Sema が既に型を検証しているので irgen 側は型に関係なく helper を呼ぶだけ。
-  - `bytes_from_str` / `str_from_bytes`: 引数の SSA 値をそのまま返す noop:
+  - The `len` call: call `rw_str_len` whether the argument is `T.STRING` or `T.BYTES`. Sema has already validated the type, so the irgen side just calls the helper regardless of type.
+  - `bytes_from_str` / `str_from_bytes`: a noop that returns the argument's SSA value as is:
     ```python
     if call.callee in ("bytes_from_str", "str_from_bytes"):
         return self._emit_expr(call.args[0], ctx)
     ```
-- `_decl_spawn` / `_decl_await` の戻り値型分岐に `T.BYTES` を追加し、`rw_spawn_str` / `rw_await_str` を返す:
+- Add `T.BYTES` to the return-type branch of `_decl_spawn` / `_decl_await`, returning `rw_spawn_str` / `rw_await_str`:
   ```python
   elif ret_ty is T.STRING or ret_ty is T.BYTES:
       name, ret_llvm = "rw_spawn_str", RW_STR_TY
   ```
 
-#### ランタイム
+#### Runtime
 
-変更なし。
+No change.
 
-### テスト
+### Tests
 
 #### `tests/test_sema.py`
 
-Positive (5 件):
-- `Bytes` 型注釈と `bytes_from_str` の戻り値推論
-- `len(Bytes)` の戻り値が int
-- `Bytes == Bytes` が bool
-- `str_from_bytes(b)` の戻り値が string
-- `spawn fn() -> Bytes` が `Future[Bytes]`
+Positive (5):
+- `Bytes` type annotation and return-value inference of `bytes_from_str`
+- `len(Bytes)` returns int
+- `Bytes == Bytes` is bool
+- `str_from_bytes(b)` returns string
+- `spawn fn() -> Bytes` is `Future[Bytes]`
 
-Negative (5 件):
-- `print(b)` で `Bytes` が printable でないエラー
-- `b + b` で `+` が Bytes を許可しないエラー
-- `b == "hi"` で `==` の型不一致エラー
-- `bytes_from_str(1)` で引数型エラー
-- `spawn bytes_from_str("a")` で組込み禁止エラー
+Negative (5):
+- `print(b)` errors because `Bytes` is not printable
+- `b + b` errors because `+` does not allow Bytes
+- `b == "hi"` errors on `==` type mismatch
+- `bytes_from_str(1)` errors on argument type
+- `spawn bytes_from_str("a")` errors on forbidden built-in
 
 #### e2e
 
-- `examples/bytes_basic.rw` (上の挙動例の通り) と `.expected` を追加
-- `tests/test_e2e.py` の parametrize に `"bytes_basic"` を追加
+- Add `examples/bytes_basic.rw` (per the behavior example above) and its `.expected`
+- Add `"bytes_basic"` to the parametrize list of `tests/test_e2e.py`
 
-ランタイム単体テスト追加は不要 (新しい C 関数なし)。
+No new runtime unit tests are needed (no new C functions).
 
-## ファイル別変更
+## Changes by file
 
-### 変更
+### Changed
 
 - `rwc/types.py` — `BYTES = _Primitive("Bytes")`
-- `rwc/lexer.py` — `KW_BYTES` 追加、`KEYWORDS` 拡張
-- `rwc/parser.py` — `parse_type` の dict 拡張
-- `rwc/sema.py` — `_resolve_type` / `_check_call` (3 組込み拡張) / SpawnExpr 禁止リスト
+- `rwc/lexer.py` — add `KW_BYTES`, extend `KEYWORDS`
+- `rwc/parser.py` — extend the dict in `parse_type`
+- `rwc/sema.py` — `_resolve_type` / `_check_call` (extend 3 built-ins) / SpawnExpr forbidden list
 - `rwc/irgen.py` — `llvm_type_of` / `_emit_binop` / `_emit_call` / `_decl_spawn` / `_decl_await`
 - `tests/test_sema.py` — positive 5 + negative 5
-- `tests/test_e2e.py` — parametrize に 1 行追加
+- `tests/test_e2e.py` — add 1 line to the parametrize list
 
-### 新規
+### New
 
 - `examples/bytes_basic.rw`
 - `examples/bytes_basic.rw.expected`
 
-### 変更なし
+### Unchanged
 
-- `runtime/` (一切手を入れない)
+- `runtime/` (not touched at all)
 - `docs/specs/05-fibers.md` / `06-scheduler-mn.md` / `07-string-builtins.md`
 
-## 検証
+## Verification
 
 ```sh
 # pytest
 uv run pytest -q
-# expected: 既存 75 件 + Sema positive 5 + negative 5 + e2e 1 = 86 件 全緑
+# expected: existing 75 + Sema positive 5 + negative 5 + e2e 1 = 86, all green
 
-# 単独実行
+# run standalone
 uv run rwc run examples/bytes_basic.rw
 
-# 既存 example 回帰
+# regression of existing examples
 uv run rwc run examples/hello.rw
 uv run rwc run examples/string_ops.rw
 uv run rwc run examples/spawn_many.rw
 
-# ランタイムには手を入れていないので C テストは前回のまま緑
+# runtime is untouched, so the C tests stay green as before
 cd runtime && make clean && make
 ```
 
-## コミット構成
+## Commit structure
 
 3 commits:
 
-1. **rwc: introduce Bytes type (lexer/parser/types)** — `T.BYTES` /
-   `KW_BYTES` / parse_type / `_resolve_type` だけ。Sema/irgen はまだなので
-   `Bytes` を使うコードは別所でエラーになるが、`b: Bytes = ...` の型
-   注釈だけは parse + resolve できる
-2. **rwc: Bytes operations in sema + irgen** — 4 つの組込み (`len`
-   オーバーロード, `bytes_from_str`, `str_from_bytes`, `==`) と spawn/await
-   の Bytes 対応。positive/negative テスト一括追加
-3. **examples + e2e** — `bytes_basic.rw` 追加、parametrize に組み込み
+1. **rwc: introduce Bytes type (lexer/parser/types)** — only `T.BYTES` /
+   `KW_BYTES` / parse_type / `_resolve_type`. Sema/irgen are not there yet, so
+   code that uses `Bytes` errors elsewhere, but the type annotation
+   `b: Bytes = ...` alone can be parsed + resolved
+2. **rwc: Bytes operations in sema + irgen** — the 4 built-ins (`len`
+   overload, `bytes_from_str`, `str_from_bytes`, `==`) and spawn/await support
+   for Bytes. Add positive/negative tests together
+3. **examples + e2e** — add `bytes_basic.rw`, wire it into the parametrize list
 
-## リスクと対処
+## Risks and remedies
 
-| リスク | 対処 |
+| Risk | Remedy |
 |---|---|
-| `Bytes` が変数名としてユーザコードに既出 | `grep -rE '\bBytes\b' examples/` で確認済み (該当なし)。新キーワードなので一般変数名と競合しても致命的でない (キーワードは予約語、ユーザは別名にする) |
-| `==` で string vs Bytes が「同表現なのに型エラー」 | 仕様通り。Bytes と string は別型、明示変換を要求する。Sema のエラーメッセージは `"\`==\` requires same type, found \`Bytes\` and \`string\`"` のような既存形 |
-| `Future[Bytes]` が `rw_spawn_str` を共有することで仮想的な型混乱が将来 | 現状の Sema は型レベルで Bytes/string を区別するので、ユーザコードから見て混乱はない。将来 Bytes の表現を変える (たとえば独自 struct 化) ことになったら `_decl_spawn` の分岐を分けるだけで対処できる |
-| `print(b)` が言語サイドで弾かれない (= irgen が落ちる) リスク | `is_printable(T.BYTES) == False` を確実に Sema レベルでテスト (negative テストでカバー) |
+| `Bytes` already appears as a variable name in user code | confirmed with `grep -rE '\bBytes\b' examples/` (no matches). As a new keyword, even if it collides with a general variable name it is not fatal (a keyword is reserved; the user picks another name) |
+| `==` gives "a type error despite the same representation" for string vs Bytes | as specified. Bytes and string are separate types and require explicit conversion. The Sema error message is an existing form like `"\`==\` requires same type, found \`Bytes\` and \`string\`"` |
+| `Future[Bytes]` sharing `rw_spawn_str` causes virtual type confusion in the future | the current Sema distinguishes Bytes/string at the type level, so there is no confusion from the user code's perspective. If we later change the representation of Bytes (e.g. make it its own struct), we can handle it by just splitting the branch in `_decl_spawn` |
+| The risk that `print(b)` is not rejected on the language side (= irgen crashes) | test `is_printable(T.BYTES) == False` reliably at the Sema level (covered by a negative test) |

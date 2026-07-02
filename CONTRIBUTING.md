@@ -1,27 +1,27 @@
 # Contributing to rw
 
-rw への貢献を検討いただきありがとうございます。本ドキュメントは、開発環境のセットアップから PR を出すまでの流れと、コーディング規約をまとめたものです。
+Thank you for considering a contribution to rw. This document walks through the flow from setting up your development environment to opening a PR, along with the coding conventions.
 
-## 1. このプロジェクトについて
+## 1. About this project
 
-rw は Python-flavored, async-first, statically-typed compiled language です。
+rw is a Python-flavored, async-first, statically-typed compiled language.
 
-- **フロントエンド**: Python 実装 (lexer / parser / sema / irgen) 。コードは `rwc/` 配下。
-- **ランタイム**: C 実装。コードは `runtime/` 配下。
-- **言語仕様の一次情報**: `docs/specs/` 以下の Markdown ドキュメントを参照してください。
+- **Frontend**: implemented in Python (lexer / parser / sema / irgen). The code lives under `rwc/`.
+- **Runtime**: implemented in C. The code lives under `runtime/`.
+- **Primary source for the language spec**: see the Markdown documents under `docs/specs/`.
 
-仕様や設計に疑問が出たら、まず `docs/specs/` を確認することをおすすめします。
+Whenever you have a question about the spec or the design, we recommend checking `docs/specs/` first.
 
-## 2. 開発環境のセットアップ
+## 2. Setting up the development environment
 
-### 必要なもの
+### Prerequisites
 
-- Python 3.11 以上
+- Python 3.11 or later
 - [uv](https://github.com/astral-sh/uv)
-- clang (C11 をサポートするもの)
+- clang (with C11 support)
 - make
 
-### 手順
+### Steps
 
 ```sh
 git clone https://github.com/ryuichi1208/rw
@@ -30,74 +30,74 @@ uv sync --extra dev
 make -C runtime
 ```
 
-`uv sync --extra dev` で開発用の Python 依存をすべて取得します。`make -C runtime` で C ランタイムをビルドします。
+`uv sync --extra dev` fetches all of the Python dependencies used for development. `make -C runtime` builds the C runtime.
 
-## 3. テスト
+## 3. Testing
 
-### Python 側
+### Python side
 
-全テストを実行する場合:
+To run the full test suite:
 
 ```sh
 uv run pytest -v
 ```
 
-単一のテストファイルだけを実行する場合:
+To run just a single test file:
 
 ```sh
 uv run pytest tests/test_irgen.py -v
 ```
 
-### C ランタイム
+### C runtime
 
 ```sh
 make -C runtime test
 ```
 
-### E2E サンプル
+### E2E samples
 
-`examples/*.rw` を `rwc` でコンパイルし、実行結果を `*.rw.expected` と比較する形で E2E テストが構成されています。新しい言語機能を追加した際は、対応するサンプルと expected ファイルを追加してください。
+The E2E tests are structured by compiling `examples/*.rw` with `rwc` and comparing the results against `*.rw.expected`. When you add a new language feature, please add the corresponding sample and expected file.
 
 ## 4. lint / format (pre-commit)
 
-本プロジェクトは [pre-commit](https://pre-commit.com/) を使ってフォーマットと lint を強制しています。
+This project enforces formatting and linting with [pre-commit](https://pre-commit.com/).
 
-初回セットアップ:
+First-time setup:
 
 ```sh
-pip install pre-commit  # または uv tool install pre-commit
+pip install pre-commit  # or: uv tool install pre-commit
 pre-commit install
 ```
 
-全ファイルに対して実行:
+Run against all files:
 
 ```sh
 pre-commit run --all-files
 ```
 
-使用しているツール:
+Tools in use:
 
 - **ruff** (lint + format)
 - **black**
 - **mypy**
 
-設定は `pyproject.toml` および `.pre-commit-config.yaml` にあります。mypy は段階的に厳格化していく方針なので、既存コードでエラーが残っていても、新規に書くコードからは型を素直に通せる形で書いてください。
+The configuration lives in `pyproject.toml` and `.pre-commit-config.yaml`. Since we plan to tighten mypy incrementally, existing code may still have outstanding errors; for any new code you write, please make sure the types pass cleanly.
 
-## 5. PR フロー
+## 5. PR flow
 
-1. feature ブランチを切ります。命名例:
+1. Create a feature branch. Naming examples:
    - `feat/issue-NN-short-desc`
    - `fix/issue-NN-short-desc`
    - `docs/issue-NN-short-desc`
-2. 変更は小さく分けてコミットしてください。
-3. PR テンプレートに従って記述し、関連 issue は `Closes #N` の形式で本文に含めます。
-4. CI が通ったらレビュー依頼を出してください。
-5. main への取り込みは **squash merge** を基本とします。
-6. リリースは [tagpr](https://github.com/Songmu/tagpr) が main への push をトリガに自動でリリース PR を生成します。リリース時は、その PR をマージするだけで OK です。
+2. Keep your changes small and split them into focused commits.
+3. Follow the PR template, and reference the related issue in the body using the `Closes #N` form.
+4. Once CI passes, request a review.
+5. Merges into main are done with **squash merge** by default.
+6. Releases are handled by [tagpr](https://github.com/Songmu/tagpr), which automatically generates a release PR triggered by pushes to main. To release, you just merge that PR.
 
-## 6. コミットメッセージ規則
+## 6. Commit message convention
 
-Conventional Commits 風 (ゆるめ) を採用しています。
+We follow a (loose) Conventional Commits style.
 
 ```
 <type>: <subject>
@@ -105,52 +105,52 @@ Conventional Commits 風 (ゆるめ) を採用しています。
 <optional body>
 ```
 
-### type の例
+### Examples of type
 
-- `feat`: 新機能
-- `fix`: バグ修正
-- `docs`: ドキュメントのみの変更
-- `chore`: 雑多な変更 (ビルド設定など)
-- `ci`: CI 設定の変更
-- `refactor`: 振る舞いを変えないリファクタ
-- `test`: テストの追加・修正
-- `perf`: パフォーマンス改善
+- `feat`: a new feature
+- `fix`: a bug fix
+- `docs`: documentation-only changes
+- `chore`: miscellaneous changes (build config, etc.)
+- `ci`: changes to CI configuration
+- `refactor`: a refactor that does not change behavior
+- `test`: adding or fixing tests
+- `perf`: a performance improvement
 
-### subject のルール
+### Rules for subject
 
-- 50 字以内
-- 命令形 (例: `add`, `fix`, `update` で始める)
-- 末尾にピリオドを付けない
+- 50 characters or fewer
+- Imperative mood (e.g. start with `add`, `fix`, `update`)
+- No trailing period
 
-本文を書く場合は 72 字目安で wrap してください。
+When you write a body, wrap it at roughly 72 characters.
 
-## 7. コーディング規約
+## 7. Coding conventions
 
 ### Python (`rwc/`)
 
-- line length は 120 文字
-- ruff + black で format。pre-commit で自動整形されます
-- 型ヒントを推奨。新規モジュールは mypy で素直に通る形で書いてください
-- import 順は ruff の `I` ルール (isort 互換) に従います
+- Line length is 120 characters
+- Format with ruff + black; pre-commit formats automatically
+- Type hints are recommended. Write new modules so they pass mypy cleanly
+- Import ordering follows ruff's `I` rule (isort-compatible)
 
 ### C (`runtime/`)
 
-- C11 を前提
-- インデントは 4-space
-- ファイル単位で既存スタイルに揃えてください
-- 公開 API は `runtime.h` に集約します
-- ファイバー / スケジューラ周りの実装は、`docs/specs/05-fibers.md` および `docs/specs/06-scheduler-mn.md` を参照してください
+- Assumes C11
+- Indentation is 4 spaces
+- Match the existing style on a per-file basis
+- Public APIs are consolidated in `runtime.h`
+- For fiber / scheduler-related implementation, see `docs/specs/05-fibers.md` and `docs/specs/06-scheduler-mn.md`
 
-## 8. ドキュメント
+## 8. Documentation
 
-- 言語仕様に関わる変更は `docs/specs/` 以下に新規 `.md` を追加するか、既存ファイルを更新してください
-- 大きな変更を入れる前には、`docs/plans/YYYY-MM-DD-<topic>.md` に設計や計画を書き、それを起点に PR を出すと議論が進めやすいです
+- For changes that touch the language spec, add a new `.md` under `docs/specs/` or update an existing file
+- Before landing a large change, write down the design or plan in `docs/plans/YYYY-MM-DD-<topic>.md` and open a PR based on it; this makes discussion easier
 
-## 9. issue を選ぶ
+## 9. Choosing an issue
 
-- `good first issue` ラベルが付いた issue は入門に向いています
-- 着手する前に issue にコメントしてアサインを依頼してください。二重作業を避けるためです
+- Issues labeled `good first issue` are a good place to get started
+- Before you begin, comment on the issue to request assignment. This avoids duplicated work
 
 ---
 
-ご質問や提案があれば、issue または PR で気軽に声をかけてください。
+If you have any questions or suggestions, feel free to reach out via an issue or a PR.

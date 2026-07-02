@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** rw 言語に新しいプリミティブ型 `Bytes` を導入し、`len(b)` / `Bytes == Bytes` / `bytes_from_str` / `str_from_bytes` の最小 4 操作と `Future[Bytes]` を動かす。
+**Goal:** Introduce a new primitive type `Bytes` into the rw language, and get the minimal 4 operations `len(b)` / `Bytes == Bytes` / `bytes_from_str` / `str_from_bytes` plus `Future[Bytes]` working.
 
-**Architecture:** LLVM IR レベルでは `Bytes` を既存 `string` と同じ `{i64 len, i8* ptr}` (= `RW_STR_TY`) として表現し、Sema 上だけで `T.BYTES` を別の型として区別する。ランタイムには新規関数を一切追加しない。
+**Architecture:** At the LLVM IR level, represent `Bytes` with the same `{i64 len, i8* ptr}` (= `RW_STR_TY`) as the existing `string`, and distinguish `T.BYTES` as a separate type only within Sema. Do not add any new runtime function.
 
-**Tech Stack:** Python 3.12 + llvmlite (コンパイラ)、pytest (テスト)、C11 (ランタイム — 今回は読むだけ)。
+**Tech Stack:** Python 3.12 + llvmlite (compiler), pytest (tests), C11 (runtime — read-only this time).
 
 **Spec:** `docs/specs/08-bytes-type.md`
 
@@ -16,59 +16,57 @@
 
 | File | Responsibility | Action |
 |---|---|---|
-| `rwc/types.py` | プリミティブ型定義 | `BYTES = _Primitive("Bytes")` 追加 |
-| `rwc/lexer.py` | キーワード認識 | `KW_BYTES` + `KEYWORDS["Bytes"]` |
-| `rwc/parser.py` | 型パース | `parse_type` の dict に 1 行 |
-| `rwc/sema.py` | 型解決 + 組込み + 演算子拡張 | 4 ヶ所修正 |
-| `rwc/irgen.py` | LLVM IR 生成 | 4 ヶ所修正 |
-| `tests/test_sema.py` | 型検査 positive/negative | テスト追加 |
-| `tests/test_e2e.py` | parametrize に bytes_basic を追加 | 1 行追加 |
-| `examples/bytes_basic.rw` | 機能デモ | 新規 |
-| `examples/bytes_basic.rw.expected` | 期待出力 | 新規 |
+| `rwc/types.py` | Primitive type definitions | Add `BYTES = _Primitive("Bytes")` |
+| `rwc/lexer.py` | Keyword recognition | `KW_BYTES` + `KEYWORDS["Bytes"]` |
+| `rwc/parser.py` | Type parsing | 1 line in the `parse_type` dict |
+| `rwc/sema.py` | Type resolution + builtins + operator extension | 4 changes |
+| `rwc/irgen.py` | LLVM IR generation | 4 changes |
+| `tests/test_sema.py` | Positive/negative type checking | Add tests |
+| `tests/test_e2e.py` | Add bytes_basic to parametrize | 1 line added |
+| `examples/bytes_basic.rw` | Feature demo | New |
+| `examples/bytes_basic.rw.expected` | Expected output | New |
 
-ランタイム (`runtime/*`) と既存 fiber 関連には一切触れない。
+Do not touch the runtime (`runtime/*`) or anything related to the existing fibers.
 
 ---
 
-## Task 1: lexer / parser / types で `Bytes` 型名を認識
+## Task 1: Recognize the `Bytes` type name in lexer / parser / types
 
-このタスクのゴールは「`b: Bytes = ...` の型注釈を parse + resolve できるようにする」だけ。`Bytes` を実際に使う組込みはまだ無いので、コード本体は Sema レベルで「`Bytes` という型はあるが、組み立てる手段はまだ無い」状態になる。
+The goal of this task is only to "make the `b: Bytes = ...` type annotation parse + resolve." Since there is no builtin that actually uses `Bytes` yet, the code ends up in a state at the Sema level where "the type `Bytes` exists, but there is still no way to construct it."
 
 **Files:**
-- Modify: `rwc/types.py` (BYTES 追加)
+- Modify: `rwc/types.py` (add BYTES)
 - Modify: `rwc/lexer.py` (KW_BYTES + KEYWORDS)
 - Modify: `rwc/parser.py` (parse_type dict)
 - Modify: `rwc/sema.py` (_resolve_type dict)
 
-- [ ] **Step 1.1: `rwc/types.py` に `BYTES` プリミティブを追加**
+- [ ] **Step 1.1: Add the `BYTES` primitive to `rwc/types.py`**
 
-`rwc/types.py` の `VOID = _Primitive("void")` の **直下** に追加:
+Add it **immediately below** `VOID = _Primitive("void")` in `rwc/types.py`:
 
 ```python
 BYTES = _Primitive("Bytes")
 ```
 
-`is_printable` / `is_numeric` には**含めない** (現状のままで OK)。
+Do **not** include it in `is_printable` / `is_numeric` (leaving them as-is is OK).
 
-- [ ] **Step 1.2: `rwc/lexer.py` に `KW_BYTES` を追加**
+- [ ] **Step 1.2: Add `KW_BYTES` to `rwc/lexer.py`**
 
-`TokenKind` enum の `KW_STRING = auto()` の **直下** に:
+Add **immediately below** `KW_STRING = auto()` in the `TokenKind` enum:
 
 ```python
     KW_BYTES = auto()
 ```
 
-を追加し、`KEYWORDS` dict の `"string": TokenKind.KW_STRING,` の **直下** に:
+and add **immediately below** `"string": TokenKind.KW_STRING,` in the `KEYWORDS` dict:
 
 ```python
     "Bytes": TokenKind.KW_BYTES,
 ```
 
-を追加。
+- [ ] **Step 1.3: Make `parse_type` in `rwc/parser.py` recognize Bytes**
 
-- [ ] **Step 1.3: `rwc/parser.py` の `parse_type` に Bytes を認識させる**
-
-`parse_type` メソッド内の `kind_to_name` dict (parser.py:154 付近) を以下に変更:
+Change the `kind_to_name` dict inside the `parse_type` method (around parser.py:154) to the following:
 
 ```python
         kind_to_name = {
@@ -81,9 +79,9 @@ BYTES = _Primitive("Bytes")
         }
 ```
 
-- [ ] **Step 1.4: `rwc/sema.py` の `_resolve_type` に Bytes を認識させる**
+- [ ] **Step 1.4: Make `_resolve_type` in `rwc/sema.py` recognize Bytes**
 
-`_resolve_type` 関数 (sema.py:39 付近) の `m` dict を以下に変更:
+Change the `m` dict in the `_resolve_type` function (around sema.py:39) to the following:
 
 ```python
         m = {
@@ -96,17 +94,17 @@ BYTES = _Primitive("Bytes")
         }
 ```
 
-- [ ] **Step 1.5: 既存テストが緑か確認**
+- [ ] **Step 1.5: Confirm existing tests are green**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: `75 passed`。
+Expected: `75 passed`.
 
-- [ ] **Step 1.6: `b: Bytes = ...` の型注釈だけが parse+resolve できることを確認するテストを追加**
+- [ ] **Step 1.6: Add a test confirming that just the `b: Bytes = ...` type annotation can parse+resolve**
 
-`tests/test_sema.py` の末尾に追加:
+Add to the end of `tests/test_sema.py`:
 
 ```python
 def test_bytes_type_annotation_parses():
@@ -137,13 +135,13 @@ def test_unknown_type_name_still_errors():
     assert "unknown type" in e.diagnostic.message
 ```
 
-- [ ] **Step 1.7: 上記テストを走らせる**
+- [ ] **Step 1.7: Run the tests above**
 
 ```sh
 uv run pytest tests/test_sema.py::test_bytes_type_annotation_parses tests/test_sema.py::test_unknown_type_name_still_errors -v 2>&1 | tail -10
 ```
 
-Expected: 両方 PASS。`takes_bytes` の引数型表現は `res.functions[...].params` の形式に依存するので、もし `params[0][1]` のアクセスで AttributeError が出るなら、既存テスト (`tests/test_sema.py` 内) で `params` の使われ方を確認して同じ形式に揃える。
+Expected: both PASS. The representation of `takes_bytes`'s parameter type depends on the format of `res.functions[...].params`, so if accessing `params[0][1]` raises an AttributeError, check how `params` is used in the existing tests (in `tests/test_sema.py`) and match that same format.
 
 - [ ] **Step 1.8: Commit**
 
@@ -170,28 +168,28 @@ EOF
 
 ---
 
-## Task 2: Sema + irgen で Bytes の操作を実装
+## Task 2: Implement Bytes operations in Sema + irgen
 
-このタスクで以下を有効化する:
+This task enables the following:
 
-- `len(b: Bytes) -> int` (既存 len オーバーロード)
+- `len(b: Bytes) -> int` (existing len overload)
 - `bytes_from_str(s: string) -> Bytes`
 - `str_from_bytes(b: Bytes) -> string`
-- `Bytes == Bytes`, `Bytes != Bytes` (既存 string `==` ルートに乗せる)
+- `Bytes == Bytes`, `Bytes != Bytes` (routed through the existing string `==` path)
 - `Future[Bytes]` (spawn / await)
 
-`Bytes + Bytes` と `print(Bytes)` は禁止のまま (Sema エラー)。
+`Bytes + Bytes` and `print(Bytes)` remain forbidden (Sema error).
 
 **Files:**
-- Modify: `rwc/sema.py` (_check_call で len 拡張 + bytes_from_str / str_from_bytes 追加、SpawnExpr 禁止リストに 2 つ追加)
+- Modify: `rwc/sema.py` (extend len in _check_call + add bytes_from_str / str_from_bytes, add 2 entries to the SpawnExpr forbidden list)
 - Modify: `rwc/irgen.py` (llvm_type_of / _decl_spawn / _decl_await / _emit_binop / _emit_call)
-- Modify: `tests/test_sema.py` (positive 5 + negative 5)
+- Modify: `tests/test_sema.py` (5 positive + 5 negative)
 
 ### Sema
 
-- [ ] **Step 2.1: Sema の `_check_call` で `len` の引数型を `string` または `Bytes` に拡張**
+- [ ] **Step 2.1: In Sema's `_check_call`, extend the argument type of `len` to `string` or `Bytes`**
 
-`sema.py:394` 付近の `if call.callee == "len":` ブロックの中で、引数型チェックを以下に変更:
+Inside the `if call.callee == "len":` block (around `sema.py:394`), change the argument type check to the following:
 
 ```python
         # Builtin: len(string) -> int.  (also len(Bytes) -> int)
@@ -210,9 +208,9 @@ EOF
             return T.INT
 ```
 
-- [ ] **Step 2.2: Sema に `bytes_from_str` と `str_from_bytes` を追加**
+- [ ] **Step 2.2: Add `bytes_from_str` and `str_from_bytes` to Sema**
 
-`sema.py` の `len` 分岐の **直下** に追加:
+Add **immediately below** the `len` branch in `sema.py`:
 
 ```python
         # Builtin: bytes_from_str(string) -> Bytes.
@@ -245,9 +243,9 @@ EOF
             return T.STRING
 ```
 
-- [ ] **Step 2.3: Sema の `SpawnExpr` 禁止リストに 2 つ追加**
+- [ ] **Step 2.3: Add 2 entries to Sema's `SpawnExpr` forbidden list**
 
-`sema.py:352` 付近の `if call.callee == "print":` / `if call.callee == "len":` ブロックの **直後** に追加:
+Add **immediately after** the `if call.callee == "print":` / `if call.callee == "len":` blocks (around `sema.py:352`):
 
 ```python
                 if call.callee == "bytes_from_str":
@@ -264,43 +262,41 @@ EOF
 
 ### irgen
 
-- [ ] **Step 2.4: irgen の `llvm_type_of` に Bytes を追加**
+- [ ] **Step 2.4: Add Bytes to `llvm_type_of` in irgen**
 
-`rwc/irgen.py:40` 付近の `llvm_type_of` 関数で、`if t is T.STRING:` の **直下** に追加:
+In the `llvm_type_of` function (around `rwc/irgen.py:40`), add **immediately below** `if t is T.STRING:`:
 
 ```python
     if t is T.BYTES:
         return RW_STR_TY
 ```
 
-- [ ] **Step 2.5: irgen の `_decl_spawn` / `_decl_await` で T.BYTES を string と同じ経路に**
+- [ ] **Step 2.5: In irgen's `_decl_spawn` / `_decl_await`, route T.BYTES through the same path as string**
 
-`rwc/irgen.py:93` 付近の `_decl_spawn` 内の `elif ret_ty is T.STRING:` を:
+Change `elif ret_ty is T.STRING:` inside `_decl_spawn` (around `rwc/irgen.py:93`) to:
 
 ```python
         elif ret_ty is T.STRING or ret_ty is T.BYTES:
             name, ret_llvm = "rw_spawn_str", RW_STR_TY
 ```
 
-に変更。`_decl_await` 内の `elif ret_ty is T.STRING:` も同様に:
+Similarly change `elif ret_ty is T.STRING:` inside `_decl_await` to:
 
 ```python
         elif ret_ty is T.STRING or ret_ty is T.BYTES:
             name, ret_llvm = "rw_await_str", RW_STR_TY
 ```
 
-に変更。
+- [ ] **Step 2.6: Extend irgen's `_emit_binop` so `==` / `!=` can handle Bytes**
 
-- [ ] **Step 2.6: irgen の `_emit_binop` で `==` / `!=` が Bytes を扱えるよう拡張**
-
-`rwc/irgen.py:340` 付近の `_emit_binop` 内、`is_str = lty is T.STRING` を以下に変更:
+Inside `_emit_binop` (around `rwc/irgen.py:340`), change `is_str = lty is T.STRING` to the following:
 
 ```python
         is_str = lty is T.STRING
         is_strlike = lty is T.STRING or lty is T.BYTES
 ```
 
-そして `_emit_binop` 内の `elif is_str and op in ("==", "!="):` ブロック (irgen.py 内、xor で `!=` を反転している箇所) の条件を `is_str` から `is_strlike` に変更:
+Then change the condition of the `elif is_str and op in ("==", "!="):` block inside `_emit_binop` (in irgen.py, where `!=` is flipped with xor) from `is_str` to `is_strlike`:
 
 ```python
             elif is_strlike and op in ("==", "!="):
@@ -310,13 +306,13 @@ EOF
                     i1 = b.xor(i1, ir.Constant(ir.IntType(1), 1))
 ```
 
-`+` の string 分岐 (`if is_str and op == "+":`) は **そのまま** で OK (= Bytes には連結が無いので、`is_str` のままで Bytes は素通り = arith op 経路で型エラー、最終的に `raise RuntimeError(f"arith op {op} on {lty}")` に落ちる)。だがそれは irgen が落ちるのでまずい — **Sema で Bytes + Bytes を弾く必要がある**。これは Step 2.2 までで `_check_expr` の `+` ハンドラを通った時点で「両辺同型なら BinOp 一般のチェックに進む → string 特例 → numeric チェック (Bytes は is_numeric=False) → "operator + requires int or float" エラー」で弾かれるはず。要確認 (Step 2.10 の negative テストで)。
+The string branch of `+` (`if is_str and op == "+":`) is **left as-is** and that's OK (= since Bytes has no concatenation, with `is_str` unchanged Bytes falls straight through = a type error on the arith op path, ultimately landing in `raise RuntimeError(f"arith op {op} on {lty}")`). But that is bad because irgen crashes — **Bytes + Bytes must be rejected in Sema**. Up through Step 2.2, once it passes through the `+` handler of `_check_expr`, it should be rejected via "if both sides are the same type, proceed to the general BinOp check → string special case → numeric check (Bytes has is_numeric=False) → 'operator + requires int or float' error." Needs verification (in the negative test of Step 2.10).
 
-- [ ] **Step 2.7: irgen の `_emit_call` で `len`, `bytes_from_str`, `str_from_bytes` を扱う**
+- [ ] **Step 2.7: Handle `len`, `bytes_from_str`, `str_from_bytes` in irgen's `_emit_call`**
 
-`rwc/irgen.py:386` 付近の `if call.callee == "len":` ブロックは **そのまま** で OK (= 引数の SSA 値を `rw_str_len` に渡すだけ、引数の Sema 型が string でも Bytes でも IR レベルでは同じ `RW_STR_TY`)。
+The `if call.callee == "len":` block (around `rwc/irgen.py:386`) is **left as-is** and that's OK (= it just passes the argument's SSA value to `rw_str_len`; whether the argument's Sema type is string or Bytes, at the IR level it is the same `RW_STR_TY`).
 
-`len` 分岐の **直下** に追加:
+Add **immediately below** the `len` branch:
 
 ```python
         if call.callee in ("bytes_from_str", "str_from_bytes"):
@@ -325,11 +321,11 @@ EOF
             return self._emit_expr(call.args[0], ctx)
 ```
 
-### テスト
+### Tests
 
-- [ ] **Step 2.8: Positive テストを追加**
+- [ ] **Step 2.8: Add positive tests**
 
-`tests/test_sema.py` の末尾に追加:
+Add to the end of `tests/test_sema.py`:
 
 ```python
 def test_bytes_from_str_returns_bytes():
@@ -386,9 +382,9 @@ def test_future_bytes_ok():
     check(src)
 ```
 
-- [ ] **Step 2.9: Negative テストを追加**
+- [ ] **Step 2.9: Add negative tests**
 
-`tests/test_sema.py` の末尾に続けて追加:
+Continue adding to the end of `tests/test_sema.py`:
 
 ```python
 def test_print_bytes_is_type_error():
@@ -448,17 +444,17 @@ def test_cannot_spawn_bytes_from_str():
     assert "cannot spawn the builtin `bytes_from_str`" in e.diagnostic.message
 ```
 
-- [ ] **Step 2.10: Sema テスト全件を走らせる**
+- [ ] **Step 2.10: Run the full Sema test suite**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest tests/test_sema.py -v 2>&1 | tail -30
 ```
 
-Expected: 既存 27 + Task 1 で追加した 2 + ここで追加した positive 5 + negative 5 = 39 件全部 PASS。
+Expected: existing 27 + 2 added in Task 1 + 5 positive added here + 5 negative = all 39 PASS.
 
-`test_bytes_plus_bytes_is_type_error` で `+` のエラーが期待通り出るかは特に重要。`is_numeric(T.BYTES) == False` で `"operator + requires int or float"` メッセージが出るはず。出ない場合は `_check_expr` の BinOp 分岐 (`sema.py:298` 付近) を読み直して、Bytes が予想外のルートを通っていないか確認する。
+Whether `test_bytes_plus_bytes_is_type_error` produces the `+` error as expected is especially important. With `is_numeric(T.BYTES) == False`, the `"operator + requires int or float"` message should appear. If it does not, re-read the BinOp branch of `_check_expr` (around `sema.py:298`) and check whether Bytes is taking an unexpected route.
 
-- [ ] **Step 2.11: 単独で IR 生成 + 実行で smoke check**
+- [ ] **Step 2.11: Standalone IR generation + execution smoke check**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
@@ -477,7 +473,7 @@ echo "---"
 uv run rwc run /tmp/bytes_smoke.rw
 ```
 
-Expected: IR に `rw_str_len`, `rw_str_eq` の `call` が出る。実行結果:
+Expected: the IR contains `call`s to `rw_str_len` and `rw_str_eq`. Execution result:
 
 ```
 5
@@ -526,11 +522,11 @@ EOF
 **Files:**
 - Create: `examples/bytes_basic.rw`
 - Create: `examples/bytes_basic.rw.expected`
-- Modify: `tests/test_e2e.py` (parametrize に bytes_basic を追加)
+- Modify: `tests/test_e2e.py` (add bytes_basic to parametrize)
 
-- [ ] **Step 3.1: `examples/bytes_basic.rw` を書く**
+- [ ] **Step 3.1: Write `examples/bytes_basic.rw`**
 
-ファイル `examples/bytes_basic.rw`:
+File `examples/bytes_basic.rw`:
 
 ```rw
 def main() -> int:
@@ -543,9 +539,9 @@ def main() -> int:
     return 0
 ```
 
-- [ ] **Step 3.2: `examples/bytes_basic.rw.expected` を書く**
+- [ ] **Step 3.2: Write `examples/bytes_basic.rw.expected`**
 
-ファイル `examples/bytes_basic.rw.expected`:
+File `examples/bytes_basic.rw.expected`:
 
 ```
 5
@@ -553,42 +549,40 @@ eq ok
 hello
 ```
 
-(末尾改行ありで保存。)
+(Save with a trailing newline.)
 
-- [ ] **Step 3.3: 手元で実行して期待出力と一致するか確認**
+- [ ] **Step 3.3: Run it locally and confirm it matches the expected output**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
 diff <(RW_WORKERS=1 uv run rwc run examples/bytes_basic.rw 2>&1) examples/bytes_basic.rw.expected && echo OK
 ```
 
-Expected: `OK` だけが表示される (diff 出力なし)。
+Expected: only `OK` is printed (no diff output).
 
-- [ ] **Step 3.4: `tests/test_e2e.py` の parametrize に `bytes_basic` を追加**
+- [ ] **Step 3.4: Add `bytes_basic` to the parametrize in `tests/test_e2e.py`**
 
-`tests/test_e2e.py:45` の以下の行:
+Change the following line at `tests/test_e2e.py:45`:
 
 ```python
     ["hello", "arith", "fib", "while_count", "spawn_basic", "spawn_many", "spawn_string", "string_ops"],
 ```
 
-を:
+to:
 
 ```python
     ["hello", "arith", "fib", "while_count", "spawn_basic", "spawn_many", "spawn_string", "string_ops", "bytes_basic"],
 ```
 
-に変更。
-
-- [ ] **Step 3.5: 全 pytest を走らせる**
+- [ ] **Step 3.5: Run the full pytest suite**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: 既存 75 + Task 1 sema 新規 2 + Task 2 sema 新規 10 + Task 3 e2e 新規 1 = **88 件** 全緑。
+Expected: 75 existing + 2 new sema (Task 1) + 10 new sema (Task 2) + 1 new e2e (Task 3) = **88 tests** all green.
 
-- [ ] **Step 3.6: 既存 example を回帰確認**
+- [ ] **Step 3.6: Regression-check the existing examples**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
@@ -609,9 +603,9 @@ neq ok
 30
 ```
 
-- [ ] **Step 3.7: ランタイム単体テストも緑か確認**
+- [ ] **Step 3.7: Confirm the runtime unit tests are also green**
 
-ランタイムには手を入れていないが、念のため:
+The runtime is untouched, but just to be safe:
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime
@@ -620,7 +614,7 @@ cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_sched.c librw.a 
 cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_str_ops.c librw.a -o fiber/test_str_ops && ./fiber/test_str_ops
 ```
 
-Expected: `total = 333833500` / `all str_ops tests passed`。
+Expected: `total = 333833500` / `all str_ops tests passed`.
 
 - [ ] **Step 3.8: Commit**
 
@@ -651,31 +645,31 @@ EOF
 
 ### Spec coverage
 
-| Spec 要求 | カバーするタスク |
+| Spec requirement | Covering task |
 |---|---|
-| プリミティブ型 Bytes (キーワード `Bytes`) | Task 1.1, 1.2, 1.3, 1.4 |
-| 内部表現は string と共通 (`RW_STR_TY`) | Task 2.4 (llvm_type_of) |
-| `len(b: Bytes) -> int` | Task 2.1 (sema), 2.7 (irgen 既存ルート流用) + test 2.8 + 2.10 |
+| Primitive type Bytes (keyword `Bytes`) | Task 1.1, 1.2, 1.3, 1.4 |
+| Internal representation shared with string (`RW_STR_TY`) | Task 2.4 (llvm_type_of) |
+| `len(b: Bytes) -> int` | Task 2.1 (sema), 2.7 (irgen reuses the existing route) + test 2.8 + 2.10 |
 | `Bytes == Bytes`, `Bytes != Bytes` | Task 2.6 (irgen is_strlike) + test 2.8 + 2.10 |
 | `bytes_from_str(s: string) -> Bytes` | Task 2.2 (sema), 2.7 (irgen noop) + test 2.8, 2.9 |
 | `str_from_bytes(b: Bytes) -> string` | Task 2.2 (sema), 2.7 (irgen noop) + test 2.8 |
-| `Future[Bytes]` で spawn/await | Task 2.5 + test `test_future_bytes_ok` (2.8) |
-| `Bytes + Bytes` は禁止 | sema 既存ルートで自動的に numeric チェックに落ちる + test `test_bytes_plus_bytes_is_type_error` (2.9) |
-| `print(Bytes)` は禁止 | `is_printable` を変えないことで自動的に弾かれる + test `test_print_bytes_is_type_error` (2.9) |
-| Bytes と string の混合 `==` 禁止 | sema 既存「same type」チェックで自動 + test `test_bytes_eq_string_is_type_error` (2.9) |
-| `spawn bytes_from_str(...)` 禁止 | Task 2.3 + test `test_cannot_spawn_bytes_from_str` (2.9) |
-| ランタイムには手を入れない | Task 3.7 で C テスト緑を確認 |
-| 既存テスト緑 | Task 3.5 (pytest 全件) + Task 3.6 (example 回帰) |
+| spawn/await via `Future[Bytes]` | Task 2.5 + test `test_future_bytes_ok` (2.8) |
+| `Bytes + Bytes` forbidden | Automatically falls into the numeric check via the existing sema route + test `test_bytes_plus_bytes_is_type_error` (2.9) |
+| `print(Bytes)` forbidden | Automatically rejected by not changing `is_printable` + test `test_print_bytes_is_type_error` (2.9) |
+| Mixed `==` between Bytes and string forbidden | Automatic via the existing sema "same type" check + test `test_bytes_eq_string_is_type_error` (2.9) |
+| `spawn bytes_from_str(...)` forbidden | Task 2.3 + test `test_cannot_spawn_bytes_from_str` (2.9) |
+| Do not touch the runtime | Confirmed by green C tests in Task 3.7 |
+| Existing tests green | Task 3.5 (full pytest) + Task 3.6 (example regression) |
 
-すべての spec 要求にタスクが割り当てられている。
+Every spec requirement is assigned to a task.
 
-### Placeholder スキャン
+### Placeholder scan
 
-「TBD」「TODO」「(要確認)」「fill in」「Add appropriate」「Similar to Task N」は plan 内 0 件。Step 2.6 末尾の「要確認 (Step 2.10 の negative テストで)」は **検証手段が plan に明示されている** ので placeholder ではない (= 同じ commit 内で test を書いて確認するという指示)。
+"TBD", "TODO", "(to verify)", "fill in", "Add appropriate", and "Similar to Task N" appear 0 times in the plan. The "needs verification (in the negative test of Step 2.10)" note at the end of Step 2.6 is **not** a placeholder, because the means of verification is explicitly stated in the plan (i.e., the instruction is to write and confirm the test within the same commit).
 
 ### Type consistency
 
-- `T.BYTES` の名前は Task 1.1, 1.4, 2.1, 2.2, 2.4, 2.5, 2.6, 2.7 で完全一致
-- LLVM 表現は `RW_STR_TY` で Task 2.4, 2.5 で揃っている
-- 組込み関数名: `bytes_from_str` / `str_from_bytes` / `len` で Task 2 全体で揃っている
-- ランタイム呼び出し: `rw_str_len` / `rw_str_eq` / `rw_spawn_str` / `rw_await_str` を新規追加なしで流用 (irgen 既存定義をそのまま呼ぶ)
+- The name `T.BYTES` matches exactly across Tasks 1.1, 1.4, 2.1, 2.2, 2.4, 2.5, 2.6, 2.7
+- The LLVM representation is `RW_STR_TY`, consistent across Tasks 2.4 and 2.5
+- Builtin function names: `bytes_from_str` / `str_from_bytes` / `len` are consistent throughout Task 2
+- Runtime calls: `rw_str_len` / `rw_str_eq` / `rw_spawn_str` / `rw_await_str` are reused with no new additions (irgen calls the existing definitions as-is)
