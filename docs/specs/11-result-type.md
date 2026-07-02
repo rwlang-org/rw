@@ -1,70 +1,75 @@
-# rw Result[int, int] 型 + match の Ok/Err 拡張
+# rw Result[int, int] type + Ok/Err extension of match
 
 ## Context
 
-`Option[int]` (#94) で **タグ付き共用体 + パターンマッチ** という言語機能の
-土台ができた。Result はその次に置くべきもう 1 つの sum 型で、典型的な
-「成功または失敗の理由付きエラー」を表現する標準形になる。
+With `Option[int]` (#94), the foundation of the language feature **tagged union
++ pattern matching** is in place. Result is the other sum type that should come
+next, and it becomes the standard form for expressing the typical "success, or
+failure with a reason for the error."
 
-`incremental-language-extensions` skill の鉄則「ジェネリクスは 2 度目に
-必要になった時」を厳密に適用するなら、Option (1 度目) + Result (2 度目)
-で **真のジェネリクスを入れるタイミング** とも言える。しかし真のジェネリクス
-化は `parse_match` を sema 経由にする大改造を含み、1 PR の範囲を超える。
+If we strictly apply the `incremental-language-extensions` skill's iron rule
+"generics when you need them the second time," then Option (first time) + Result
+(second time) could also be **the timing to introduce true generics**. However,
+going truly generic includes a large overhaul that routes `parse_match` through
+sema, which goes beyond the scope of a single PR.
 
-そこで本サブプロジェクトは **依然モノモーフを維持**しつつ、match parser
-だけは「Some/None ペア」か「Ok/Err ペア」のどちらかを 1 つ目のアームで
-判別する形に拡張する。真のジェネリクス化は別 PR (4c) で行う。
+So this sub-project **still keeps things monomorphic** while extending only the
+match parser to determine, from its first arm, whether it is a "Some/None pair"
+or an "Ok/Err pair." Going truly generic is done in a separate PR (4c).
 
-ロードマップ:
+Roadmap:
 
-1. 文字列 `len` / `==` / `+` (#91)
-2. Bytes 型 (#92)
+1. String `len` / `==` / `+` (#91)
+2. Bytes type (#92)
 3. List[int] (#93)
 4a. Option[int] + match (#94)
-4b. **このサブプロジェクト**: Result[int, int] + match Ok/Err
-4c. (将来) 真のジェネリクス化
-5. (将来) netpoller + TCP API
+4b. **this sub-project**: Result[int, int] + match Ok/Err
+4c. (future) true generics
+5. (future) netpoller + TCP API
 
 ## Goals
 
-- 新しいプリミティブ型 `Result[int, int]` を導入 (parser は `[int, int]` 以外
-  を拒否)
-- 値構築: `Ok(int) -> Result[int, int]`、`Err(int) -> Result[int, int]`
-- 値分解: 既存 `match` 文を「Some/None ペア」または「Ok/Err ペア」の
-  どちらか 2 アームに拡張 (ペア混在は parser エラー)
-- `MatchStmt` AST に `style: "option" | "result"` フィールドを足し、Sema /
-  irgen が style 別に分岐
-- 公開 ABI 既存部分は不変、既存テスト緑
+- Introduce a new primitive type `Result[int, int]` (the parser rejects
+  anything other than `[int, int]`)
+- Value construction: `Ok(int) -> Result[int, int]`, `Err(int) -> Result[int, int]`
+- Value deconstruction: extend the existing `match` statement to a 2-arm form
+  that is either a "Some/None pair" or an "Ok/Err pair" (mixing the pairs is a
+  parser error)
+- Add a `style: "option" | "result"` field to the `MatchStmt` AST, and have
+  Sema / irgen branch by style
+- The existing public ABI stays unchanged, existing tests green
 
 ## Non-Goals
 
-- 汎用ジェネリック (`Result[T, E]` の T/E が int 以外): parser で
-  「only `Result[int, int]` is supported」エラー
-- `Result[T, E]` の真のジェネリクス化 (別 PR、4c)
-- match を式として使う (`x = match v: ...`): match は statement のみ
-- ネストパターン (`Ok(Some(x))`)、ガード (`case Ok(x) if x > 0`)、
-  ワイルドカード (`case _`)
-- `?` 演算子 (early-return)
-- match のアーム順序: Some/None は順不同のままにしているので Ok/Err も
-  順不同
-- `Future[Result[int, int]]` (spawn 経由): Sema で禁止
-- `Result` 用の組込みメソッド (`unwrap`, `is_ok`, `or_else`)
-- `Option[int]` <-> `Result[int, int]` の相互変換組込み
-- `print(r: Result[int, int])` (printable リストに加えない)
-- `r1 == r2` (== whitelist に加えない)
-- `div_checked` 等の組込み helper (Result を返す関数は **rw 言語側でユーザ
-  コードとして書ける** ので、example で書いて済ます)
+- Full generics (T/E of `Result[T, E]` other than int): a "only
+  `Result[int, int]` is supported" error in the parser
+- Going truly generic with `Result[T, E]` (separate PR, 4c)
+- Using match as an expression (`x = match v: ...`): match is a statement only
+- Nested patterns (`Ok(Some(x))`), guards (`case Ok(x) if x > 0`), wildcards
+  (`case _`)
+- The `?` operator (early-return)
+- match arm order: since Some/None remain order-independent, Ok/Err are also
+  order-independent
+- `Future[Result[int, int]]` (via spawn): forbidden in Sema
+- Built-in methods for `Result` (`unwrap`, `is_ok`, `or_else`)
+- Conversion built-ins between `Option[int]` <-> `Result[int, int]`
+- `print(r: Result[int, int])` (not added to the printable list)
+- `r1 == r2` (not added to the == whitelist)
+- Built-in helpers such as `div_checked` (a function that returns Result **can
+  be written as user code on the rw language side**, so we get by writing it in
+  an example)
 
-## 設計
+## Design
 
-### 内部表現
+### Internal representation
 
-`Result[int, int]` は `Option[int]` と **同じ 2 ワード fat struct** で表現:
+`Result[int, int]` is represented by the **same 2-word fat struct as
+`Option[int]`**:
 
 ```c
 typedef struct {
     int64_t tag;       /* 0 = Err, 1 = Ok */
-    int64_t payload;   /* Ok のとき成功値、Err のときエラー値 */
+    int64_t payload;   /* the success value when Ok, the error value when Err */
 } rw_result_int_int;
 ```
 
@@ -74,30 +79,31 @@ LLVM IR:
 %rw_result_int_int = { i64 tag, i64 payload }
 ```
 
-サイズ 16 バイト → arm64 / x86_64 SysV 両方で 2 レジスタで return できる
-(pointer-out ABI 不要、`llvm-ir-c-abi` skill 参照)。
+Size 16 bytes → it can be returned in 2 registers on both arm64 and x86_64 SysV
+(no pointer-out ABI needed; see the `llvm-ir-c-abi` skill).
 
-実は **Option[int] と LLVM struct の形は完全一致**しているが、Sema レベルで
-別の型 (`T.OPTION_INT` vs `T.RESULT_INT_INT`) として区別する。Bytes と
-string が同じ `RW_STR_TY` を共有するのと同じパターン。
+In fact **the LLVM struct shape is exactly identical to Option[int]**, but at
+the Sema level we distinguish them as different types (`T.OPTION_INT` vs
+`T.RESULT_INT_INT`). This is the same pattern as Bytes and string sharing the
+same `RW_STR_TY`.
 
-タグ値の意味付け:
+Meaning of the tag values:
 
-| tag | 意味 |
+| tag | meaning |
 |---|---|
-| 0 | Err (失敗) |
-| 1 | Ok (成功) |
+| 0 | Err (failure) |
+| 1 | Ok (success) |
 
-Option との対応関係:
+Correspondence with Option:
 - `Option.None` (tag=0) ↔ `Result.Err` (tag=0)
 - `Option.Some` (tag=1) ↔ `Result.Ok` (tag=1)
 
-これは将来 Option → Result の cast を 0-cost にする余地のためだが、本 PR
-では cast は実装しない (Non-Goal)。
+This leaves room to make a future Option → Result cast 0-cost, but this PR does
+not implement the cast (Non-Goal).
 
-### 言語レベルの挙動
+### Language-level behavior
 
-#### 値構築と分解
+#### Value construction and deconstruction
 
 ```rw
 def div_checked(a: int, b: int) -> Result[int, int]:
@@ -122,23 +128,23 @@ def main() -> int:
     return 0
 ```
 
-#### match parser の挙動
+#### Behavior of the match parser
 
-`parse_match` は 1 つ目のアームを見て **style を決定する**:
+`parse_match` looks at the first arm and **decides the style**:
 
-- 1 つ目が `case Some(x):` か `case None:` → Option-style
-- 1 つ目が `case Ok(x):` か `case Err(e):` → Result-style
+- first is `case Some(x):` or `case None:` → Option-style
+- first is `case Ok(x):` or `case Err(e):` → Result-style
 
-2 つ目のアームは同じ style のもう一方であることを要求する:
-- Option-style で 1 つ目が Some → 2 つ目は None を要求
-- Option-style で 1 つ目が None → 2 つ目は Some を要求
-- Result-style で 1 つ目が Ok → 2 つ目は Err を要求
-- Result-style で 1 つ目が Err → 2 つ目は Ok を要求
+The second arm is required to be the other one of the same style:
+- Option-style with first Some → second requires None
+- Option-style with first None → second requires Some
+- Result-style with first Ok → second requires Err
+- Result-style with first Err → second requires Ok
 
-混在 (`case Some(x): ... case Err(e):`) は parser エラー
-「expected `case None` (Option-style match)」のような明示メッセージで弾く。
+Mixing (`case Some(x): ... case Err(e):`) is rejected as a parser error with an
+explicit message like "expected `case None` (Option-style match)".
 
-#### エラーになるケース
+#### Cases that become errors
 
 ```rw
 def main() -> int:
@@ -162,12 +168,13 @@ def main() -> int:
     return 0
 ```
 
-### コンポーネント別の変更
+### Changes by component
 
-#### ランタイム
+#### Runtime
 
-**変更なし**。`Result[int, int]` は LLVM IR 内 (`insertvalue` + 定数 struct)
-で完結。`div_checked` は example のユーザコードとして書く、組込みではない。
+**No change**. `Result[int, int]` completes inside LLVM IR (`insertvalue` +
+constant struct). `div_checked` is written as user code in an example; it is not
+a built-in.
 
 #### `rwc/types.py`
 
@@ -175,11 +182,11 @@ def main() -> int:
 RESULT_INT_INT = _Primitive("Result[int, int]")
 ```
 
-`is_printable` / `is_numeric` には含めない。
+Do not include it in `is_printable` / `is_numeric`.
 
 #### `rwc/lexer.py`
 
-新キーワード 3 つ:
+3 new keywords:
 
 ```python
 KW_RESULT = auto()
@@ -198,9 +205,9 @@ KEYWORDS = {
 
 #### `rwc/parser.py`
 
-##### `parse_type` で `Result[int, int]` を受ける
+##### Accept `Result[int, int]` in `parse_type`
 
-`Option` 分岐の隣に追加:
+Add next to the `Option` branch:
 
 ```python
 if t.kind == TokenKind.KW_RESULT:
@@ -225,9 +232,9 @@ if t.kind == TokenKind.KW_RESULT:
     return A.TypeName("Result[int, int]", t.line, t.col)
 ```
 
-##### 式パーサで `Ok(e)` / `Err(e)` を受ける
+##### Accept `Ok(e)` / `Err(e)` in the expression parser
 
-`parse_unary` の `KW_SOME` / `KW_NONE` の直下に追加:
+Add directly below `KW_SOME` / `KW_NONE` in `parse_unary`:
 
 ```python
 if t.kind == TokenKind.KW_OK:
@@ -244,9 +251,9 @@ if t.kind == TokenKind.KW_ERR:
     return A.ErrExpr(arg, t.line, t.col)
 ```
 
-##### `parse_match` の拡張
+##### Extending `parse_match`
 
-現状の `parse_match` を以下の構造に置き換える:
+Replace the current `parse_match` with the following structure:
 
 ```python
 def parse_match(self) -> A.MatchStmt:
@@ -319,7 +326,7 @@ def parse_match(self) -> A.MatchStmt:
 
 #### `rwc/ast_nodes.py`
 
-新規式ノード:
+New expression nodes:
 
 ```python
 @dataclass
@@ -335,9 +342,9 @@ class ErrExpr:
     col: int
 ```
 
-`Expr` Union に追加。
+Add to the `Expr` Union.
 
-`MatchStmt` を style 統合形に拡張:
+Extend `MatchStmt` to a style-unified form:
 
 ```python
 @dataclass
@@ -357,14 +364,14 @@ class MatchStmt:
     col: int
 ```
 
-style に応じて Option-style フィールドが埋まる/Result-style フィールドが
-埋まる排他関係。
+An exclusive relationship in which either the Option-style fields are filled or
+the Result-style fields are filled, depending on the style.
 
 #### `rwc/sema.py`
 
-`_resolve_type` の dict に `"Result[int, int]": T.RESULT_INT_INT` を追加。
+Add `"Result[int, int]": T.RESULT_INT_INT` to the dict in `_resolve_type`.
 
-`_check_expr` で `OkExpr` / `ErrExpr` を扱う:
+Handle `OkExpr` / `ErrExpr` in `_check_expr`:
 
 ```python
 if isinstance(expr, A.OkExpr):
@@ -379,7 +386,7 @@ if isinstance(expr, A.ErrExpr):
     return T.RESULT_INT_INT
 ```
 
-`_check_stmt` の `MatchStmt` を style 別に分岐:
+Branch the `MatchStmt` in `_check_stmt` by style:
 
 ```python
 if isinstance(stmt, A.MatchStmt):
@@ -404,10 +411,11 @@ if isinstance(stmt, A.MatchStmt):
         return ok_ret and err_ret
 ```
 
-`==` whitelist に `T.RESULT_INT_INT` を加えない (= 比較不可、既存パターン)。
-`Spawn` 禁止リストは特に追加なし (`Ok` / `Err` は組込みではなく式ノード
-なので、`spawn Ok(1)` のような構文は parser が `Ok(1)` を Call ではなく
-OkExpr として解釈するため、SpawnExpr の `Call` 制約で自動的に弾かれる)。
+Do not add `T.RESULT_INT_INT` to the `==` whitelist (= comparison not allowed,
+existing pattern). No addition is needed for the `Spawn` forbidden list (`Ok` /
+`Err` are not built-ins but expression nodes, so a syntax like `spawn Ok(1)` is
+interpreted by the parser as an OkExpr rather than a Call, and is automatically
+rejected by the `Call` constraint of SpawnExpr).
 
 #### `rwc/irgen.py`
 
@@ -415,7 +423,7 @@ OkExpr として解釈するため、SpawnExpr の `Call` 制約で自動的に�
 RW_RESULT_INT_INT_TY = ir.LiteralStructType([I64, I64])
 ```
 
-(`RW_OPTION_INT_TY` と同形だが、可読性のため別エイリアス。)
+(Same shape as `RW_OPTION_INT_TY`, but a separate alias for readability.)
 
 `llvm_type_of(T.RESULT_INT_INT) -> RW_RESULT_INT_INT_TY`
 
@@ -434,7 +442,7 @@ if isinstance(expr, A.ErrExpr):
     return ctx.builder.insert_value(base, v, 1)
 ```
 
-`_emit_stmt` の `MatchStmt`:
+`MatchStmt` in `_emit_stmt`:
 
 ```python
 if isinstance(stmt, A.MatchStmt):
@@ -462,9 +470,9 @@ if isinstance(stmt, A.MatchStmt):
     return
 ```
 
-`_emit_arm` は payload を bound 変数の slot に store して block を emit、
-end_bb に branch する helper (Option の None arm のような bound 変数なし
-ケースは `var is None` で分岐):
+`_emit_arm` is a helper that stores the payload into the bound variable's slot,
+emits the block, and branches to end_bb (a case with no bound variable, like
+Option's None arm, is branched on `var is None`):
 
 ```python
 def _emit_arm(self, var, block, payload, ctx, end_bb):
@@ -485,29 +493,30 @@ def _emit_arm(self, var, block, payload, ctx, end_bb):
         b.branch(end_bb)
 ```
 
-これで Option / Result どちらの match も同じ lowering ロジックを共有する。
+With this, both the Option and Result match share the same lowering logic.
 
-### テスト
+### Tests
 
 #### `tests/test_sema.py` (positive 6 + negative 6)
 
 Positive:
-- `Ok(5)` が `Result[int, int]`
-- `Err(0)` が `Result[int, int]`
-- `def f() -> Result[int, int]: return Ok(1)` が通る
-- `match` の Ok/Err 両アームが揃った形が通る
-- Ok arm の bound `x` が int、Err arm の bound `e` も int として使える
-- Result の match が return-coverage を満たす (両 arm が return → match 全体
-  が return)
+- `Ok(5)` is `Result[int, int]`
+- `Err(0)` is `Result[int, int]`
+- `def f() -> Result[int, int]: return Ok(1)` passes
+- A form with both Ok/Err arms of `match` present passes
+- The bound `x` of the Ok arm is usable as int, and the bound `e` of the Err arm
+  is usable as int too
+- The Result match satisfies return-coverage (both arms return → the whole match
+  returns)
 
 Negative:
-- `Ok("hi")` → 引数型エラー
-- `Result[string, int]` → parser エラー
-- `match` で Some + Err 混在 → parser エラー
-- `match` で 1 つ目 Ok / 2 つ目 None → parser エラー
-- `print(Ok(1))` → printable エラー
-- `Ok(1) == Err(0)` → 比較不可エラー
-- `Ok(1) == Some(1)` → 同型ではないので別エラー (おまけ)
+- `Ok("hi")` → argument type error
+- `Result[string, int]` → parser error
+- Mixing Some + Err in `match` → parser error
+- First Ok / second None in `match` → parser error
+- `print(Ok(1))` → printable error
+- `Ok(1) == Err(0)` → comparison-not-allowed error
+- `Ok(1) == Some(1)` → a different error since they are not the same type (bonus)
 
 #### `examples/result_basic.rw` + `.expected`
 
@@ -533,85 +542,86 @@ def main() -> int:
     return 0
 ```
 
-期待出力:
+Expected output:
 
 ```
 5
 0
 ```
 
-## ファイル別変更
+## Changes by file
 
-### 変更
+### Changed
 
-- `rwc/types.py` — `RESULT_INT_INT` プリミティブ
-- `rwc/lexer.py` — `KW_RESULT` / `KW_OK` / `KW_ERR` キーワード
-- `rwc/parser.py` — `parse_type` の Result 分岐、`Ok(e)`/`Err(e)` 式、
-  `parse_match` を style 統合形に拡張
-- `rwc/ast_nodes.py` — `OkExpr` / `ErrExpr` を Expr Union に追加、`MatchStmt`
-  を style 統合形に拡張
-- `rwc/sema.py` — `_resolve_type` / `OkExpr`/`ErrExpr` の Sema /
-  `MatchStmt` の style 別 Sema
-- `rwc/irgen.py` — `RW_RESULT_INT_INT_TY` / `Ok`/`Err` の irgen /
-  `_emit_match` を style 別に分岐 (共通 helper `_emit_arm`)
+- `rwc/types.py` — the `RESULT_INT_INT` primitive
+- `rwc/lexer.py` — the `KW_RESULT` / `KW_OK` / `KW_ERR` keywords
+- `rwc/parser.py` — the Result branch in `parse_type`, the `Ok(e)`/`Err(e)`
+  expressions, extending `parse_match` to a style-unified form
+- `rwc/ast_nodes.py` — add `OkExpr` / `ErrExpr` to the Expr Union, extend
+  `MatchStmt` to a style-unified form
+- `rwc/sema.py` — `_resolve_type` / Sema for `OkExpr`/`ErrExpr` / per-style Sema
+  for `MatchStmt`
+- `rwc/irgen.py` — `RW_RESULT_INT_INT_TY` / irgen for `Ok`/`Err` / branch
+  `_emit_match` by style (shared helper `_emit_arm`)
 - `tests/test_sema.py` — positive 6 + negative 7
-- `tests/test_e2e.py` — parametrize に `result_basic`
+- `tests/test_e2e.py` — `result_basic` in the parametrize
 
-### 新規
+### New
 
 - `examples/result_basic.rw` + `.expected`
-- `docs/specs/11-result-type.md` (本ファイル)
-- `docs/plans/2026-05-23-result-type.md` (writing-plans で作成)
+- `docs/specs/11-result-type.md` (this file)
+- `docs/plans/2026-05-23-result-type.md` (created with writing-plans)
 
-### 変更なし
+### Unchanged
 
-- ランタイム (`runtime/*`)
-- fiber スケジューラ
-- 既存 spec docs
+- runtime (`runtime/*`)
+- fiber scheduler
+- existing spec docs
 
-## 検証
+## Verification
 
 ```sh
 # pytest
 uv run pytest -q
-# 期待: 既存 115 + sema positive 6 + negative 7 + e2e 1 = 129 件全緑
+# expected: existing 115 + sema positive 6 + negative 7 + e2e 1 = 129 all green
 
-# 単独実行
+# standalone run
 uv run rwc run examples/result_basic.rw
-# 期待出力: 5\n0\n
+# expected output: 5\n0\n
 
-# 既存 example 回帰
+# existing example regression
 uv run rwc run examples/option_basic.rw
 uv run rwc run examples/list_basic.rw
 uv run rwc run examples/string_ops.rw
 uv run rwc run examples/spawn_many.rw
 
-# ランタイム単体テストはランタイム変更なしのため触らない (回帰のみ)
+# runtime unit tests are untouched since there is no runtime change (regression only)
 make -C runtime clean && make -C runtime
 ```
 
-## コミット構成
+## Commit structure
 
 4 commits:
 
-1. **rwc (lexer/parser/types/ast)**: `KW_RESULT/OK/ERR`、`parse_type` の
-   Result 分岐、`Ok(e)`/`Err(e)` 式、`OkExpr`/`ErrExpr` AST ノード、
-   `MatchStmt` を style 統合形に拡張、`parse_match` 全面書き直し、
-   `T.RESULT_INT_INT`、`_resolve_type`。型注釈と AST だけ通る
-2. **rwc (sema)**: `OkExpr`/`ErrExpr` の Sema、`MatchStmt` の style 別 Sema、
-   既存 Option パスが影響を受けないことを確認、negative テスト一括
-3. **rwc (irgen)**: `RW_RESULT_INT_INT_TY`、`Ok`/`Err` の irgen、
-   `_emit_match` を `_emit_arm` 経由で style 別に分岐、smoke 動作確認
-4. **examples + e2e**: `result_basic.rw` 追加、`tests/test_e2e.py` の
-   parametrize 更新
+1. **rwc (lexer/parser/types/ast)**: `KW_RESULT/OK/ERR`, the Result branch in
+   `parse_type`, the `Ok(e)`/`Err(e)` expressions, the `OkExpr`/`ErrExpr` AST
+   nodes, extending `MatchStmt` to a style-unified form, a full rewrite of
+   `parse_match`, `T.RESULT_INT_INT`, `_resolve_type`. Only the type annotation
+   and AST pass
+2. **rwc (sema)**: Sema for `OkExpr`/`ErrExpr`, per-style Sema for `MatchStmt`,
+   confirming the existing Option path is unaffected, negative tests in one batch
+3. **rwc (irgen)**: `RW_RESULT_INT_INT_TY`, irgen for `Ok`/`Err`, branch
+   `_emit_match` per style via `_emit_arm`, smoke verification
+4. **examples + e2e**: add `result_basic.rw`, update the parametrize in
+   `tests/test_e2e.py`
 
-## リスクと対処
+## Risks and mitigations
 
-| リスク | 対処 |
+| Risk | Mitigation |
 |---|---|
-| `MatchStmt` の AST 拡張で既存 Option-style コードが壊れる | `style` フィールドのデフォルトは要らない (parser が必ず set する)。既存 `examples/option_basic.rw` を e2e に残してあるので回帰検出可能 |
-| `parse_match` の全面書き直しで既存テストが落ちる | 既存テスト (`test_match_two_arms_ok` 等) を変更せずに通るよう、Option-style の挙動を保つことを Step ごとに確認 |
-| match parser 内の duplicate 検出 (同じ arm 2 回) を維持する | spec の `parse_match` スケルトンに duplicate-check の TODO を入れず、コード内で `if some_block is not None: raise duplicate error` のような既存パターンを踏襲 |
-| `Ok`/`Err` を変数名としてユーザコードに使っているケース | `grep -rE '\b(Ok\|Err)\b' examples/ tests/*.rw` で確認 (該当なし)。Some/None と同じく新キーワードとして導入 |
-| Option と Result の LLVM struct が同形なので irgen バグで型混同 | Sema が必ず先に弾く + 名前付き alias `RW_RESULT_INT_INT_TY` で可読性を担保。実害はないが「混同が怖いから別 alias」というのは妥当 |
-| 真のジェネリクスへの道筋が見えるか | `MatchStmt` の `style` フィールドは generalize するとき「constructor name list」に置き換えやすい。Sema の style 分岐は型 dispatch table 化できる。 4c での generalize に対する障害は少ない |
+| The AST extension of `MatchStmt` breaks existing Option-style code | No default is needed for the `style` field (the parser always sets it). Since the existing `examples/option_basic.rw` is kept in e2e, regressions are detectable |
+| The full rewrite of `parse_match` drops existing tests | Confirm step by step that the Option-style behavior is preserved so that existing tests (`test_match_two_arms_ok` etc.) pass without changes |
+| Preserving the duplicate detection inside the match parser (the same arm twice) | Do not put a duplicate-check TODO into the `parse_match` skeleton in the spec; follow the existing pattern like `if some_block is not None: raise duplicate error` in the code |
+| Cases where `Ok`/`Err` are used as variable names in user code | Confirmed with `grep -rE '\b(Ok\|Err)\b' examples/ tests/*.rw` (no hits). Introduce them as new keywords, the same as Some/None |
+| Since the Option and Result LLVM structs have the same shape, an irgen bug could confuse the types | Sema always rejects first + the named alias `RW_RESULT_INT_INT_TY` ensures readability. There is no actual harm, but "a separate alias because confusion is scary" is reasonable |
+| Whether a path toward true generics is visible | The `style` field of `MatchStmt` is easy to replace with a "constructor name list" when generalizing. The style branch in Sema can be turned into a type dispatch table. There are few obstacles to the generalization in 4c |

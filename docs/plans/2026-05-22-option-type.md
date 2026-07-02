@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** rw 言語に `Option[int]` 型と最小 `match` 文 (Python 3.10 風) を追加し、`safe_div(10, 0)` のような関数が `None` を返して `match` で分解できるコードを動かす。あわせて `list_at_opt(l, i) -> Option[int]` をランタイムに追加して、範囲外を `abort` でなく `None` で返せるようにする。
+**Goal:** Add an `Option[int]` type and a minimal `match` statement (Python 3.10 style) to the rw language, so that code where a function like `safe_div(10, 0)` returns `None` and is destructured with `match` can run. Also add `list_at_opt(l, i) -> Option[int]` to the runtime so that out-of-range access returns `None` instead of `abort`.
 
-**Architecture:** `Option[int]` は 2 ワード fat struct `{i64 tag, i64 payload}` (tag=1 = Some, 0 = None) として LLVM IR で表現。サイズ 16 バイトなので arm64 / x86_64 SysV どちらもレジスタで返せる (pointer-out ABI 不要)。新キーワード `Option` / `match` / `case` / `Some` / `None` を導入、parser は `match` を statement として 2 アーム必須でパースし、irgen は `switch` 命令で lowering する。
+**Architecture:** `Option[int]` is represented in LLVM IR as a two-word fat struct `{i64 tag, i64 payload}` (tag=1 = Some, 0 = None). At 16 bytes it can be returned in registers on both arm64 and x86_64 SysV (no pointer-out ABI needed). Introduce the new keywords `Option` / `match` / `case` / `Some` / `None`; the parser parses `match` as a statement requiring exactly two arms, and irgen lowers it with a `switch` instruction.
 
-**Tech Stack:** C11 (ランタイム)、Python 3.12 + llvmlite (コンパイラ)、pytest (テスト)。
+**Tech Stack:** C11 (runtime), Python 3.12 + llvmlite (compiler), pytest (tests).
 
 **Spec:** `docs/specs/10-option-type.md`
 
@@ -16,48 +16,48 @@
 
 | File | Responsibility | Action |
 |---|---|---|
-| `runtime/runtime.h` | ABI 宣言 | `rw_option_int` struct + `rw_list_int_at_opt` プロトタイプ |
-| `runtime/runtime.c` | helper 実装 | `rw_list_int_at_opt` 追加 |
-| `runtime/fiber/test_option.c` | C 単体テスト | 新規 |
-| `.gitignore` | テストバイナリ | 1 行追加 |
-| `rwc/types.py` | プリミティブ型定義 | `OPTION_INT` 追加 |
-| `rwc/lexer.py` | キーワード認識 | `KW_OPTION` / `KW_MATCH` / `KW_CASE` / `KW_SOME` / `KW_NONE` |
-| `rwc/parser.py` | 型 + 式 + 文のパース | `parse_type` の Option 分岐、Some/None 式、match 文 |
-| `rwc/ast_nodes.py` | AST ノード | `SomeExpr` / `NoneExpr` / `MatchStmt` 追加 |
-| `rwc/sema.py` | 型解決 + 式/文 Sema + return coverage | 4 ヶ所修正 |
-| `rwc/irgen.py` | LLVM IR 生成 | `RW_OPTION_INT_TY` / Some/None/match の emit |
-| `tests/test_sema.py` | 型検査 positive/negative | テスト追加 |
-| `tests/test_e2e.py` | parametrize に option_basic | 1 行追加 |
-| `examples/option_basic.rw` | デモ | 新規 |
-| `examples/option_basic.rw.expected` | 期待出力 | 新規 |
+| `runtime/runtime.h` | ABI declarations | `rw_option_int` struct + `rw_list_int_at_opt` prototype |
+| `runtime/runtime.c` | helper implementation | Add `rw_list_int_at_opt` |
+| `runtime/fiber/test_option.c` | C unit test | New |
+| `.gitignore` | test binary | Add 1 line |
+| `rwc/types.py` | primitive type definitions | Add `OPTION_INT` |
+| `rwc/lexer.py` | keyword recognition | `KW_OPTION` / `KW_MATCH` / `KW_CASE` / `KW_SOME` / `KW_NONE` |
+| `rwc/parser.py` | type + expression + statement parsing | Option branch in `parse_type`, Some/None expressions, match statement |
+| `rwc/ast_nodes.py` | AST nodes | Add `SomeExpr` / `NoneExpr` / `MatchStmt` |
+| `rwc/sema.py` | type resolution + expression/statement Sema + return coverage | 4 modifications |
+| `rwc/irgen.py` | LLVM IR generation | Emit `RW_OPTION_INT_TY` / Some/None/match |
+| `tests/test_sema.py` | positive/negative type checks | Add tests |
+| `tests/test_e2e.py` | add option_basic to parametrize | Add 1 line |
+| `examples/option_basic.rw` | demo | New |
+| `examples/option_basic.rw.expected` | expected output | New |
 
 ---
 
-## Task 1: lexer / parser / types / AST で `Option[int]` 構文を認識
+## Task 1: Recognize `Option[int]` syntax in lexer / parser / types / AST
 
-このタスクのゴールは、`Option[int]` の型注釈、`Some(e)` / `None` の式、`match v: case Some(x): ... case None: ...` の文が **AST まで構築できる** こと。Sema / irgen は未実装のままで、`Some` を実際に評価しようとするとエラーになる。
+The goal of this task is to make the `Option[int]` type annotation, the `Some(e)` / `None` expressions, and the `match v: case Some(x): ... case None: ...` statement **buildable all the way to the AST**. Sema / irgen remain unimplemented, so actually trying to evaluate `Some` will error.
 
 **Files:**
 - Modify: `rwc/types.py`
 - Modify: `rwc/lexer.py`
 - Modify: `rwc/ast_nodes.py`
 - Modify: `rwc/parser.py`
-- Modify: `rwc/sema.py` (`_resolve_type` だけ)
+- Modify: `rwc/sema.py` (`_resolve_type` only)
 - Modify: `tests/test_sema.py`
 
-- [ ] **Step 1.1: `rwc/types.py` に `OPTION_INT` を追加**
+- [ ] **Step 1.1: Add `OPTION_INT` to `rwc/types.py`**
 
-`rwc/types.py` で `LIST_INT = _Primitive("List[int]")` の **直下** に追加:
+In `rwc/types.py`, add **directly below** `LIST_INT = _Primitive("List[int]")`:
 
 ```python
 OPTION_INT = _Primitive("Option[int]")
 ```
 
-`is_printable` / `is_numeric` には**含めない**。
+**Do not include** it in `is_printable` / `is_numeric`.
 
-- [ ] **Step 1.2: `rwc/lexer.py` に 5 つのキーワードを追加**
+- [ ] **Step 1.2: Add 5 keywords to `rwc/lexer.py`**
 
-`TokenKind` enum の `KW_LIST = auto()` の **直下** に:
+**Directly below** `KW_LIST = auto()` in the `TokenKind` enum:
 
 ```python
     KW_OPTION = auto()
@@ -67,7 +67,7 @@ OPTION_INT = _Primitive("Option[int]")
     KW_NONE = auto()
 ```
 
-`KEYWORDS` dict の `"List": TokenKind.KW_LIST,` の **直下** に:
+**Directly below** `"List": TokenKind.KW_LIST,` in the `KEYWORDS` dict:
 
 ```python
     "Option": TokenKind.KW_OPTION,
@@ -77,9 +77,9 @@ OPTION_INT = _Primitive("Option[int]")
     "None":   TokenKind.KW_NONE,
 ```
 
-- [ ] **Step 1.3: `rwc/ast_nodes.py` に新ノードを追加**
+- [ ] **Step 1.3: Add the new nodes to `rwc/ast_nodes.py`**
 
-`ast_nodes.py` を Read してファイル末尾の構造を確認 (`SpawnExpr` / `AwaitExpr` の定義場所を探す)。それらの **直後** に追加:
+Read `ast_nodes.py` and check the structure at the end of the file (locate where `SpawnExpr` / `AwaitExpr` are defined). Add **directly after** them:
 
 ```python
 @dataclass
@@ -100,14 +100,14 @@ class MatchStmt(Stmt):
     none_block: List[Stmt]
 ```
 
-`SomeExpr` / `NoneExpr` は `Expr` を継承、`MatchStmt` は `Stmt` を継承する。
-継承クラス名と既存 `Stmt`/`Expr` のフィールド (line, col 等の dataclass field
-があるか) を Read で確認し、必要なら `line: int = 0`, `col: int = 0` を加える。
-**Read で見たフォーマットに合わせる**。
+`SomeExpr` / `NoneExpr` inherit from `Expr`, and `MatchStmt` inherits from `Stmt`.
+Use Read to check the base class names and the fields of the existing `Stmt`/`Expr`
+(whether there are dataclass fields such as line, col), and add `line: int = 0`, `col: int = 0`
+if needed. **Match the format you saw with Read**.
 
-- [ ] **Step 1.4: `rwc/parser.py` の `parse_type` に Option 分岐**
+- [ ] **Step 1.4: Add an Option branch to `parse_type` in `rwc/parser.py`**
 
-`parse_type` メソッド内、`List` 分岐の **直下** に追加:
+In the `parse_type` method, add **directly below** the `List` branch:
 
 ```python
         if t.kind == TokenKind.KW_OPTION:
@@ -124,11 +124,11 @@ class MatchStmt(Stmt):
             return A.TypeName("Option[int]", t.line, t.col)
 ```
 
-- [ ] **Step 1.5: `parser.py` で `Some(e)` と `None` を式として受ける**
+- [ ] **Step 1.5: Accept `Some(e)` and `None` as expressions in `parser.py`**
 
-primary expression を扱う場所 (リテラル / IDENT / `spawn` / `await` などを
-処理しているメソッド) を Read で特定する。探す目印: `KW_TRUE` / `KW_FALSE` /
-`KW_SPAWN` / `KW_AWAIT` の分岐。同じレベルに追加する形:
+Use Read to locate where primary expressions are handled (the method that
+processes literals / IDENT / `spawn` / `await`, etc.). Landmarks to look for: the
+`KW_TRUE` / `KW_FALSE` / `KW_SPAWN` / `KW_AWAIT` branches. Add at the same level:
 
 ```python
         if t.kind == TokenKind.KW_SOME:
@@ -144,20 +144,20 @@ primary expression を扱う場所 (リテラル / IDENT / `spawn` / `await` な
             return A.NoneExpr(line=kw.line, col=kw.col)
 ```
 
-`A.SomeExpr` / `A.NoneExpr` のコンストラクタが `line`/`col` を引数で受けるか
-は Step 1.3 で決めた dataclass の形に依存する。`SpawnExpr` の生成方法と
-揃える。
+Whether the `A.SomeExpr` / `A.NoneExpr` constructors take `line`/`col` as arguments
+depends on the dataclass shape decided in Step 1.3. Match how `SpawnExpr` is
+constructed.
 
-- [ ] **Step 1.6: `parser.py` の `parse_stmt` に `match` 分岐**
+- [ ] **Step 1.6: Add a `match` branch to `parse_stmt` in `parser.py`**
 
-`parse_stmt` メソッド (parser.py:207 付近) の `if t.kind == TokenKind.KW_RETURN:` / `KW_IF:` / `KW_WHILE:` と同レベルに追加:
+Add at the same level as `if t.kind == TokenKind.KW_RETURN:` / `KW_IF:` / `KW_WHILE:` in the `parse_stmt` method (around parser.py:207):
 
 ```python
         if t.kind == TokenKind.KW_MATCH:
             return self._parse_match()
 ```
 
-`_parse_match` メソッドを `parser.py` の `_parse_while` のすぐ後に追加:
+Add the `_parse_match` method right after `_parse_while` in `parser.py`:
 
 ```python
     def _parse_match(self) -> A.MatchStmt:
@@ -229,14 +229,14 @@ primary expression を扱う場所 (リテラル / IDENT / `spawn` / `await` な
         )
 ```
 
-実際に rw の lexer が NEWLINE / INDENT / DEDENT をどう生成するか (parser が
-`if` や `while` を読むときと同じシーケンスか) は parser.py:236-280 (`_parse_if`
-/ `_parse_while`) を Read して合わせる。**この plan のスケルトンを必ず
-既存 `_parse_if` のシーケンスに揃える**。
+How the rw lexer actually generates NEWLINE / INDENT / DEDENT (whether it is the
+same sequence as when the parser reads `if` or `while`) should be matched by
+reading parser.py:236-280 (`_parse_if` / `_parse_while`). **Be sure to align
+this plan's skeleton with the existing `_parse_if` sequence**.
 
-- [ ] **Step 1.7: `rwc/sema.py` の `_resolve_type` に `Option[int]` を追加**
+- [ ] **Step 1.7: Add `Option[int]` to `_resolve_type` in `rwc/sema.py`**
 
-`_resolve_type` 関数の `m` dict に 1 行追加:
+Add 1 line to the `m` dict in the `_resolve_type` function:
 
 ```python
         m = {
@@ -251,19 +251,19 @@ primary expression を扱う場所 (リテラル / IDENT / `spawn` / `await` な
         }
 ```
 
-- [ ] **Step 1.8: ビルドと既存テスト緑を確認**
+- [ ] **Step 1.8: Confirm the build and existing tests are green**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: `101 passed`。Sema / irgen が新 AST を扱わないので、`Some(1)` を
-**実際に使う** コードは Sema で fall through するが、まだそういうコードは
-書いてない。
+Expected: `101 passed`. Since Sema / irgen do not handle the new AST, code that
+**actually uses** `Some(1)` will fall through in Sema, but no such code has been
+written yet.
 
-- [ ] **Step 1.9: 型注釈と match だけ parse 通るテスト**
+- [ ] **Step 1.9: Tests that only parse the type annotation and match**
 
-`tests/test_sema.py` の末尾に追加:
+Add to the end of `tests/test_sema.py`:
 
 ```python
 def test_option_int_type_annotation_parses():
@@ -311,17 +311,17 @@ def test_match_with_missing_arm_is_parser_error():
     assert "must cover both" in str(ei.value)
 ```
 
-- [ ] **Step 1.10: pytest を走らせる**
+- [ ] **Step 1.10: Run pytest**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest tests/test_sema.py -q 2>&1 | tail -5
 ```
 
-Expected: 既存 38 + 新規 3 = `41 passed`。`test_match_with_missing_arm` で
-ParserError を期待しているが、parser が match の中で `Some(x)` の式 (= まだ
-Sema 未実装) を許容する場合、別経路でエラーになる可能性がある。その場合は
-代わりに `parse(tokenize(...))` で `ParserError` を期待するように形を
-合わせる。
+Expected: existing 38 + 3 new = `41 passed`. `test_match_with_missing_arm`
+expects a ParserError, but if the parser accepts a `Some(x)` expression inside
+match (which Sema does not yet handle), the error may come from a different path.
+In that case, adjust the shape to instead expect a `ParserError` from
+`parse(tokenize(...))`.
 
 - [ ] **Step 1.11: Commit**
 
@@ -353,21 +353,21 @@ EOF
 
 ---
 
-## Task 2: Sema で `Some` / `None` / `MatchStmt` を型検査
+## Task 2: Type-check `Some` / `None` / `MatchStmt` in Sema
 
-このタスクで Sema が新 AST を理解する。`Some(e)` の引数型、`MatchStmt` の
-ターゲット型と bound 変数のスコープ、両 arm が return しているかの判定
-(return-coverage) を実装する。
+In this task Sema learns to understand the new AST. Implement the argument type
+of `Some(e)`, the target type and bound-variable scope of `MatchStmt`, and the
+determination of whether both arms return (return-coverage).
 
 **Files:**
 - Modify: `rwc/sema.py`
 - Modify: `tests/test_sema.py`
 
-- [ ] **Step 2.1: Sema の `_check_expr` で `SomeExpr` / `NoneExpr` を扱う**
+- [ ] **Step 2.1: Handle `SomeExpr` / `NoneExpr` in Sema's `_check_expr`**
 
-`rwc/sema.py` の `_check_expr` メソッド (sema.py:298 付近、`isinstance(expr,
-A.BinOp)` の分岐があるあたり) を Read。`isinstance(expr, A.SpawnExpr)` の
-**直下** に追加:
+Read the `_check_expr` method in `rwc/sema.py` (around sema.py:298, near the
+`isinstance(expr, A.BinOp)` branch). Add **directly below**
+`isinstance(expr, A.SpawnExpr)`:
 
 ```python
         if isinstance(expr, A.SomeExpr):
@@ -382,12 +382,12 @@ A.BinOp)` の分岐があるあたり) を Read。`isinstance(expr, A.SpawnExpr)
             return T.OPTION_INT
 ```
 
-`expr.line` / `expr.col` のフィールド名は Step 1.3 の AST 定義に合わせる。
+Match the `expr.line` / `expr.col` field names to the AST definition from Step 1.3.
 
-- [ ] **Step 2.2: Sema の `_check_stmt` で `MatchStmt` を扱う**
+- [ ] **Step 2.2: Handle `MatchStmt` in Sema's `_check_stmt`**
 
-`rwc/sema.py:153` 付近の `_check_stmt` メソッドを Read。`if isinstance(stmt,
-A.WhileStmt):` の **直下** に追加:
+Read the `_check_stmt` method around `rwc/sema.py:153`. Add **directly below**
+`if isinstance(stmt, A.WhileStmt):`:
 
 ```python
         if isinstance(stmt, A.MatchStmt):
@@ -407,13 +407,13 @@ A.WhileStmt):` の **直下** に追加:
             return some_ret and none_ret
 ```
 
-`_check_block` の戻り値は「block の末尾に到達せず return で抜けたら True」と
-いう既存パターン。`if/elif/else` (sema.py:230 付近) で `then_ret` /
-`else_ret` を使っている形に揃える。
+The return value of `_check_block` follows the existing convention: it is True
+when the block exits via a `return` before reaching its end. Align this with how
+`then_ret` / `else_ret` are used in `if/elif/else` (around sema.py:230).
 
-- [ ] **Step 2.3: Positive テストを追加**
+- [ ] **Step 2.3: Add positive tests**
 
-`tests/test_sema.py` の末尾に追加:
+Add to the end of `tests/test_sema.py`:
 
 ```python
 # ---- Option[int] positive cases ----
@@ -498,9 +498,9 @@ def test_match_terminates_via_both_arms_return():
     check(src)
 ```
 
-- [ ] **Step 2.4: Negative テストを追加**
+- [ ] **Step 2.4: Add negative tests**
 
-`tests/test_sema.py` に続けて追加:
+Continue adding to `tests/test_sema.py`:
 
 ```python
 # ---- Option[int] negative cases ----
@@ -555,27 +555,27 @@ def test_option_eq_is_type_error():
     assert "compare" in e.diagnostic.message or "==" in e.diagnostic.message
 ```
 
-- [ ] **Step 2.5: pytest を走らせる**
+- [ ] **Step 2.5: Run pytest**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest tests/test_sema.py -q 2>&1 | tail -5
 ```
 
-Expected: 既存 41 + positive 6 + negative 4 = `51 passed`。
-`test_match_terminates_via_both_arms_return` は return-coverage が match の
-両 arm を見る実装が必要。失敗するなら Step 2.2 の `_check_stmt` の戻り値
-ロジックを再確認。
+Expected: existing 41 + 6 positive + 4 negative = `51 passed`.
+`test_match_terminates_via_both_arms_return` requires the return-coverage
+implementation to look at both arms of the match. If it fails, re-check the
+return-value logic of `_check_stmt` in Step 2.2.
 
-`test_print_option` のメッセージは現状の Sema が「print does not support
-`Option[int]`」を返す前提。実際の文字列が違ったら assert を緩める。
+The message in `test_print_option` assumes the current Sema returns "print does
+not support `Option[int]`". If the actual string differs, loosen the assert.
 
-- [ ] **Step 2.6: 既存テスト一式も緑か**
+- [ ] **Step 2.6: Confirm the full existing test suite is also green**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: 既存 101 + Task 1 で 3 + Task 2 で 10 = `114 passed`。
+Expected: existing 101 + 3 from Task 1 + 10 from Task 2 = `114 passed`.
 
 - [ ] **Step 2.7: Commit**
 
@@ -610,24 +610,24 @@ EOF
 
 ---
 
-## Task 3: ランタイム + irgen を実装し、Option 値が実行できるようにする
+## Task 3: Implement the runtime + irgen so Option values can run
 
-このタスクで Some / None / match / list_at_opt の IR を出せるようになる。
-ここで初めて rw コードが実際に Option を扱って動く。
+This task makes it possible to emit IR for Some / None / match / list_at_opt.
+This is the first point where rw code actually runs while handling Option values.
 
 **Files:**
 - Modify: `runtime/runtime.h`
 - Modify: `runtime/runtime.c`
 - Create: `runtime/fiber/test_option.c`
 - Modify: `.gitignore`
-- Modify: `rwc/sema.py` (`list_at_opt` の組込み追加)
+- Modify: `rwc/sema.py` (add the `list_at_opt` builtin)
 - Modify: `rwc/irgen.py`
 
 ### Runtime
 
-- [ ] **Step 3.1: `runtime.h` に `rw_option_int` struct と `rw_list_int_at_opt` プロトタイプ**
+- [ ] **Step 3.1: Add the `rw_option_int` struct and `rw_list_int_at_opt` prototype to `runtime.h`**
 
-`runtime/runtime.h` の `rw_list_int` struct の定義の **直下**、`rw_list_int_new` 系プロトタイプの前に追加:
+In `runtime/runtime.h`, add this **immediately below** the definition of the `rw_list_int` struct, before the `rw_list_int_new` family of prototypes:
 
 ```c
 /* Option[int] type. Two-word fat struct: tag (0=None, 1=Some) +
@@ -639,18 +639,18 @@ typedef struct {
 } rw_option_int;
 ```
 
-`rw_list_int_len` プロトタイプの **直下** に追加:
+Add this **immediately below** the `rw_list_int_len` prototype:
 
 ```c
 /* List[int]: range-checked accessor returning Option[int]. */
 void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i);
 ```
 
-`rw_list_int_at` は変更しない (`abort` のままで残す)。
+Leave `rw_list_int_at` unchanged (it still aborts).
 
-- [ ] **Step 3.2: `runtime.c` に `rw_list_int_at_opt` 実装を追加**
+- [ ] **Step 3.2: Add the `rw_list_int_at_opt` implementation to `runtime.c`**
 
-`runtime/runtime.c` の `rw_list_int_len` の **直下** に追加:
+Add this **immediately below** `rw_list_int_len` in `runtime/runtime.c`:
 
 ```c
 void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i) {
@@ -664,7 +664,7 @@ void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i) {
 }
 ```
 
-- [ ] **Step 3.3: C 単体テスト `test_option.c` を新規作成**
+- [ ] **Step 3.3: Create the C unit test `test_option.c`**
 
 `/Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime/fiber/test_option.c`:
 
@@ -717,15 +717,15 @@ int main(void) {
 }
 ```
 
-- [ ] **Step 3.4: `.gitignore` にバイナリを追加**
+- [ ] **Step 3.4: Add the binary to `.gitignore`**
 
-`/Users/ryuichi/ghq/github.com/ryuichi1208/rw/.gitignore` の `runtime/fiber/test_list_int` の **直下** に:
+Add this **immediately below** `runtime/fiber/test_list_int` in `/Users/ryuichi/ghq/github.com/ryuichi1208/rw/.gitignore`:
 
 ```
 runtime/fiber/test_option
 ```
 
-- [ ] **Step 3.5: ランタイムをビルドして C テストを走らせる**
+- [ ] **Step 3.5: Build the runtime and run the C test**
 
 ```sh
 make -C /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime clean
@@ -734,9 +734,9 @@ cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime
 cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_option.c librw.a -o fiber/test_option && ./fiber/test_option
 ```
 
-Expected: 警告なしビルド + `all option tests passed`。
+Expected: a warning-free build + `all option tests passed`.
 
-- [ ] **Step 3.6: 既存 C テストが緑か念のため確認**
+- [ ] **Step 3.6: Confirm the existing C tests are green, just to be safe**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime
@@ -744,13 +744,13 @@ cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_list_int.c librw
 cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_sched.c librw.a -o fiber/test_sched && ./fiber/test_sched
 ```
 
-Expected: `all list_int tests passed` / `total = 333833500`。
+Expected: `all list_int tests passed` / `total = 333833500`.
 
 ### Sema for list_at_opt
 
-- [ ] **Step 3.7: `list_at_opt` 組込みを Sema に追加**
+- [ ] **Step 3.7: Add the `list_at_opt` builtin to Sema**
 
-`rwc/sema.py` の `list_at` 組込み (`_check_call` 内) の **直下** に追加:
+Add this **immediately below** the `list_at` builtin (within `_check_call`) in `rwc/sema.py`:
 
 ```python
         # Builtin: list_at_opt(List[int], int) -> Option[int].
@@ -775,7 +775,7 @@ Expected: `all list_int tests passed` / `total = 333833500`。
             return T.OPTION_INT
 ```
 
-SpawnExpr 禁止リストに追加 (`list_at` 禁止分岐の隣):
+Add to the SpawnExpr ban list (next to the `list_at` ban branch):
 
 ```python
                 if call.callee == "list_at_opt":
@@ -787,26 +787,26 @@ SpawnExpr 禁止リストに追加 (`list_at` 禁止分岐の隣):
 
 ### irgen
 
-- [ ] **Step 3.8: irgen に `RW_OPTION_INT_TY` を定義**
+- [ ] **Step 3.8: Define `RW_OPTION_INT_TY` in irgen**
 
-`rwc/irgen.py` 上部、`RW_LIST_INT_TY = ...` の **直下** に:
+Near the top of `rwc/irgen.py`, **immediately below** `RW_LIST_INT_TY = ...`:
 
 ```python
 RW_OPTION_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
 ```
 
-- [ ] **Step 3.9: `llvm_type_of` に Option[int] を追加**
+- [ ] **Step 3.9: Add Option[int] to `llvm_type_of`**
 
-`llvm_type_of` で `if t is T.LIST_INT:` の **直下** に:
+In `llvm_type_of`, **immediately below** `if t is T.LIST_INT:`:
 
 ```python
     if t is T.OPTION_INT:
         return RW_OPTION_INT_TY
 ```
 
-- [ ] **Step 3.10: `_declare_runtime` に `rw_list_int_at_opt` を追加**
+- [ ] **Step 3.10: Add `rw_list_int_at_opt` to `_declare_runtime`**
 
-`_declare_runtime` 内で List ops の宣言の **直下** に:
+Inside `_declare_runtime`, **immediately below** the List ops declarations:
 
 ```python
         # Option[int] ops — pointer-out for the output struct, matching
@@ -818,9 +818,9 @@ RW_OPTION_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
             "rw_list_int_at_opt")
 ```
 
-- [ ] **Step 3.11: irgen の `_emit_expr` で `SomeExpr` / `NoneExpr` を扱う**
+- [ ] **Step 3.11: Handle `SomeExpr` / `NoneExpr` in irgen's `_emit_expr`**
 
-`_emit_expr` で既存の `if isinstance(expr, A.SpawnExpr):` 等と並列に追加:
+In `_emit_expr`, add this alongside the existing branches such as `if isinstance(expr, A.SpawnExpr):`:
 
 ```python
         if isinstance(expr, A.SomeExpr):
@@ -833,10 +833,10 @@ RW_OPTION_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
                                [ir.Constant(I64, 0), ir.Constant(I64, 0)])
 ```
 
-- [ ] **Step 3.12: irgen の `_emit_stmt` で `MatchStmt` を扱う**
+- [ ] **Step 3.12: Handle `MatchStmt` in irgen's `_emit_stmt`**
 
-`_emit_stmt` (irgen.py:217 付近) の `if isinstance(stmt, A.WhileStmt):` の
-**直下** に追加:
+In `_emit_stmt` (around irgen.py:217), add this **immediately below**
+`if isinstance(stmt, A.WhileStmt):`:
 
 ```python
         if isinstance(stmt, A.MatchStmt):
@@ -844,7 +844,7 @@ RW_OPTION_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
             return
 ```
 
-`_emit_match` を `_emit_while` の隣に追加:
+Add `_emit_match` next to `_emit_while`:
 
 ```python
     def _emit_match(self, stmt: A.MatchStmt, ctx: "FunctionCtx") -> None:
@@ -883,13 +883,13 @@ RW_OPTION_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
         b.position_at_end(end_bb)
 ```
 
-`ctx.builder.block.is_terminated` の取得方法は llvmlite のバージョンに依存
-する。既存の `_emit_if` (もしあれば) でどう判定しているかを Read で確認し、
-同じ書き方に揃える。無ければ `b.block.is_terminated` を試して動かす。
+How to obtain `ctx.builder.block.is_terminated` depends on the llvmlite version.
+Read the existing `_emit_if` (if any) to see how it makes this determination and
+match that style. If there is none, try `b.block.is_terminated` and make it work.
 
-- [ ] **Step 3.13: irgen の `_emit_call` で `list_at_opt` を扱う**
+- [ ] **Step 3.13: Handle `list_at_opt` in irgen's `_emit_call`**
 
-`_emit_call` 内、既存の `list_at` 分岐の **直下** に追加:
+In `_emit_call`, add this **immediately below** the existing `list_at` branch:
 
 ```python
         if call.callee == "list_at_opt":
@@ -904,7 +904,7 @@ RW_OPTION_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
 
 ### Smoke
 
-- [ ] **Step 3.14: 単独で IR + 実行 smoke**
+- [ ] **Step 3.14: Standalone IR + execution smoke test**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
@@ -936,25 +936,25 @@ uv run rwc run /tmp/option_smoke.rw
 
 Expected:
 
-IR に `switch`, `insertvalue`, `extractvalue` の各命令が含まれる。
+The IR contains the `switch`, `insertvalue`, and `extractvalue` instructions.
 
-実行結果:
+Execution result:
 ```
 5
 -1
 ```
 
-`exit != 0` (特に 139 = SIGSEGV) なら ABI 問題か match の lowering バグ。
-`Option[int]` は 16 バイトなので pointer-out 不要のはずだが、念のため
-`llvm-ir-c-abi` skill の検証手順を参照。
+If `exit != 0` (especially 139 = SIGSEGV), it is either an ABI problem or a match
+lowering bug. `Option[int]` is 16 bytes, so pointer-out should not be needed, but
+just in case, refer to the verification steps in the `llvm-ir-c-abi` skill.
 
-- [ ] **Step 3.15: pytest 全件**
+- [ ] **Step 3.15: Run the full pytest suite**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: 既存 114 + (このタスクでテスト追加なしなので) `114 passed`。
+Expected: existing 114 + (no tests added in this task) = `114 passed`.
 
 - [ ] **Step 3.16: Commit**
 
@@ -1006,7 +1006,7 @@ EOF
 - Create: `examples/option_basic.rw.expected`
 - Modify: `tests/test_e2e.py`
 
-- [ ] **Step 4.1: `examples/option_basic.rw` を書く**
+- [ ] **Step 4.1: Write `examples/option_basic.rw`**
 
 `/Users/ryuichi/ghq/github.com/ryuichi1208/rw/examples/option_basic.rw`:
 
@@ -1032,47 +1032,47 @@ def main() -> int:
     return 0
 ```
 
-- [ ] **Step 4.2: `examples/option_basic.rw.expected` を書く**
+- [ ] **Step 4.2: Write `examples/option_basic.rw.expected`**
 
 ```
 5
 -1
 ```
 
-(末尾改行ありで保存。)
+(Save with a trailing newline.)
 
-- [ ] **Step 4.3: 手元で byte 一致を確認**
+- [ ] **Step 4.3: Confirm a byte-for-byte match locally**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
 diff <(RW_WORKERS=1 uv run rwc run examples/option_basic.rw 2>&1) examples/option_basic.rw.expected && echo OK
 ```
 
-Expected: `OK` だけが表示される。
+Expected: only `OK` is printed.
 
-- [ ] **Step 4.4: `tests/test_e2e.py` の parametrize に `option_basic` を追加**
+- [ ] **Step 4.4: Add `option_basic` to the parametrize list in `tests/test_e2e.py`**
 
-`tests/test_e2e.py:45` の以下の行:
+The following line at `tests/test_e2e.py:45`:
 
 ```python
     ["hello", "arith", "fib", "while_count", "spawn_basic", "spawn_many", "spawn_string", "string_ops", "bytes_basic", "list_basic"],
 ```
 
-を以下に変更:
+to the following:
 
 ```python
     ["hello", "arith", "fib", "while_count", "spawn_basic", "spawn_many", "spawn_string", "string_ops", "bytes_basic", "list_basic", "option_basic"],
 ```
 
-- [ ] **Step 4.5: 全 pytest**
+- [ ] **Step 4.5: Run the full pytest suite**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: 114 + 1 = `115 passed`。
+Expected: 114 + 1 = `115 passed`.
 
-- [ ] **Step 4.6: 既存 example 回帰**
+- [ ] **Step 4.6: Regression-check the existing examples**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
@@ -1103,7 +1103,7 @@ hello
 30
 ```
 
-- [ ] **Step 4.7: ランタイム単体テストも緑か**
+- [ ] **Step 4.7: Confirm the runtime unit tests are green too**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime
@@ -1114,7 +1114,7 @@ cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_sched.c librw.a 
 ```
 
 Expected: `all option tests passed` / `all list_int tests passed` /
-`total = 333833500`。
+`total = 333833500`.
 
 - [ ] **Step 4.8: Commit**
 
@@ -1146,38 +1146,43 @@ EOF
 
 ### Spec coverage
 
-| Spec 要求 | カバーするタスク |
+| Spec requirement | Covering tasks |
 |---|---|
-| 新型 `Option[int]` (キーワード `Option`、parser が `[int]` 強制) | Task 1.1 / 1.2 / 1.4 |
-| `Some(int) -> Option[int]` 式 | Task 1.5 (parser), 2.1 (sema), 3.11 (irgen) |
-| `None` リテラル | Task 1.2 (lexer KW_NONE), 1.5 (parser), 2.1 (sema), 3.11 (irgen) |
-| `match v: case Some(x): ... case None: ...` 構文 | Task 1.6 (parser), 2.2 (sema), 3.12 (irgen) |
-| 2 アーム必須 (parser) | Task 1.6 (両 arm 必須チェック) + test 1.9 |
-| Some arm の bound 変数が int | Task 2.2 (sema scope) + test 2.3 |
-| return-coverage が match 両 arm を見る | Task 2.2 (`some_ret and none_ret`) + test 2.3 |
-| `list_at_opt(List[int], int) -> Option[int]` 組込み | Task 3.1 / 3.2 (runtime), 3.7 (sema), 3.10 / 3.13 (irgen) |
-| 範囲外で None を返す runtime helper | Task 3.2 + C test 3.3 |
-| 内部表現は 16 バイト value 返し | Task 3.1 (struct), 3.8 (`RW_OPTION_INT_TY`) — pointer-out 不要 |
-| `Option[string]` 等は parser エラー | Task 1.4 + test 1.9 |
-| `match` の片側欠落は parser エラー | Task 1.6 + test 1.9 |
-| `print(Option[int])` は型エラー | `is_printable` を変えないことで自動 + test 2.4 |
-| `Option == Option` は型エラー | == whitelist を変えないことで自動 + test 2.4 |
-| `Some(string)` は型エラー | Task 2.1 + test 2.4 |
-| `match` ターゲットが Option[int] でないと型エラー | Task 2.2 + test 2.4 |
-| `Future[Option[int]]` 禁止 | spec で記載、`_decl_spawn`/`_decl_await` に LIST_INT を追加しないのと同じく OPTION_INT も追加しない (Task 3 全体で「敢えて触らない」) |
-| 既存 101 テスト緑 | Task 1.8, 2.6, 3.15, 4.5 |
+| New type `Option[int]` (keyword `Option`, parser enforces `[int]`) | Task 1.1 / 1.2 / 1.4 |
+| `Some(int) -> Option[int]` expression | Task 1.5 (parser), 2.1 (sema), 3.11 (irgen) |
+| `None` literal | Task 1.2 (lexer KW_NONE), 1.5 (parser), 2.1 (sema), 3.11 (irgen) |
+| `match v: case Some(x): ... case None: ...` syntax | Task 1.6 (parser), 2.2 (sema), 3.12 (irgen) |
+| Both arms required (parser) | Task 1.6 (mandatory-both-arms check) + test 1.9 |
+| Some arm's bound variable is int | Task 2.2 (sema scope) + test 2.3 |
+| Return-coverage looks at both match arms | Task 2.2 (`some_ret and none_ret`) + test 2.3 |
+| `list_at_opt(List[int], int) -> Option[int]` builtin | Task 3.1 / 3.2 (runtime), 3.7 (sema), 3.10 / 3.13 (irgen) |
+| Runtime helper returns None when out of range | Task 3.2 + C test 3.3 |
+| Internal representation is a 16-byte value return | Task 3.1 (struct), 3.8 (`RW_OPTION_INT_TY`) — no pointer-out needed |
+| `Option[string]` etc. is a parser error | Task 1.4 + test 1.9 |
+| A missing `match` arm is a parser error | Task 1.6 + test 1.9 |
+| `print(Option[int])` is a type error | Automatic by not changing `is_printable` + test 2.4 |
+| `Option == Option` is a type error | Automatic by not changing the == whitelist + test 2.4 |
+| `Some(string)` is a type error | Task 2.1 + test 2.4 |
+| A `match` target that is not Option[int] is a type error | Task 2.2 + test 2.4 |
+| `Future[Option[int]]` forbidden | Documented in the spec; just as LIST_INT is not added to `_decl_spawn` / `_decl_await`, OPTION_INT is likewise not added ("deliberately left untouched" throughout Task 3) |
+| Existing 101 tests green | Task 1.8, 2.6, 3.15, 4.5 |
 
-すべての spec 要求にタスクがある。
+Every spec requirement has a task.
 
-### Placeholder スキャン
+### Placeholder scan
 
-「TBD」「TODO」「(要確認)」「fill in」「Add appropriate」「Similar to Task N」は plan 内 0 件。Step 1.10 末尾の「ParserError を期待するように形を合わせる」、Step 2.5 の「実際の文字列が違ったら assert を緩める」、Step 3.12 の「llvmlite のバージョンに依存」はそれぞれ **代替手順を plan 内に明示している** ので、placeholder ではない。
+"TBD", "TODO", "(to be confirmed)", "fill in", "Add appropriate", and "Similar to
+Task N" appear 0 times in the plan. The note at the end of Step 1.10 ("adjust the
+shape to instead expect a ParserError"), Step 2.5 ("if the actual string differs,
+loosen the assert"), and Step 3.12 ("depends on the llvmlite version") each
+**explicitly spell out an alternative procedure within the plan**, so they are not
+placeholders.
 
 ### Type consistency
 
-- `T.OPTION_INT` は Task 1.1 / 1.7 / 2.1 / 2.2 / 3.7 / 3.9 で完全一致
-- LLVM 表現 `RW_OPTION_INT_TY = LiteralStructType([I64, I64])` は Task 3.8 / 3.9 / 3.10 / 3.11 / 3.12 / 3.13 で揃っている
-- ランタイム関数: `rw_list_int_at_opt(out*, l*, i)` を Task 3.1 (宣言) / 3.2 (実装) / 3.3 (C test) / 3.10 (irgen 宣言) / 3.13 (irgen 呼び出し) で完全一致
-- AST ノード名: `SomeExpr` / `NoneExpr` / `MatchStmt` を Task 1.3 (定義) / 1.5 / 1.6 (parser) / 2.1 / 2.2 (sema) / 3.11 / 3.12 (irgen) で揃って使用
-- Sema 型エラーメッセージ: `"Some argument must be int"` / `"match target must be Option[int]"` / `"list_at_opt first argument must be List[int]"` / `"list_at_opt second argument must be int"` を実装 (Task 2.1, 2.2, 3.7) と negative テスト assert (Task 2.4) で完全一致
-- Match の Some arm bound 変数管理: Task 2.2 で `some_locals[stmt.some_var] = T.INT`、Task 3.12 で `ctx.locals[stmt.some_var] = slot`。同じフィールド名 `some_var` を一貫使用
+- `T.OPTION_INT` matches exactly across Task 1.1 / 1.7 / 2.1 / 2.2 / 3.7 / 3.9
+- The LLVM representation `RW_OPTION_INT_TY = LiteralStructType([I64, I64])` is consistent across Task 3.8 / 3.9 / 3.10 / 3.11 / 3.12 / 3.13
+- Runtime function: `rw_list_int_at_opt(out*, l*, i)` matches exactly across Task 3.1 (declaration) / 3.2 (implementation) / 3.3 (C test) / 3.10 (irgen declaration) / 3.13 (irgen call)
+- AST node names: `SomeExpr` / `NoneExpr` / `MatchStmt` are used consistently across Task 1.3 (definition) / 1.5 / 1.6 (parser) / 2.1 / 2.2 (sema) / 3.11 / 3.12 (irgen)
+- Sema type-error messages: `"Some argument must be int"` / `"match target must be Option[int]"` / `"list_at_opt first argument must be List[int]"` / `"list_at_opt second argument must be int"` match exactly between the implementation (Task 2.1, 2.2, 3.7) and the negative-test asserts (Task 2.4)
+- Management of the Some arm's bound variable: `some_locals[stmt.some_var] = T.INT` in Task 2.2, `ctx.locals[stmt.some_var] = slot` in Task 3.12. The same field name `some_var` is used consistently

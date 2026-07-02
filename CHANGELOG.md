@@ -2,39 +2,39 @@
 
 ## [v0.0.6](https://github.com/rwlang-org/rw/compare/v0.0.5...v0.0.6) - 2026-06-21
 
-- ci: ruff/black/mypy による lint/format チェック (#76) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/124
-- chore: pre-commit-hooks 設定を追加 (#88) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/125
-- docs: CONTRIBUTING.md を追加 (#70) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/126
-- docs: Issue / PR テンプレートを追加 (#72) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/127
-- ci: GitHub Actions を SHA ピン留めし dependabot を追加 (#81) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/128
-- docs: CoC / SECURITY / LICENSE を整備 (#71) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/129
+- ci: add lint/format checks with ruff/black/mypy (#76) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/124
+- chore: add pre-commit-hooks configuration (#88) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/125
+- docs: add CONTRIBUTING.md (#70) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/126
+- docs: add Issue / PR templates (#72) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/127
+- ci: SHA-pin GitHub Actions and add dependabot (#81) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/128
+- docs: add CoC / SECURITY / LICENSE (#71) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/129
 
 ## [v0.0.5](https://github.com/rwlang-org/rw/compare/v0.0.4...v0.0.5) - 2026-06-06
 
-- examples: TCP チャットサーバのサンプル追加 by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/113
-- 言語: 三項演算子 / 条件式 (x if cond else y) を実装 by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/114
-- docs: 条件式(三項演算子)の言語仕様を追加 by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/115
-- stdlib: ファイル I/O と fd 汎用 read/write/close (#33) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/116
-- runtime: ファイル I/O を非同期化（スレッドプールにオフロード） by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/117
-- lang: 数値リテラル拡張（16進・8進・2進・指数・アンダースコア区切り） by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/118
-- lang: ビット演算子 (& | ^ ~ << >>) を実装 by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/119
-- lang: break / continue 文を実装（while ループ対象） by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/120
-- lang: assert 文を実装 by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/121
-- lang: 型エイリアス (type Foo = ...) を実装 by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/122
-- stdlib: math 組み込み関数を実装（LLVM intrinsic） by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/123
+- examples: add a TCP chat server sample by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/113
+- lang: implement the ternary / conditional expression (x if cond else y) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/114
+- docs: add the language spec for the conditional (ternary) expression by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/115
+- stdlib: file I/O and generic fd read/write/close (#33) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/116
+- runtime: make file I/O asynchronous (offload to a thread pool) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/117
+- lang: extend numeric literals (hex, octal, binary, exponent, underscore separators) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/118
+- lang: implement bitwise operators (& | ^ ~ << >>) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/119
+- lang: implement break / continue statements (targeting while loops) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/120
+- lang: implement the assert statement by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/121
+- lang: implement type aliases (type Foo = ...) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/122
+- stdlib: implement math built-in functions (LLVM intrinsics) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/123
 
 ## [v0.0.4](https://github.com/rwlang-org/rw/compare/v0.0.3...v0.0.4) - 2026-05-23
-- rwc + runtime: netpoller + 最小 TCP API (echo server) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/97
+- rwc + runtime: netpoller + minimal TCP API (echo server) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/97
 
 ## [v0.0.3](https://github.com/rwlang-org/rw/compare/v0.0.2...v0.0.3) - 2026-05-23
-- rwc: 文字列の最小拡張 (len, ==, +) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/91
-- rwc: Bytes 型 (immutable, echo 最小セット) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/92
-- rwc: List[int] 型 (immutable, モノモーフ, echo 最小セット) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/93
-- rwc: Option[int] 型と最小 match 構文 (Python 3.10 風) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/94
-- rwc: Result[int, int] 型と match の Ok/Err アーム拡張 by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/95
+- rwc: minimal string extensions (len, ==, +) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/91
+- rwc: Bytes type (immutable, minimal echo set) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/92
+- rwc: List[int] type (immutable, monomorphic, minimal echo set) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/93
+- rwc: Option[int] type and minimal match syntax (Python 3.10 style) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/94
+- rwc: Result[int, int] type and Ok/Err arm extension for match by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/95
 
 ## [v0.0.2](https://github.com/rwlang-org/rw/compare/v0.0.1...v0.0.2) - 2026-05-20
-- ランタイムを Go 風 M:N スケジューラに進化させる by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/90
+- evolve the runtime into a Go-style M:N scheduler by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/90
 
 ## [v0.0.1](https://github.com/ryuichi1208/rw/commits/v0.0.1) - 2026-05-17
 - rw v0.0.1: MVP compiler with fiber-backed runtime by @ryuichi1208 in https://github.com/ryuichi1208/rw/pull/1
