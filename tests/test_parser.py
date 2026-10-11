@@ -457,3 +457,10 @@ def test_parse_qualified_call_still_call():
 def test_parse_assign_to_call_is_error():
     with pytest.raises(ParserError):
         parse_src("def main() -> int:\n    f() = 1\n    return 0\n")
+
+
+def test_parse_qualified_type_name():
+    mod = parse_src("def f(r: web.Request) -> web.Response:\n    return r\n")
+    fn = mod.functions[0]
+    assert (fn.params[0].type_expr.module, fn.params[0].type_expr.name) == ("web", "Request")
+    assert (fn.return_type.module, fn.return_type.name) == ("web", "Response")

@@ -304,10 +304,15 @@ class Parser:
             self.i += 1
             self.eat(TokenKind.RBRACK, "']' to close Result[int, int]")
             return A.TypeName("Result[int, int]", t.line, t.col)
-        # A bare identifier is a user-defined type name (e.g. a type alias).
-        # It is resolved against the alias table in Sema.
+        # A bare identifier is a user-defined type name (a type alias or a
+        # class); `mod.Name` names a class of an imported module (spec 20).
+        # Both are resolved in Sema.
         if t.kind == TokenKind.IDENT:
             self.i += 1
+            if self.cur.kind == TokenKind.DOT:
+                self.i += 1  # consume '.'
+                name = self.eat(TokenKind.IDENT, "class name after '.'")
+                return A.TypeName(name.value, t.line, t.col, module=t.value)
             return A.TypeName(t.value, t.line, t.col)
         raise ParserError(
             f"expected type, got {t.kind.name}", t.line, t.col, max(1, len(t.value))

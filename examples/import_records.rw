@@ -1,0 +1,18 @@
+import import_records_lib as web
+from import_records_lib import Request, Response, ok
+
+def route(req: Request) -> Response:
+    if req.path == "/":
+        return ok("index")
+    return web.not_found(req)
+
+def describe(res: web.Response) -> string:
+    return str_from_int(res.status) + " " + res.body
+
+def main() -> int:
+    print(describe(route(Request("GET", "/"))))
+    print(describe(route(web.Request("GET", "/missing"))))
+    custom: Response = web.Response(201, "created")
+    custom.body = custom.body + "!"
+    print(describe(custom))
+    return 0

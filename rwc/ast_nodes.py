@@ -18,6 +18,8 @@ class TypeName:
     name: str          # "int", "float", "bool", "string", "void"
     line: int
     col: int
+    # Module qualifier for `mod.Class` type names (spec 20). None otherwise.
+    module: Optional[str] = None
 
 
 @dataclass

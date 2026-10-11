@@ -51,8 +51,6 @@ fields with a positional constructor, field reads, and field writes.
 - Methods, `self`, constructors with logic, default field values, keyword
   arguments
 - Inheritance, traits / protocols (#104), generics (#105)
-- Importing a class from another module, or `mod.Class` type names (a
-  follow-up PR; classes are visible only in their own module for now)
 - A null / absent record (`Option[Request]`) — every record value is a
   constructed object
 - `==`, `print`, or string conversion of a record
@@ -101,6 +99,30 @@ alias, a function, or a builtin.
 - The existing `==` / `print` whitelists already reject records
 - `spawn f()` where `f` returns a record is an error
 
+### Records across modules
+
+A framework lives in its own module, so classes can be imported like
+functions:
+
+```rw
+from web import Request, Response    # bare names
+import web                           # web.Request as a type and constructor
+import web as w                      # w.Request
+```
+
+- `from x import C [as D]` binds a class of `x` in the importing module's
+  class table. It is resolved right after all class names are registered,
+  before any type is resolved, so imported classes work in signatures and
+  fields. A local class or function with the same local name is an error
+- A qualified type name `q.C` is parsed as `TypeName(name, module=q)` and
+  resolved through the module's import qualifiers (`import x` / `import x as q`)
+- A qualified call `q.C(...)` whose `C` is a class of that module is a
+  constructor call
+- Both forms denote the **same** `ClassType` object, so values flow freely
+  between code that uses `Request` and code that uses `web.Request`
+- Imports are not transitive: a class is visible only in modules that import
+  its module
+
 ### IR and ABI
 
 A record value is an `i8*` to a heap block. The block layout is a literal
@@ -120,7 +142,7 @@ closures, ternaries, and other records unchanged.
 - `rwc/types.py`: `ClassType`
 - `rwc/sema.py`: class collection and name checks, type resolution, constructor / field access / field assignment checks
 - `rwc/irgen.py`: constructor, field access, field assignment
-- `examples/records.rw` + `.expected`
+- `examples/records.rw` + `.expected`; `examples/import_records.rw` + lib + `.expected`
 - tests: `test_parser`, `test_sema`, `test_irgen`, `test_e2e`
 
 Layers touched: parser / sema (+ types) / irgen (3). The lexer already has

@@ -1662,7 +1662,7 @@ def test_spawn_returning_record_is_error():
     assert "cannot spawn a function returning a record" in e.diagnostic.message
 
 
-def test_record_not_visible_from_other_module(tmp_path):
+def test_record_needs_import_or_qualifier(tmp_path):
     with pytest.raises(CompileError) as ei:
         _check_program(
             tmp_path,
@@ -1691,3 +1691,64 @@ def test_from_import_collides_with_local_class(tmp_path):
             lib="def P() -> int:\n    return 1\n",
         )
     assert "collides with a local function or class" in ei.value.diagnostic.message
+
+
+# ----- importing records (spec 20, "Records across modules") -----
+
+LIB_WEB = (
+    "class Request:\n    path: string\n\n"
+    "class Response:\n    status: int\n    body: string\n\n"
+    "def ok(body: string) -> Response:\n    return Response(200, body)\n"
+)
+
+
+def test_from_import_class(tmp_path):
+    _check_program(
+        tmp_path,
+        "from web import Request, Response, ok\n\n"
+        "def hello(req: Request) -> Response:\n    return ok(req.path)\n\n"
+        'def main() -> int:\n    r: Response = hello(Request("/x"))\n'
+        '    r2: Response = Response(404, "nf")\n    return r.status + r2.status\n',
+        web=LIB_WEB,
+    )
+
+
+def test_qualified_class_type_and_constructor(tmp_path):
+    _check_program(
+        tmp_path,
+        "import web\n\n"
+        "def hello(req: web.Request) -> web.Response:\n    return web.ok(req.path)\n\n"
+        'def main() -> int:\n    r: web.Response = hello(web.Request("/x"))\n    return r.status\n',
+        web=LIB_WEB,
+    )
+
+
+def test_aliased_qualified_class(tmp_path):
+    _check_program(
+        tmp_path,
+        'import web as w\n\ndef main() -> int:\n    r: w.Response = w.Response(1, "a")\n    return r.status\n',
+        web=LIB_WEB,
+    )
+
+
+@pytest.mark.parametrize(
+    "entry, msg",
+    [
+        ("import web\n\ndef main() -> int:\n    r: web.Nope = web.ok(\"a\")\n    return 0\n",
+         "module 'web' has no class `Nope`"),
+        ("def main() -> int:\n    r: web.Response = 1\n    return 0\n",
+         "module 'web' is not imported here"),
+        ("import web\n\ndef main() -> int:\n    r: web.Response = web.Nope(1)\n    return 0\n",
+         "module 'web' has no function `Nope`"),
+        ("from web import Nope\n\ndef main() -> int:\n    return 0\n",
+         "has no function or class `Nope`"),
+        ("from web import Request\n\nclass Request:\n    x: int\n\ndef main() -> int:\n    return 0\n",
+         "collides with a local function or class"),
+        ("from web import Request\n\ndef Request() -> int:\n    return 0\n\ndef main() -> int:\n    return 0\n",
+         "collides with a local function or class"),
+    ],
+)
+def test_record_import_errors(tmp_path, entry, msg):
+    with pytest.raises(CompileError) as ei:
+        _check_program(tmp_path, entry, web=LIB_WEB)
+    assert msg in ei.value.diagnostic.message
