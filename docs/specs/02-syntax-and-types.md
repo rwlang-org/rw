@@ -112,7 +112,7 @@ def main() -> int:
 def return if elif else while and or not true false void
 spawn await Future
 int float bool string
-import          # module imports, see 17-namespaced-imports.md
+import from     # module imports, see 17-namespaced-imports.md
 # Reserved for future use (syntax error in the MVP):
 extern class for in as None
 ```

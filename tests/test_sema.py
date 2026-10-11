@@ -1465,3 +1465,54 @@ def test_diagnostic_in_imported_module_names_that_file(tmp_path):
     diag = ei.value.diagnostic
     assert diag.file == str(tmp_path / "lib.rw")
     assert diag.line == 2
+
+
+# ----- from-imports (spec 17, PR2) -----
+
+def test_from_import_resolves_unqualified(tmp_path):
+    res = _check_program(
+        tmp_path,
+        "from lib import add\n\ndef main() -> int:\n    return add(1, 2)\n",
+        lib="def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+    assert (None, "main") in res.functions
+    assert ("lib", "add") in res.functions
+
+
+def test_from_import_alias(tmp_path):
+    res = _check_program(
+        tmp_path,
+        "from lib import add as plus\n\ndef main() -> int:\n    return plus(1, 2)\n",
+        lib="def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+    assert ("lib", "add") in res.functions
+
+
+def test_from_import_unknown_name_errors(tmp_path):
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            "from lib import nope\n\ndef main() -> int:\n    return nope()\n",
+            lib="def add(a: int, b: int) -> int:\n    return a + b\n",
+        )
+    assert "no function" in ei.value.diagnostic.message
+
+
+def test_from_import_collides_with_local(tmp_path):
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            "from lib import add\n\ndef add() -> int:\n    return 9\n\ndef main() -> int:\n    return add(1, 2)\n",
+            lib="def add(a: int, b: int) -> int:\n    return a + b\n",
+        )
+    assert "collides with a local function" in ei.value.diagnostic.message
+
+
+def test_from_import_collides_with_builtin(tmp_path):
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            "from lib import print\n\ndef main() -> int:\n    return 0\n",
+            lib="def print(a: int) -> int:\n    return a\n",
+        )
+    assert "collides with a builtin" in ei.value.diagnostic.message

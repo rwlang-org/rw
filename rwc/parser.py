@@ -131,7 +131,7 @@ class Parser:
         mod = A.Module()
         self.skip_newlines()
         while self.cur.kind != TokenKind.EOF:
-            if self.cur.kind == TokenKind.KW_IMPORT:
+            if self.cur.kind in (TokenKind.KW_IMPORT, TokenKind.KW_FROM):
                 if mod.functions or mod.type_aliases:
                     raise ParserError(
                         "import must appear before any 'def' or 'type'",
@@ -156,8 +156,9 @@ class Parser:
 
     # ------- imports -------
     def parse_import(self) -> A.Import:
-        # PR1: plain `import IDENT NEWLINE` only. `import x as m` (PR3) and
-        # `from x import y` (PR2) are not yet supported.
+        if self.cur.kind == TokenKind.KW_FROM:
+            return self._parse_from_import()
+        # Plain `import IDENT NEWLINE`. `import x as m` (PR3) not yet supported.
         kw = self.eat(TokenKind.KW_IMPORT, "'import'")
         name_tok = self.eat(TokenKind.IDENT, "module name after 'import'")
         if self.cur.kind == TokenKind.KW_AS:
@@ -169,6 +170,25 @@ class Parser:
             )
         self.eat(TokenKind.NEWLINE)
         return A.Import(name_tok.value, None, None, kw.line, kw.col)
+
+    def _parse_from_import(self) -> A.Import:
+        # `from IDENT import IDENT [as IDENT] { ',' IDENT [as IDENT] }`
+        kw = self.eat(TokenKind.KW_FROM, "'from'")
+        mod_tok = self.eat(TokenKind.IDENT, "module name after 'from'")
+        self.eat(TokenKind.KW_IMPORT, "'import' after module name")
+        names: List[tuple] = [self._parse_import_name()]
+        while self.match(TokenKind.COMMA):
+            names.append(self._parse_import_name())
+        self.eat(TokenKind.NEWLINE)
+        return A.Import(mod_tok.value, None, names, kw.line, kw.col)
+
+    def _parse_import_name(self) -> tuple:
+        """Parse `IDENT [as IDENT]`, returning (name, alias|None)."""
+        name_tok = self.eat(TokenKind.IDENT, "imported name")
+        alias = None
+        if self.match(TokenKind.KW_AS):
+            alias = self.eat(TokenKind.IDENT, "alias after 'as'").value
+        return (name_tok.value, alias)
 
     # ------- type aliases -------
     def parse_type_alias(self) -> A.TypeAlias:

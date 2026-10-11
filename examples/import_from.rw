@@ -1,0 +1,6 @@
+from import_basic_lib import add, mul as times
+
+def main() -> int:
+    print(add(2, 3))
+    print(times(4, 5))
+    return 0
