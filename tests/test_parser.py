@@ -499,3 +499,27 @@ def test_parse_generic_list_types():
     assert isinstance(a, A.TypeList) and a.elem.name == "string"
     assert isinstance(b, A.TypeList) and isinstance(b.elem, A.TypeList) and b.elem.elem.name == "Route"
     assert isinstance(c, A.TypeName) and c.name == "List[int]"  # unchanged
+
+
+# ----- compound assignment (spec 27) -----
+
+@pytest.mark.parametrize("op", ["+", "-", "*", "/", "%", "&", "|", "^"])
+def test_parse_compound_assign_local(op):
+    mod = parse_src(f"def main() -> int:\n    x: int = 1\n    x {op}= 2\n    return x\n")
+    s = mod.functions[0].body[1]
+    assert isinstance(s, A.Assign) and s.name == "x"
+    assert isinstance(s.value, A.BinOp) and s.value.op == op
+    assert isinstance(s.value.left, A.Name) and s.value.left.name == "x"
+
+
+def test_parse_compound_assign_field():
+    mod = parse_src("def main() -> int:\n    a.b.total -= 3\n    return 0\n")
+    s = mod.functions[0].body[0]
+    assert isinstance(s, A.FieldAssign) and s.field == "total"
+    assert isinstance(s.value, A.BinOp) and s.value.op == "-"
+    assert isinstance(s.value.left, A.FieldAccess) and s.value.left.field == "total"
+
+
+def test_parse_compound_assign_through_call_is_error():
+    with pytest.raises(ParserError):
+        parse_src("def main() -> int:\n    f().x += 1\n    return 0\n")
