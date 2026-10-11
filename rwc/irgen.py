@@ -390,6 +390,8 @@ class IRGen:
         if isinstance(stmt, A.While):
             cond_bb = ctx.function.append_basic_block("while.cond")
             body_bb = ctx.function.append_basic_block("while.body")
+            # `continue` and the end of the body go to the update step, if any.
+            update_bb = ctx.function.append_basic_block("while.update") if stmt.update else cond_bb
             end_bb = ctx.function.append_basic_block("while.end")
             b.branch(cond_bb)
             b.position_at_end(cond_bb)
@@ -399,11 +401,16 @@ class IRGen:
             cond_i1 = b.icmp_unsigned("!=", cond_i8, ir.Constant(I8, 0))
             b.cbranch(cond_i1, body_bb, end_bb)
             b.position_at_end(body_bb)
-            ctx.loop_stack.append((cond_bb, end_bb))
+            ctx.loop_stack.append((update_bb, end_bb))
             self._emit_block(stmt.body, ctx)
             ctx.loop_stack.pop()
             if not b.block.is_terminated:
-                b.branch(cond_bb)
+                b.branch(update_bb)
+            if stmt.update:
+                b.position_at_end(update_bb)
+                self._emit_block(stmt.update, ctx)
+                if not b.block.is_terminated:
+                    b.branch(cond_bb)
             b.position_at_end(end_bb)
             return
         if isinstance(stmt, A.Break):

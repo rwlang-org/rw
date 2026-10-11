@@ -550,6 +550,7 @@ class Sema:
             self._loop_depth += 1
             self._check_block(fn, stmt.body, dict(locals_), ret_ty)
             self._loop_depth -= 1
+            self._check_block(fn, stmt.update, dict(locals_), ret_ty)
             return False  # while bodies don't guarantee return
 
         if isinstance(stmt, A.Break):
