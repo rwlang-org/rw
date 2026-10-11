@@ -538,21 +538,6 @@ def test_option_int_type_annotation_parses():
     assert res.functions[(None, "takes_opt")].params[0][1] is T.OPTION_INT
 
 
-def test_option_with_non_int_param_is_parser_error():
-    import pytest
-    from rwc.lexer import tokenize
-    from rwc.parser import parse, ParserError
-    src = (
-        "def f(o: Option[string]) -> int:\n"
-        "    return 0\n"
-        "def main() -> int:\n"
-        "    return 0\n"
-    )
-    with pytest.raises(ParserError) as ei:
-        parse(tokenize(src))
-    assert "Option[int]" in str(ei.value) or "only Option" in str(ei.value)
-
-
 def test_match_with_missing_arm_is_parser_error():
     import pytest
     from rwc.lexer import tokenize
@@ -677,7 +662,7 @@ def test_match_on_int_is_type_error():
         "    return 0\n"
     )
     e = err(src)
-    assert "match target must be Option[int]" in e.diagnostic.message
+    assert "match target must be an Option, found `int`" in e.diagnostic.message
 
 
 def test_print_option_is_type_error():
@@ -717,21 +702,6 @@ def test_result_int_int_type_annotation_parses():
     res = check(src)
     assert (None, "takes_res") in res.functions
     assert res.functions[(None, "takes_res")].params[0][1] is T.RESULT_INT_INT
-
-
-def test_result_with_non_int_param_is_parser_error():
-    import pytest
-    from rwc.lexer import tokenize
-    from rwc.parser import parse, ParserError
-    src = (
-        "def f(r: Result[string, int]) -> int:\n"
-        "    return 0\n"
-        "def main() -> int:\n"
-        "    return 0\n"
-    )
-    with pytest.raises(ParserError) as ei:
-        parse(tokenize(src))
-    assert "Result[int, int]" in str(ei.value) or "only Result" in str(ei.value)
 
 
 def test_match_with_mixed_arms_is_parser_error():
@@ -867,7 +837,7 @@ def test_match_result_on_int_is_type_error():
         "    return 0\n"
     )
     e = err(src)
-    assert "match target must be Result[int, int]" in e.diagnostic.message
+    assert "match target must be a Result, found `int`" in e.diagnostic.message
 
 
 def test_print_result_is_type_error():
@@ -1933,3 +1903,64 @@ def test_list_syntax_ok():
 def test_list_syntax_errors(body, msg):
     e = err("def main() -> int:\n" + body + "    return 0\n")
     assert msg in e.diagnostic.message
+
+
+
+# ----- generic Option[T] / Result[T, E] (spec 30) -----
+
+def test_generic_option_result_ok():
+    check(
+        "class User:\n    name: string\n\n"
+        "def find(name: string) -> Option[User]:\n"
+        '    if name == "ann":\n'
+        "        return Some(User(name))\n"
+        "    return None\n\n"
+        "def parse(s: string) -> Result[int, string]:\n"
+        "    match str_to_int(s):\n"
+        "        case Some(n):\n"
+        "            return Ok(n)\n"
+        "        case None:\n"
+        '            return Err("not a number: " + s)\n\n'
+        "def main() -> int:\n"
+        '    u: Option[User] = find("ann")\n'
+        "    match u:\n"
+        "        case Some(found):\n"
+        "            print(found.name)\n"
+        "        case None:\n"
+        '            print("none")\n'
+        '    match parse("12"):\n'
+        "        case Ok(v):\n"
+        "            print(v + 1)\n"
+        "        case Err(msg):\n"
+        "            print(msg)\n"
+        '    names: List[Option[string]] = [Some("a"), None]\n'
+        '    o: Option[string] = Some("x") if true else None\n'
+        "    r: Result[float, bool] = Err(false)\n"
+        "    legacy: Option[int] = None\n"
+        "    return 0\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ('    o: Option[string] = Some(1)\n', "Some argument must be string"),
+        ('    r: Result[string, int] = Ok(1)\n', "Ok argument must be string"),
+        ('    r: Result[string, int] = Err("x")\n', "Err argument must be int"),
+        ("    o: Option[string] = None\n    p: Option[int] = o\n", "type mismatch"),
+        ("    v: Option[void] = None\n", "Option payload cannot be void"),
+    ],
+)
+def test_generic_option_result_errors(body, msg):
+    e = err("def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message
+
+
+@pytest.mark.parametrize("ret", ["Option[int]", "Result[string, int]", "List[int]"])
+def test_spawn_with_unsupported_return_type_is_error(ret):
+    e = err(f"def f() -> {ret}:\n    return list_new()\n\ndef main() -> int:\n    spawn f()\n    return 0\n"
+            if ret.startswith("List") else
+            f"def f() -> {ret}:\n    return None\n\ndef main() -> int:\n    spawn f()\n    return 0\n"
+            if ret.startswith("Option") else
+            f"def f() -> {ret}:\n    return Err(1)\n\ndef main() -> int:\n    spawn f()\n    return 0\n")
+    assert f"cannot spawn a function returning `{ret}`" in e.diagnostic.message

@@ -33,8 +33,6 @@ BOOL = _Primitive("bool")
 STRING = _Primitive("string")
 VOID = _Primitive("void")
 BYTES = _Primitive("Bytes")
-OPTION_INT = _Primitive("Option[int]")
-RESULT_INT_INT = _Primitive("Result[int, int]")
 
 
 @dataclass(eq=False)
@@ -97,6 +95,36 @@ LIST_INT = ListType(INT)
 
 def list_of(elem: Type) -> ListType:
     return LIST_INT if elem is INT else ListType(elem)
+
+
+class OptionType(Type):
+    """`Option[T]` (spec 30). Use `option_of` so `Option[int]` is OPTION_INT."""
+
+    def __init__(self, inner: Type) -> None:
+        self.inner = inner
+        self.name = f"Option[{inner}]"
+
+
+class ResultType(Type):
+    """`Result[T, E]` (spec 30). Use `result_of` so `Result[int, int]` is
+    RESULT_INT_INT."""
+
+    def __init__(self, ok: Type, err: Type) -> None:
+        self.ok = ok
+        self.err = err
+        self.name = f"Result[{ok}, {err}]"
+
+
+OPTION_INT = OptionType(INT)
+RESULT_INT_INT = ResultType(INT, INT)
+
+
+def option_of(inner: Type) -> OptionType:
+    return OPTION_INT if inner is INT else OptionType(inner)
+
+
+def result_of(ok: Type, err: Type) -> ResultType:
+    return RESULT_INT_INT if ok is INT and err is INT else ResultType(ok, err)
 
 
 def is_numeric(t: Type) -> bool:

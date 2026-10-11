@@ -47,7 +47,24 @@ class TypeList:
     col: int
 
 
-TypeExpr = Union[TypeName, TypeFuture, TypeCallable, TypeList]
+@dataclass
+class TypeOption:
+    """`Option[T]` for a non-int T (spec 30)."""
+    inner: "TypeExpr"
+    line: int
+    col: int
+
+
+@dataclass
+class TypeResult:
+    """`Result[T, E]` other than `Result[int, int]` (spec 30)."""
+    ok: "TypeExpr"
+    err: "TypeExpr"
+    line: int
+    col: int
+
+
+TypeExpr = Union[TypeName, TypeFuture, TypeCallable, TypeList, TypeOption, TypeResult]
 
 
 # ----- Expressions -----

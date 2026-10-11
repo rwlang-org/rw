@@ -1,0 +1,80 @@
+class User:
+    name: string
+    age: int
+
+def find(users: List[User], name: string) -> Option[User]:
+    for u in users:
+        if u.name == name:
+            return Some(u)
+    return None
+
+def parse_age(s: string) -> Result[int, string]:
+    match str_to_int(s):
+        case Some(n):
+            if n < 0:
+                return Err("negative age: " + s)
+            return Ok(n)
+        case None:
+            return Err("not a number: " + s)
+
+def describe(r: Result[int, string]) -> string:
+    match r:
+        case Ok(age):
+            return "age " + str(age)
+        case Err(msg):
+            return "error: " + msg
+
+def first_word(s: string) -> Option[string]:
+    words: List[string] = str_split(str_strip(s), " ")
+    if len(s) == 0:
+        return None
+    return Some(words[0])
+
+def main() -> int:
+    users: List[User] = [User("ann", 31), User("bob", 25)]
+    for name in ["bob", "cy"]:
+        match find(users, name):
+            case Some(u):
+                print(u.name + " is " + str(u.age))
+            case None:
+                print(name + " not found")
+
+    for s in ["42", "-1", "x"]:
+        print(describe(parse_age(s)))
+
+    match first_word("  hello world "):
+        case Some(w):
+            print("[" + w + "]")
+        case None:
+            print("empty")
+    match first_word(""):
+        case Some(w):
+            print("[" + w + "]")
+        case None:
+            print("empty")
+
+    # Options inside lists, and a ternary typed from its context.
+    maybe: List[Option[float]] = [Some(1.5), None, Some(2.5)]
+    total: float = 0.0
+    for m in maybe:
+        match m:
+            case Some(x):
+                total += x
+            case None:
+                total += 0.0
+    print(total)
+    flag: bool = true
+    o: Option[string] = Some("yes") if flag else None
+    match o:
+        case Some(v):
+            print(v)
+        case None:
+            print("no")
+
+    # Option[int] still works with the existing helpers.
+    match list_at_opt([1, 2, 3], 5):
+        case Some(n):
+            print(n)
+        case None:
+            print("out of range")
+    return 0
