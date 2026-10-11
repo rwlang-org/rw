@@ -285,3 +285,6 @@ rw_str  rw_await_str (rw_future_t *f) {
 void    rw_await_void(rw_future_t *f) {
     rw_sched_join_void((rw_fiber_handle *)f);
 }
+void    rw_detach    (rw_future_t *f) {
+    rw_sched_detach((rw_fiber_handle *)f);
+}
