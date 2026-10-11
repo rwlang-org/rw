@@ -175,6 +175,13 @@ class IRGen:
             m, ir.FunctionType(ir.VoidType(), [list_ptr, list_ptr, I8P, I64]), "rw_list_push")
         self._rw_list_at = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [I8P, list_ptr, I64, I64]), "rw_list_at")
+        # Indexing and slicing (spec 29). RW_SLICE_NONE marks a missing bound.
+        self._rw_str_index = ir.Function(
+            m, ir.FunctionType(RW_STR_TY, [RW_STR_TY, I64]), "rw_str_index")
+        self._rw_str_slice_py = ir.Function(
+            m, ir.FunctionType(RW_STR_TY, [RW_STR_TY, I64, I64]), "rw_str_slice_py")
+        self._rw_list_slice = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [list_ptr, list_ptr, I64, I64, I64]), "rw_list_slice")
         self._rw_str_to_int = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [option_ptr, RW_STR_TY]), "rw_str_to_int")
         # TCP open ops (runtime/net/tcp.c)
@@ -346,6 +353,9 @@ class IRGen:
             slot = ctx.locals[stmt.name]
             val = self._emit_expr(stmt.value, ctx)
             b.store(val, slot)
+            return
+        if isinstance(stmt, A.ForEach):
+            self._emit_foreach(stmt, ctx)
             return
         if isinstance(stmt, A.FieldAssign):
             obj_ty = self.sema.expr_types[id(stmt.obj)]
@@ -520,6 +530,132 @@ class IRGen:
         """sizeof(ty) as an i64, via the GEP-on-null idiom."""
         return b.ptrtoint(b.gep(ir.Constant(ty.as_pointer(), None), [ir.Constant(I32, 1)]), I64)
 
+    # ---------- lists and strings: literals, indexing, slicing (spec 29) ----------
+
+    _SLICE_NONE = ir.Constant(I64, -(2 ** 63))
+
+    def _list_push_value(self, ctx: "FunctionCtx", lst: ir.Value, list_ty: T.ListType,
+                         elem: ir.Value) -> ir.Value:
+        """Return lst with elem appended (copy-on-push)."""
+        b = ctx.builder
+        in_slot = ctx.alloca(RW_LIST_INT_TY)
+        b.store(lst, in_slot)
+        out_slot = ctx.alloca(RW_LIST_INT_TY)
+        if list_ty is T.LIST_INT:
+            b.call(self._rw_list_int_push, [out_slot, in_slot, elem])
+        else:
+            elem_llvm = llvm_type_of(list_ty.elem)
+            elem_slot = ctx.alloca(elem_llvm)
+            b.store(elem, elem_slot)
+            b.call(self._rw_list_push,
+                   [out_slot, in_slot, b.bitcast(elem_slot, I8P), self._sizeof(elem_llvm, b)])
+        return b.load(out_slot)
+
+    def _list_get(self, ctx: "FunctionCtx", list_slot: ir.Value, list_ty: T.ListType,
+                  idx: ir.Value) -> ir.Value:
+        """Bounds-checked element `idx` (already non-negative-normalised)."""
+        b = ctx.builder
+        if list_ty is T.LIST_INT:
+            return b.call(self._rw_list_int_at, [list_slot, idx])
+        elem_llvm = llvm_type_of(list_ty.elem)
+        elem_slot = ctx.alloca(elem_llvm)
+        b.call(self._rw_list_at,
+               [b.bitcast(elem_slot, I8P), list_slot, idx, self._sizeof(elem_llvm, b)])
+        return b.load(elem_slot)
+
+    def _emit_list_lit(self, expr: A.ListLit, ctx: "FunctionCtx") -> ir.Value:
+        b = ctx.builder
+        list_ty = self.sema.expr_types[id(expr)]
+        assert isinstance(list_ty, T.ListType)
+        slot = ctx.alloca(RW_LIST_INT_TY)
+        b.call(self._rw_list_int_new if list_ty is T.LIST_INT else self._rw_list_new, [slot])
+        lst: ir.Value = b.load(slot)
+        for e in expr.elems:
+            lst = self._list_push_value(ctx, lst, list_ty, self._emit_expr(e, ctx))
+        return lst
+
+    def _emit_index(self, expr: A.Index, ctx: "FunctionCtx") -> ir.Value:
+        b = ctx.builder
+        obj = self._emit_expr(expr.obj, ctx)
+        idx = self._emit_expr(expr.index, ctx)
+        obj_ty = self.sema.expr_types[id(expr.obj)]
+        if obj_ty is T.STRING:
+            return b.call(self._rw_str_index, [obj, idx])
+        assert isinstance(obj_ty, T.ListType)
+        slot = ctx.alloca(RW_LIST_INT_TY)
+        b.store(obj, slot)
+        n = b.call(self._rw_list_int_len, [slot])
+        neg = b.icmp_signed("<", idx, ir.Constant(I64, 0))
+        idx = b.select(neg, b.add(idx, n), idx)  # xs[-1] is the last element
+        return self._list_get(ctx, slot, obj_ty, idx)
+
+    def _emit_slice(self, expr: A.Slice, ctx: "FunctionCtx") -> ir.Value:
+        b = ctx.builder
+        obj = self._emit_expr(expr.obj, ctx)
+        start = self._emit_expr(expr.start, ctx) if expr.start is not None else self._SLICE_NONE
+        stop = self._emit_expr(expr.stop, ctx) if expr.stop is not None else self._SLICE_NONE
+        obj_ty = self.sema.expr_types[id(expr.obj)]
+        if obj_ty is T.STRING:
+            return b.call(self._rw_str_slice_py, [obj, start, stop])
+        assert isinstance(obj_ty, T.ListType)
+        in_slot = ctx.alloca(RW_LIST_INT_TY)
+        b.store(obj, in_slot)
+        out_slot = ctx.alloca(RW_LIST_INT_TY)
+        size = self._sizeof(llvm_type_of(obj_ty.elem), b)
+        b.call(self._rw_list_slice, [out_slot, in_slot, start, stop, size])
+        return b.load(out_slot)
+
+    def _emit_foreach(self, stmt: A.ForEach, ctx: "FunctionCtx") -> None:
+        """for var in <list|string>: an index loop over a value evaluated
+        once; `continue` goes to the increment."""
+        b = ctx.builder
+        it_ty = self.sema.expr_types[id(stmt.iterable)]
+        elem_ty = self.sema.foreach_types[id(stmt)]
+        it_val = self._emit_expr(stmt.iterable, ctx)
+        it_slot = ctx.alloca(llvm_type_of(it_ty))
+        b.store(it_val, it_slot)
+        if it_ty is T.STRING:
+            n = b.call(self._rw_str_len, [it_val])
+        else:
+            n = b.call(self._rw_list_int_len, [it_slot])
+        idx_slot = ctx.alloca(I64)
+        b.store(ir.Constant(I64, 0), idx_slot)
+        var_slot = ctx.alloca(llvm_type_of(elem_ty), name=stmt.var)
+
+        cond_bb = ctx.function.append_basic_block("for.cond")
+        body_bb = ctx.function.append_basic_block("for.body")
+        update_bb = ctx.function.append_basic_block("for.update")
+        end_bb = ctx.function.append_basic_block("for.end")
+        b.branch(cond_bb)
+        b.position_at_end(cond_bb)
+        self._emit_safepoint(ctx)
+        i = b.load(idx_slot)
+        b.cbranch(b.icmp_signed("<", i, n), body_bb, end_bb)
+
+        b.position_at_end(body_bb)
+        if it_ty is T.STRING:
+            elem = b.call(self._rw_str_index, [b.load(it_slot), i])
+        else:
+            assert isinstance(it_ty, T.ListType)
+            elem = self._list_get(ctx, it_slot, it_ty, i)
+        b.store(elem, var_slot)
+        saved = ctx.locals.get(stmt.var)
+        ctx.locals[stmt.var] = var_slot
+        ctx.loop_stack.append((update_bb, end_bb))
+        self._emit_block(stmt.body, ctx)
+        ctx.loop_stack.pop()
+        if saved is None:
+            del ctx.locals[stmt.var]
+        else:
+            ctx.locals[stmt.var] = saved
+        if not b.block.is_terminated:
+            b.branch(update_bb)
+
+        b.position_at_end(update_bb)
+        b.store(b.add(b.load(idx_slot), ir.Constant(I64, 1)), idx_slot)
+        b.branch(cond_bb)
+        b.position_at_end(end_bb)
+
     def _emit_generic_list_op(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
         """list_push / list_at for List[T] with T != int (spec 22)."""
         b = ctx.builder
@@ -558,6 +694,12 @@ class IRGen:
             return ir.Constant(I8, 1 if expr.value else 0)
         if isinstance(expr, A.StringLit):
             return self._emit_string_literal(expr.value, b)
+        if isinstance(expr, A.ListLit):
+            return self._emit_list_lit(expr, ctx)
+        if isinstance(expr, A.Index):
+            return self._emit_index(expr, ctx)
+        if isinstance(expr, A.Slice):
+            return self._emit_slice(expr, ctx)
         if isinstance(expr, A.CallValue):
             callee = self._emit_expr(expr.callee, ctx)
             return b.call(callee, [self._emit_expr(a, ctx) for a in expr.args])

@@ -456,16 +456,22 @@ class Parser:
         body = self.parse_block()
         return A.While(cond, body, kw.line, kw.col)
 
-    def parse_for(self) -> A.For:
+    def parse_for(self) -> A.Stmt:
         kw = self.eat(TokenKind.KW_FOR)
         var_tok = self.eat(TokenKind.IDENT, "loop variable name")
         self.eat(TokenKind.KW_IN, "'in' after for variable")
+        if not (
+            self.cur.kind == TokenKind.IDENT
+            and self.cur.value == "range"
+            and self.peek(1).kind == TokenKind.LPAREN
+        ):
+            # `for x in <list or string>` (spec 29).
+            iterable = self.parse_expr()
+            self.eat(TokenKind.COLON, "':' after for header")
+            self.eat(TokenKind.NEWLINE)
+            body = self.parse_block()
+            return A.ForEach(var_tok.value, iterable, body, kw.line, kw.col)
         # range header: the identifier `range` followed by ( args )
-        if not (self.cur.kind == TokenKind.IDENT and self.cur.value == "range"):
-            raise ParserError(
-                "for loop must iterate over range(...)",
-                self.cur.line, self.cur.col,
-            )
         self.i += 1  # consume `range`
         self.eat(TokenKind.LPAREN, "'(' after range")
         args: List[A.Expr] = []
@@ -688,6 +694,11 @@ class Parser:
                 expr.line, expr.col,
             )
         if self.cur.kind == TokenKind.ASSIGN:
+            if isinstance(expr, (A.Index, A.Slice)):
+                raise ParserError(
+                    "lists and strings are immutable: cannot assign through an index",
+                    t.line, t.col, max(1, len(t.value)),
+                )
             # `obj.field = value` (spec 20): the only assignable expression.
             if not isinstance(expr, A.FieldAccess):
                 raise ParserError(
@@ -870,7 +881,10 @@ class Parser:
             self.i += 1  # consume '('
             args = self._parse_arglist()
             atom = A.Call(atom.name, args, atom.line, atom.col)
-        while self.cur.kind in (TokenKind.DOT, TokenKind.LPAREN):
+        while self.cur.kind in (TokenKind.DOT, TokenKind.LPAREN, TokenKind.LBRACK):
+            if self.cur.kind == TokenKind.LBRACK:
+                atom = self._parse_subscript(atom)
+                continue
             if self.cur.kind == TokenKind.LPAREN:
                 # Call of a function value: `a.b.f(x)`, `pick()(x)` (spec 21).
                 self.i += 1  # consume '('
@@ -890,6 +904,22 @@ class Parser:
                 # Field access `expr.field` (spec 20).
                 atom = A.FieldAccess(atom, name.value, name.line, name.col)
         return atom
+
+    def _parse_subscript(self, obj: A.Expr) -> A.Expr:
+        """`[index]` or `[start?:stop?]` after `obj` (spec 29)."""
+        lb = self.eat(TokenKind.LBRACK)
+        start: Optional[A.Expr] = None
+        if self.cur.kind != TokenKind.COLON:
+            start = self.parse_expr()
+        if self.match(TokenKind.COLON):
+            stop: Optional[A.Expr] = None
+            if self.cur.kind != TokenKind.RBRACK:
+                stop = self.parse_expr()
+            self.eat(TokenKind.RBRACK, "']' to close the slice")
+            return A.Slice(obj, start, stop, lb.line, lb.col)
+        self.eat(TokenKind.RBRACK, "']' to close the index")
+        assert start is not None
+        return A.Index(obj, start, lb.line, lb.col)
 
     def _parse_arglist(self) -> List[A.Expr]:
         """Parse a comma-separated argument list, with `(` already consumed,
@@ -930,6 +960,16 @@ class Parser:
         if t.kind in (TokenKind.KW_INT, TokenKind.KW_FLOAT) and self.peek(1).kind == TokenKind.LPAREN:
             self.i += 1
             return A.Name(t.value, t.line, t.col)
+        if t.kind == TokenKind.LBRACK:
+            # List literal `[e1, ..., en]` (spec 29).
+            self.i += 1
+            elems: List[A.Expr] = []
+            if self.cur.kind != TokenKind.RBRACK:
+                elems.append(self.parse_expr())
+                while self.match(TokenKind.COMMA):
+                    elems.append(self.parse_expr())
+            self.eat(TokenKind.RBRACK, "']' to close the list")
+            return A.ListLit(elems, t.line, t.col)
         if t.kind == TokenKind.LPAREN:
             self.i += 1
             inner = self.parse_expr()

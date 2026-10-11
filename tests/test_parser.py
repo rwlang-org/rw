@@ -532,3 +532,41 @@ def test_parse_compound_assign_field():
 def test_parse_compound_assign_through_call_is_error():
     with pytest.raises(ParserError):
         parse_src("def main() -> int:\n    f().x += 1\n    return 0\n")
+
+
+# ----- list syntax (spec 29) -----
+
+def test_parse_list_literal_index_slice():
+    mod = parse_src(
+        "def main() -> int:\n"
+        "    xs: List[int] = [1, 2, 3]\n"
+        "    e: List[int] = []\n"
+        "    a: int = xs[0]\n"
+        "    b: List[int] = xs[1:]\n"
+        "    c: List[int] = xs[:-1]\n"
+        "    d: List[int] = xs[:]\n"
+        "    return xs[1:2][0]\n"
+    )
+    body = mod.functions[0].body
+    assert isinstance(body[0].value, A.ListLit) and len(body[0].value.elems) == 3
+    assert isinstance(body[1].value, A.ListLit) and body[1].value.elems == []
+    assert isinstance(body[2].value, A.Index)
+    s1, s2, s3 = body[3].value, body[4].value, body[5].value
+    assert isinstance(s1, A.Slice) and s1.start is not None and s1.stop is None
+    assert isinstance(s2, A.Slice) and s2.start is None and isinstance(s2.stop, A.UnaryOp)
+    assert isinstance(s3, A.Slice) and s3.start is None and s3.stop is None
+    ret = body[6].value
+    assert isinstance(ret, A.Index) and isinstance(ret.obj, A.Slice)
+
+
+def test_parse_for_each():
+    mod = parse_src("def main() -> int:\n    for x in xs:\n        print(x)\n    return 0\n")
+    loop = mod.functions[0].body[0]
+    assert isinstance(loop, A.ForEach) and loop.var == "x"
+    assert isinstance(loop.iterable, A.Name) and loop.iterable.name == "xs"
+
+
+def test_parse_index_assignment_is_error():
+    with pytest.raises(ParserError) as ei:
+        parse_src("def main() -> int:\n    xs[0] = 1\n    return 0\n")
+    assert "immutable" in str(ei.value)

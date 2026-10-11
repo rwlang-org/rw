@@ -167,6 +167,33 @@ class ErrExpr:
 
 
 @dataclass
+class ListLit:
+    """`[e1, ..., en]` (spec 29)."""
+    elems: List["Expr"]
+    line: int
+    col: int
+
+
+@dataclass
+class Index:
+    """`obj[index]` on a list or a string (spec 29)."""
+    obj: "Expr"
+    index: "Expr"
+    line: int
+    col: int
+
+
+@dataclass
+class Slice:
+    """`obj[start:stop]` with optional bounds (spec 29)."""
+    obj: "Expr"
+    start: Optional["Expr"]
+    stop: Optional["Expr"]
+    line: int
+    col: int
+
+
+@dataclass
 class CallValue:
     """A call whose callee is an expression rather than a bare name, e.g.
     `a.b.handler(x)` or `pick()(x)` (spec 21)."""
@@ -190,7 +217,7 @@ Expr = Union[
     UnaryOp, BinOp, IfExpr, Call, SpawnExpr, AwaitExpr,
     SomeExpr, NoneExpr,
     OkExpr, ErrExpr,
-    FieldAccess, CallValue,
+    FieldAccess, CallValue, ListLit, Index, Slice,
 ]
 
 
@@ -281,6 +308,16 @@ class For:
 
 
 @dataclass
+class ForEach:
+    """`for var in iterable:` over a list or a string (spec 29)."""
+    var: str
+    iterable: Expr
+    body: List["Stmt"]
+    line: int
+    col: int
+
+
+@dataclass
 class MatchStmt:
     target: Expr
     style: str                              # "option" or "result"
@@ -309,7 +346,7 @@ class FieldAssign:
 
 Stmt = Union[
     VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt, Break, Continue, Assert,
-    FieldAssign,
+    FieldAssign, ForEach,
 ]
 
 

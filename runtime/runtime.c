@@ -413,6 +413,53 @@ int8_t rw_str_ends_with(rw_str s, rw_str suffix) {
     return memcmp(s.ptr + s.len - suffix.len, suffix.ptr, (size_t)suffix.len) == 0 ? 1 : 0;
 }
 
+/* ---------- indexing and slicing (spec 29) ---------- */
+
+/* Resolve Python-style slice bounds against len into 0 <= *a <= *b <= len. */
+static void slice_bounds(int64_t len, int64_t *a, int64_t *b) {
+    int64_t s = *a, e = *b;
+    if (s == RW_SLICE_NONE) s = 0;
+    else if (s < 0) s += len;
+    if (e == RW_SLICE_NONE) e = len;
+    else if (e < 0) e += len;
+    if (s < 0) s = 0;
+    if (s > len) s = len;
+    if (e < 0) e = 0;
+    if (e > len) e = len;
+    if (e < s) e = s;
+    *a = s;
+    *b = e;
+}
+
+rw_str rw_str_index(rw_str s, int64_t i) {
+    if (i < 0) i += s.len;
+    if (i < 0 || i >= s.len) {
+        fputs("rw: string index out of range\n", stderr);
+        abort();
+    }
+    return rw_str_slice(s, i, i + 1);
+}
+
+rw_str rw_str_slice_py(rw_str s, int64_t start, int64_t stop) {
+    slice_bounds(s.len, &start, &stop);
+    return rw_str_slice(s, start, stop);
+}
+
+void rw_list_slice(rw_list *out, const rw_list *l, int64_t start, int64_t stop, int64_t elem_size) {
+    slice_bounds(l->len, &start, &stop);
+    int64_t n = stop - start;
+    out->len = 0;
+    out->cap = 0;
+    out->data = NULL;
+    if (n <= 0) return;
+    char *data = (char *)malloc((size_t)(n * elem_size));
+    if (!data) return;
+    memcpy(data, l->data + start * elem_size, (size_t)(n * elem_size));
+    out->len = n;
+    out->cap = n;
+    out->data = data;
+}
+
 /* ---------- lifecycle ---------- */
 
 void rw_init(void) {

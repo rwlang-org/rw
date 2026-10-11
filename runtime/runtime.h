@@ -97,6 +97,14 @@ rw_str  rw_str_upper    (rw_str s);
 int8_t  rw_str_contains (rw_str s, rw_str sub);
 int8_t  rw_str_ends_with(rw_str s, rw_str suffix);
 
+/* Indexing and slicing (spec 29). A missing slice bound is RW_SLICE_NONE;
+ * negative indices and bounds count from the end; slice bounds are
+ * clamped to [0, len], an out-of-range index aborts. */
+#define RW_SLICE_NONE INT64_MIN
+rw_str rw_str_index   (rw_str s, int64_t i);
+rw_str rw_str_slice_py(rw_str s, int64_t start, int64_t stop);
+void   rw_list_slice  (rw_list *out, const rw_list *l, int64_t start, int64_t stop, int64_t elem_size);
+
 /* List[int]: range-checked accessor returning Option[int]. */
 void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i);
 
