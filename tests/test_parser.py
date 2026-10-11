@@ -375,10 +375,16 @@ def test_import_after_def_is_error():
         parse_src(src)
 
 
-def test_import_as_not_yet_supported():
-    src = "import math_lib as m\n\ndef main() -> int:\n    return 0\n"
-    with pytest.raises(ParserError):
-        parse_src(src)
+def test_parse_import_as_alias():
+    src = "import math_lib as m\n\ndef main() -> int:\n    return m.add(1, 2)\n"
+    mod = parse_src(src)
+    assert len(mod.imports) == 1
+    imp = mod.imports[0]
+    assert imp.module == "math_lib"
+    assert imp.alias == "m"
+    assert imp.names is None
+    call = mod.functions[0].body[0].value
+    assert isinstance(call, A.Call) and call.module == "m" and call.callee == "add"
 
 
 def test_parse_from_import_single():

@@ -158,18 +158,14 @@ class Parser:
     def parse_import(self) -> A.Import:
         if self.cur.kind == TokenKind.KW_FROM:
             return self._parse_from_import()
-        # Plain `import IDENT NEWLINE`. `import x as m` (PR3) not yet supported.
+        # Plain `import IDENT [as IDENT] NEWLINE`.
         kw = self.eat(TokenKind.KW_IMPORT, "'import'")
         name_tok = self.eat(TokenKind.IDENT, "module name after 'import'")
-        if self.cur.kind == TokenKind.KW_AS:
-            raise ParserError(
-                "`import x as y` is not yet supported",
-                self.cur.line,
-                self.cur.col,
-                max(1, len(self.cur.value)),
-            )
+        alias = None
+        if self.match(TokenKind.KW_AS):
+            alias = self.eat(TokenKind.IDENT, "alias after 'as'").value
         self.eat(TokenKind.NEWLINE)
-        return A.Import(name_tok.value, None, None, kw.line, kw.col)
+        return A.Import(name_tok.value, alias, None, kw.line, kw.col)
 
     def _parse_from_import(self) -> A.Import:
         # `from IDENT import IDENT [as IDENT] { ',' IDENT [as IDENT] }`
