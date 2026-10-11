@@ -45,7 +45,8 @@ def llvm_type_of(t: T.Type) -> ir.Type:
         return RW_STR_TY
     if t is T.BYTES:
         return RW_STR_TY
-    if t is T.LIST_INT:
+    if isinstance(t, T.ListType):
+        # Every List[T] has the same {len, cap, data*} layout (spec 22).
         return RW_LIST_INT_TY
     if t is T.OPTION_INT:
         return RW_OPTION_INT_TY
@@ -146,6 +147,13 @@ class IRGen:
             m, ir.FunctionType(ir.VoidType(),
                                [option_ptr, list_ptr, I64]),
             "rw_list_int_at_opt")
+        # List[T] for non-int T (spec 22): size-generic, element by pointer.
+        self._rw_list_new = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [list_ptr]), "rw_list_new")
+        self._rw_list_push = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [list_ptr, list_ptr, I8P, I64]), "rw_list_push")
+        self._rw_list_at = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [I8P, list_ptr, I64, I64]), "rw_list_at")
         self._rw_str_to_int = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [option_ptr, RW_STR_TY]), "rw_str_to_int")
         # TCP open ops (runtime/net/tcp.c)
@@ -459,6 +467,29 @@ class IRGen:
             b.store(v, b.gep(rec, [ir.Constant(I32, 0), ir.Constant(I32, i)]))
         return raw
 
+    def _sizeof(self, ty: ir.Type, b: ir.IRBuilder) -> ir.Value:
+        """sizeof(ty) as an i64, via the GEP-on-null idiom."""
+        return b.ptrtoint(b.gep(ir.Constant(ty.as_pointer(), None), [ir.Constant(I32, 1)]), I64)
+
+    def _emit_generic_list_op(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
+        """list_push / list_at for List[T] with T != int (spec 22)."""
+        b = ctx.builder
+        list_ty = self.sema.expr_types[id(call.args[0])]
+        assert isinstance(list_ty, T.ListType)
+        elem_llvm = llvm_type_of(list_ty.elem)
+        in_slot = b.alloca(RW_LIST_INT_TY)
+        b.store(self._emit_expr(call.args[0], ctx), in_slot)
+        elem_slot = b.alloca(elem_llvm)
+        size = self._sizeof(elem_llvm, b)
+        if call.callee == "list_push":
+            b.store(self._emit_expr(call.args[1], ctx), elem_slot)
+            out_slot = b.alloca(RW_LIST_INT_TY)
+            b.call(self._rw_list_push, [out_slot, in_slot, b.bitcast(elem_slot, I8P), size])
+            return b.load(out_slot)
+        idx = self._emit_expr(call.args[1], ctx)
+        b.call(self._rw_list_at, [b.bitcast(elem_slot, I8P), in_slot, idx, size])
+        return b.load(elem_slot)
+
     def _emit_expr(self, expr: A.Expr, ctx: "FunctionCtx") -> ir.Value:
         b = ctx.builder
         ref = self.sema.func_refs.get(id(expr))
@@ -697,8 +728,9 @@ class IRGen:
             arg_ast = call.args[0]
             v = self._emit_expr(arg_ast, ctx)
             aty = self.sema.expr_types[id(arg_ast)]
-            if aty is T.LIST_INT:
-                # rw_list_int_len takes a pointer to a stack copy.
+            if isinstance(aty, T.ListType):
+                # rw_list_int_len takes a pointer to a stack copy; it only
+                # reads `len`, so it serves every List[T].
                 slot = ctx.builder.alloca(RW_LIST_INT_TY)
                 ctx.builder.store(v, slot)
                 return ctx.builder.call(self._rw_list_int_len, [slot])
@@ -721,6 +753,12 @@ class IRGen:
             out_slot = ctx.builder.alloca(RW_OPTION_INT_TY)
             ctx.builder.call(self._rw_str_to_int, [out_slot, sv])
             return ctx.builder.load(out_slot)
+        if call.callee == "list_new" and self.sema.expr_types[id(call)] is not T.LIST_INT:
+            slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            ctx.builder.call(self._rw_list_new, [slot])
+            return ctx.builder.load(slot)
+        if call.callee in ("list_push", "list_at") and self.sema.expr_types[id(call.args[0])] is not T.LIST_INT:
+            return self._emit_generic_list_op(call, ctx)
         if call.callee == "list_new":
             # rw_list_int_new(rw_list_int *out) writes to a stack slot;
             # we then load the value back out as a SSA struct.

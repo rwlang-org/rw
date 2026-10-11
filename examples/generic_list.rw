@@ -1,0 +1,99 @@
+class Request:
+    path: string
+
+class Response:
+    status: int
+    body: string
+
+class Route:
+    path: string
+    handler: Callable[[Request], Response]
+
+class Header:
+    name: string
+    value: string
+
+def index(req: Request) -> Response:
+    return Response(200, "index")
+
+def hello(req: Request) -> Response:
+    return Response(200, "hello")
+
+def add_route(routes: List[Route], path: string, h: Callable[[Request], Response]) -> List[Route]:
+    return list_push(routes, Route(path, h))
+
+def find(routes: List[Route], req: Request) -> Response:
+    i: int = 0
+    while i < len(routes):
+        r: Route = list_at(routes, i)
+        if r.path == req.path:
+            return r.handler(req)
+        i = i + 1
+    return Response(404, "not found")
+
+def header(hs: List[Header], name: string) -> string:
+    for i in range(len(hs)):
+        h: Header = list_at(hs, i)
+        if h.name == name:
+            return h.value
+    return ""
+
+def main() -> int:
+    # Strings
+    words: List[string] = list_new()
+    words = list_push(words, "alpha")
+    words = list_push(words, "beta")
+    print(len(words))
+    print(list_at(words, 1))
+
+    # Immutability: pushing returns a new list, the old one is unchanged.
+    more: List[string] = list_push(words, "gamma")
+    print(len(words))
+    print(len(more))
+
+    # Floats, bools, Option[int]
+    fs: List[float] = list_push(list_push(list_new(), 1.5), 2.25)
+    print(list_at(fs, 0) + list_at(fs, 1))
+    bs: List[bool] = list_push(list_new(), true)
+    if list_at(bs, 0):
+        print("bool ok")
+    os: List[Option[int]] = list_push(list_push(list_new(), Some(7)), None)
+    match list_at(os, 0):
+        case Some(n):
+            print(n)
+        case None:
+            print("none")
+    match list_at(os, 1):
+        case Some(n):
+            print(n)
+        case None:
+            print("none")
+
+    # Records and function values: a route table.
+    routes: List[Route] = list_new()
+    routes = add_route(routes, "/", index)
+    routes = add_route(routes, "/hello", hello)
+    print(find(routes, Request("/hello")).body)
+    print(find(routes, Request("/")).body)
+    print(find(routes, Request("/nope")).status)
+
+    # Headers looked up by name.
+    hs: List[Header] = list_new()
+    hs = list_push(hs, Header("Host", "example.com"))
+    hs = list_push(hs, Header("Content-Length", "12"))
+    print(header(hs, "Content-Length"))
+    print(len(header(hs, "Missing")))
+
+    # Nested lists
+    grid: List[List[int]] = list_new()
+    grid = list_push(grid, list_push(list_push(list_new(), 1), 2))
+    grid = list_push(grid, list_push(list_new(), 3))
+    print(len(grid))
+    print(list_at(list_at(grid, 0), 1))
+    print(list_at(list_at(grid, 1), 0))
+
+    # List[int] still works the old way.
+    legacy: List[int] = list_new()
+    legacy = list_push(legacy, 42)
+    print(list_at(legacy, 0))
+    return 0

@@ -108,6 +108,8 @@ class Sema:
         # Record types per module (spec 20); `class_map` is the current one.
         self._classes_by_module: Dict[Optional[str], Dict[str, T.ClassType]] = {}
         self.class_map: Dict[str, T.ClassType] = {}
+        # id(list_new Call) -> the list type it takes from context (spec 22).
+        self._list_new_hints: Dict[int, T.ListType] = {}
         # Import qualifier -> real module, per module; `_import_env` is the
         # current one. Built before any type is resolved so `mod.Class`
         # type names work in signatures and fields.
@@ -149,6 +151,12 @@ class Sema:
                 return self.class_map[ty.name]
             raise CompileError(Diagnostic(self.filename, ty.line, ty.col, len(ty.name),
                                           f"unknown type: {ty.name}"))
+        if isinstance(ty, A.TypeList):
+            elem = self._resolve_type(ty.elem)
+            if elem is T.VOID:
+                raise CompileError(Diagnostic(self.filename, ty.line, ty.col, 4,
+                                              "List element type cannot be void"))
+            return T.list_of(elem)
         if isinstance(ty, A.TypeCallable):
             params: List[T.Type] = []
             for p in ty.params:
@@ -438,7 +446,7 @@ class Sema:
                     self.filename, stmt.line, stmt.col, len(stmt.name),
                     "variable type cannot be void",
                 ))
-            val_ty = self._check_expr(fn, stmt.value, locals_)
+            val_ty = self._check_expr_expect(fn, stmt.value, locals_, declared)
             if val_ty != declared:
                 raise CompileError(Diagnostic(
                     self.filename, stmt.line, stmt.col, len(stmt.name),
@@ -455,7 +463,7 @@ class Sema:
                     f"undefined variable: {stmt.name}",
                 ))
             expected = locals_[stmt.name]
-            val_ty = self._check_expr(fn, stmt.value, locals_)
+            val_ty = self._check_expr_expect(fn, stmt.value, locals_, expected)
             if val_ty != expected:
                 raise CompileError(Diagnostic(
                     self.filename, stmt.line, stmt.col, len(stmt.name),
@@ -471,7 +479,7 @@ class Sema:
         if isinstance(stmt, A.FieldAssign):
             obj_ty = self._check_expr(fn, stmt.obj, locals_)
             _, fty = self._field_of(obj_ty, stmt.field, stmt.line, stmt.col)
-            val_ty = self._check_expr(fn, stmt.value, locals_)
+            val_ty = self._check_expr_expect(fn, stmt.value, locals_, fty)
             if val_ty != fty:
                 raise CompileError(Diagnostic(
                     self.filename, stmt.line, stmt.col, len(stmt.field),
@@ -487,7 +495,7 @@ class Sema:
                         f"function returns `{ret_ty}` but got bare `return`",
                     ))
                 return True
-            val_ty = self._check_expr(fn, stmt.value, locals_)
+            val_ty = self._check_expr_expect(fn, stmt.value, locals_, ret_ty)
             if ret_ty is T.VOID:
                 raise CompileError(Diagnostic(
                     self.filename, stmt.line, stmt.col, 6,
@@ -592,6 +600,39 @@ class Sema:
         ))
 
     # ---------- expressions ----------
+    def _check_expr_expect(
+        self,
+        fn: A.FuncDef,
+        expr: A.Expr,
+        locals_: Dict[str, T.Type],
+        expected: T.Type,
+    ) -> T.Type:
+        """Like _check_expr, but a bare `list_new()` takes the expected list
+        type (spec 22), also through `list_push(list_new(), x)` chains. Used
+        wherever the context knows the type it wants."""
+        if isinstance(expected, T.ListType):
+            self._hint_list_new(expr, expected, locals_)
+        return self._check_expr(fn, expr, locals_)
+
+    def _is_builtin_call(self, expr: A.Expr, name: str, locals_: Dict[str, T.Type]) -> bool:
+        return (
+            isinstance(expr, A.Call)
+            and expr.module is None
+            and expr.callee == name
+            and name not in locals_
+            and name not in self.class_map
+        )
+
+    def _hint_list_new(self, expr: A.Expr, expected: T.ListType, locals_: Dict[str, T.Type]) -> None:
+        """Record the list type a `list_new()` should take, following the list
+        argument of nested `list_push` calls."""
+        if self._is_builtin_call(expr, "list_new", locals_):
+            self._list_new_hints[id(expr)] = expected
+        elif self._is_builtin_call(expr, "list_push", locals_):
+            assert isinstance(expr, A.Call)
+            if expr.args:
+                self._hint_list_new(expr.args[0], expected, locals_)
+
     def _check_expr(
         self,
         fn: A.FuncDef,
@@ -902,10 +943,10 @@ class Sema:
                     f"len takes exactly 1 argument, got {len(call.args)}",
                 ))
             at = self._check_expr(fn, call.args[0], locals_)
-            if at is not T.STRING and at is not T.BYTES and at is not T.LIST_INT:
+            if at is not T.STRING and at is not T.BYTES and not isinstance(at, T.ListType):
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, 3,
-                    f"len argument must be string, Bytes or List[int], found `{at}`",
+                    f"len argument must be string, Bytes or a List, found `{at}`",
                 ))
             return T.INT
         # Builtin: bytes_from_str(string) -> Bytes.
@@ -952,15 +993,16 @@ class Sema:
                         f"{call.callee} argument {i} must be {want}, found `{at}`",
                     ))
             return ret
-        # Builtin: list_new() -> List[int].
+        # Builtin: list_new() -> List[T]. With no expected type (see
+        # _check_expr_expect) it is List[int], as before spec 22.
         if call.callee == "list_new":
             if len(call.args) != 0:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
                     f"list_new takes no arguments, got {len(call.args)}",
                 ))
-            return T.LIST_INT
-        # Builtin: list_push(List[int], int) -> List[int].
+            return self._list_new_hints.get(id(call), T.LIST_INT)
+        # Builtin: list_push(List[T], T) -> List[T].
         if call.callee == "list_push":
             if len(call.args) != 2:
                 raise CompileError(Diagnostic(
@@ -968,19 +1010,19 @@ class Sema:
                     f"list_push takes 2 arguments, got {len(call.args)}",
                 ))
             t0 = self._check_expr(fn, call.args[0], locals_)
-            t1 = self._check_expr(fn, call.args[1], locals_)
-            if t0 is not T.LIST_INT:
+            if not isinstance(t0, T.ListType):
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
-                    f"list_push first argument must be List[int], found `{t0}`",
+                    f"list_push first argument must be a List, found `{t0}`",
                 ))
-            if t1 is not T.INT:
+            t1 = self._check_expr_expect(fn, call.args[1], locals_, t0.elem)
+            if t1 != t0.elem:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
-                    f"list_push second argument must be int, found `{t1}`",
+                    f"list_push second argument must be {t0.elem}, found `{t1}`",
                 ))
-            return T.LIST_INT
-        # Builtin: list_at(List[int], int) -> int.
+            return t0
+        # Builtin: list_at(List[T], int) -> T.
         if call.callee == "list_at":
             if len(call.args) != 2:
                 raise CompileError(Diagnostic(
@@ -989,17 +1031,17 @@ class Sema:
                 ))
             t0 = self._check_expr(fn, call.args[0], locals_)
             t1 = self._check_expr(fn, call.args[1], locals_)
-            if t0 is not T.LIST_INT:
+            if not isinstance(t0, T.ListType):
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
-                    f"list_at first argument must be List[int], found `{t0}`",
+                    f"list_at first argument must be a List, found `{t0}`",
                 ))
             if t1 is not T.INT:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
                     f"list_at second argument must be int, found `{t1}`",
                 ))
-            return T.INT
+            return t0.elem
         # Builtin: list_at_opt(List[int], int) -> Option[int].
         if call.callee == "list_at_opt":
             if len(call.args) != 2:
@@ -1168,7 +1210,7 @@ class Sema:
                 f"{cls} takes {len(cls.fields)} arguments, got {len(call.args)}",
             ))
         for i, (arg, (fname, fty)) in enumerate(zip(call.args, cls.fields, strict=True), start=1):
-            at = self._check_expr(fn, arg, locals_)
+            at = self._check_expr_expect(fn, arg, locals_, fty)
             if at != fty:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
@@ -1218,7 +1260,7 @@ class Sema:
                 f"`{what}` expects {len(callee_ty.params)} argument(s), got {len(args)}",
             ))
         for i, (arg, pty) in enumerate(zip(args, callee_ty.params, strict=True), start=1):
-            at = self._check_expr(fn, arg, locals_)
+            at = self._check_expr_expect(fn, arg, locals_, pty)
             if at != pty:
                 raise CompileError(Diagnostic(
                     self.filename, line, col, max(1, len(what)),
@@ -1237,7 +1279,7 @@ class Sema:
                 f"`{call.callee}` expects {len(sig.params)} argument(s), got {len(call.args)}",
             ))
         for i, (arg, (pname, pty)) in enumerate(zip(call.args, sig.params)):
-            at = self._check_expr(fn, arg, locals_)
+            at = self._check_expr_expect(fn, arg, locals_, pty)
             if at != pty:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),

@@ -263,15 +263,12 @@ class Parser:
         if t.kind == TokenKind.KW_LIST:
             self.i += 1
             self.eat(TokenKind.LBRACK, "'[' after List")
-            inner_tok = self.cur
-            if inner_tok.kind != TokenKind.KW_INT:
-                raise ParserError(
-                    "only List[int] is supported in this version of rw",
-                    inner_tok.line, inner_tok.col, max(1, len(inner_tok.value)),
-                )
-            self.i += 1
-            self.eat(TokenKind.RBRACK, "']' to close List[int]")
-            return A.TypeName("List[int]", t.line, t.col)
+            if self.cur.kind == TokenKind.KW_INT and self.peek(1).kind == TokenKind.RBRACK:
+                self.i += 2  # `int` `]`
+                return A.TypeName("List[int]", t.line, t.col)
+            elem = self.parse_type()
+            self.eat(TokenKind.RBRACK, "']' to close List[...]")
+            return A.TypeList(elem, t.line, t.col)
         if t.kind == TokenKind.KW_OPTION:
             self.i += 1
             self.eat(TokenKind.LBRACK, "'[' after Option")

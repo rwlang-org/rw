@@ -489,3 +489,13 @@ def test_parse_name_dot_call_stays_qualified_call():
     mod = parse_src("def main() -> int:\n    r.handler(1)\n    return 0\n")
     e = mod.functions[0].body[0].expr
     assert isinstance(e, A.Call) and e.module == "r" and e.callee == "handler"
+
+
+# ----- List[T] (spec 22) -----
+
+def test_parse_generic_list_types():
+    mod = parse_src("def f(a: List[string], b: List[List[Route]], c: List[int]) -> int:\n    return 0\n")
+    a, b, c = (p.type_expr for p in mod.functions[0].params)
+    assert isinstance(a, A.TypeList) and a.elem.name == "string"
+    assert isinstance(b, A.TypeList) and isinstance(b.elem, A.TypeList) and b.elem.elem.name == "Route"
+    assert isinstance(c, A.TypeName) and c.name == "List[int]"  # unchanged
