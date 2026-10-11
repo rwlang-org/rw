@@ -130,8 +130,9 @@ class Sema:
         # Record types per module (spec 20); `class_map` is the current one.
         self._classes_by_module: Dict[Optional[str], Dict[str, T.ClassType]] = {}
         self.class_map: Dict[str, T.ClassType] = {}
-        # id(list_new Call) -> the list type it takes from context (spec 22).
-        self._list_new_hints: Dict[int, T.ListType] = {}
+        # id(expr) -> the type it takes from context: list_new() / [] (spec 22,
+        # 29) and None / Some / Ok / Err (spec 30).
+        self._type_hints: Dict[int, T.Type] = {}
         # Import qualifier -> real module, per module; `_import_env` is the
         # current one. Built before any type is resolved so `mod.Class`
         # type names work in signatures and fields.
@@ -173,6 +174,18 @@ class Sema:
                 return self.class_map[ty.name]
             raise CompileError(Diagnostic(self.filename, ty.line, ty.col, len(ty.name),
                                           f"unknown type: {ty.name}"))
+        if isinstance(ty, A.TypeOption):
+            inner = self._resolve_type(ty.inner)
+            if inner is T.VOID:
+                raise CompileError(Diagnostic(self.filename, ty.line, ty.col, 6,
+                                              "Option payload cannot be void"))
+            return T.option_of(inner)
+        if isinstance(ty, A.TypeResult):
+            ok, err = self._resolve_type(ty.ok), self._resolve_type(ty.err)
+            if ok is T.VOID or err is T.VOID:
+                raise CompileError(Diagnostic(self.filename, ty.line, ty.col, 6,
+                                              "Result payloads cannot be void"))
+            return T.result_of(ok, err)
         if isinstance(ty, A.TypeList):
             elem = self._resolve_type(ty.elem)
             if elem is T.VOID:
@@ -615,30 +628,30 @@ class Sema:
         if isinstance(stmt, A.MatchStmt):
             tt = self._check_expr(fn, stmt.target, locals_)
             if stmt.style == "option":
-                if tt is not T.OPTION_INT:
+                if not isinstance(tt, T.OptionType):
                     raise CompileError(Diagnostic(
                         self.filename, stmt.line, stmt.col, 5,
-                        f"match target must be Option[int], found `{tt}`",
+                        f"match target must be an Option, found `{tt}`",
                     ))
-                # Some arm: bind some_var as int in a new locals scope.
+                # Some arm: bind some_var to the payload in a new locals scope.
                 some_locals = dict(locals_)
-                some_locals[stmt.some_var] = T.INT
+                some_locals[stmt.some_var] = tt.inner
                 some_ret = self._check_block(fn, stmt.some_block, some_locals, ret_ty)
                 # None arm: no binding.
                 none_ret = self._check_block(fn, stmt.none_block, dict(locals_), ret_ty)
                 # match terminates in return iff both arms do.
                 return some_ret and none_ret
             # style == "result"
-            if tt is not T.RESULT_INT_INT:
+            if not isinstance(tt, T.ResultType):
                 raise CompileError(Diagnostic(
                     self.filename, stmt.line, stmt.col, 5,
-                    f"match target must be Result[int, int], found `{tt}`",
+                    f"match target must be a Result, found `{tt}`",
                 ))
             ok_locals = dict(locals_)
-            ok_locals[stmt.ok_var] = T.INT
+            ok_locals[stmt.ok_var] = tt.ok
             ok_ret = self._check_block(fn, stmt.ok_block, ok_locals, ret_ty)
             err_locals = dict(locals_)
-            err_locals[stmt.err_var] = T.INT
+            err_locals[stmt.err_var] = tt.err
             err_ret = self._check_block(fn, stmt.err_block, err_locals, ret_ty)
             return ok_ret and err_ret
 
@@ -657,8 +670,7 @@ class Sema:
         """Like _check_expr, but a bare `list_new()` takes the expected list
         type (spec 22), also through `list_push(list_new(), x)` chains. Used
         wherever the context knows the type it wants."""
-        if isinstance(expected, T.ListType):
-            self._hint_list_new(expr, expected, locals_)
+        self._hint_expected(expr, expected, locals_)
         return self._check_expr(fn, expr, locals_)
 
     def _is_builtin_call(self, expr: A.Expr, name: str, locals_: Dict[str, T.Type]) -> bool:
@@ -670,15 +682,26 @@ class Sema:
             and name not in self.class_map
         )
 
-    def _hint_list_new(self, expr: A.Expr, expected: T.ListType, locals_: Dict[str, T.Type]) -> None:
-        """Record the list type a `list_new()` should take, following the list
-        argument of nested `list_push` calls."""
-        if self._is_builtin_call(expr, "list_new", locals_) or isinstance(expr, A.ListLit):
-            self._list_new_hints[id(expr)] = expected
-        elif self._is_builtin_call(expr, "list_push", locals_):
+    def _hint_expected(self, expr: A.Expr, expected: T.Type, locals_: Dict[str, T.Type]) -> None:
+        """Record the type an expression whose type is not fully determined
+        by itself should take: `list_new()` / `[]` (spec 22, 29) and `None` /
+        `Some` / `Ok` / `Err` (spec 30). Follows the list argument of nested
+        `list_push` calls and both arms of a ternary."""
+        if isinstance(expected, T.ListType) and (
+            self._is_builtin_call(expr, "list_new", locals_) or isinstance(expr, A.ListLit)
+        ):
+            self._type_hints[id(expr)] = expected
+        elif isinstance(expected, T.ListType) and self._is_builtin_call(expr, "list_push", locals_):
             assert isinstance(expr, A.Call)
             if expr.args:
-                self._hint_list_new(expr.args[0], expected, locals_)
+                self._hint_expected(expr.args[0], expected, locals_)
+        elif isinstance(expected, T.OptionType) and isinstance(expr, (A.NoneExpr, A.SomeExpr)):
+            self._type_hints[id(expr)] = expected
+        elif isinstance(expected, T.ResultType) and isinstance(expr, (A.OkExpr, A.ErrExpr)):
+            self._type_hints[id(expr)] = expected
+        elif isinstance(expr, A.IfExpr):
+            self._hint_expected(expr.then, expected, locals_)
+            self._hint_expected(expr.els, expected, locals_)
 
     def _check_expr(
         self,
@@ -826,7 +849,8 @@ class Sema:
             self.result.func_refs[id(expr)] = key
             return self._func_value_type(key)
         if isinstance(expr, A.ListLit):
-            hint = self._list_new_hints.get(id(expr))
+            lhint = self._type_hints.get(id(expr))
+            hint = lhint if isinstance(lhint, T.ListType) else None
             if not expr.elems:
                 return hint or T.LIST_INT
             elem_hint: Optional[T.Type] = hint.elem if hint else None
@@ -897,6 +921,13 @@ class Sema:
                     self.filename, expr.line, expr.col, 5,
                     "cannot spawn a function returning a record",
                 ))
+            # The fiber runtime returns results through rw_spawn_<T> for
+            # these types only.
+            if ret_ty not in (T.INT, T.FLOAT, T.BOOL, T.STRING, T.BYTES, T.VOID):
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, 5,
+                    f"cannot spawn a function returning `{ret_ty}`",
+                ))
             return T.FutureType(ret_ty)
         if isinstance(expr, A.AwaitExpr):
             tgt = self._check_expr(fn, expr.target, locals_)
@@ -906,32 +937,8 @@ class Sema:
                     f"`await` requires a Future, found `{tgt}`",
                 ))
             return tgt.inner
-        if isinstance(expr, A.SomeExpr):
-            at = self._check_expr(fn, expr.arg, locals_)
-            if at is not T.INT:
-                raise CompileError(Diagnostic(
-                    self.filename, expr.line, expr.col, 4,
-                    f"Some argument must be int, found `{at}`",
-                ))
-            return T.OPTION_INT
-        if isinstance(expr, A.NoneExpr):
-            return T.OPTION_INT
-        if isinstance(expr, A.OkExpr):
-            at = self._check_expr(fn, expr.arg, locals_)
-            if at is not T.INT:
-                raise CompileError(Diagnostic(
-                    self.filename, expr.line, expr.col, 2,
-                    f"Ok argument must be int, found `{at}`",
-                ))
-            return T.RESULT_INT_INT
-        if isinstance(expr, A.ErrExpr):
-            at = self._check_expr(fn, expr.arg, locals_)
-            if at is not T.INT:
-                raise CompileError(Diagnostic(
-                    self.filename, expr.line, expr.col, 3,
-                    f"Err argument must be int, found `{at}`",
-                ))
-            return T.RESULT_INT_INT
+        if isinstance(expr, (A.SomeExpr, A.NoneExpr, A.OkExpr, A.ErrExpr)):
+            return self._check_variant(fn, expr, locals_)
         if isinstance(expr, A.IfExpr):
             ct = self._check_expr(fn, expr.cond, locals_)
             if ct is not T.BOOL:
@@ -1102,7 +1109,8 @@ class Sema:
                     self.filename, call.line, call.col, len(call.callee),
                     f"list_new takes no arguments, got {len(call.args)}",
                 ))
-            return self._list_new_hints.get(id(call), T.LIST_INT)
+            hint = self._type_hints.get(id(call))
+            return hint if isinstance(hint, T.ListType) else T.LIST_INT
         # Builtin: list_push(List[T], T) -> List[T].
         if call.callee == "list_push":
             if len(call.args) != 2:
@@ -1334,6 +1342,36 @@ class Sema:
                 f"{obj_ty} has no field `{field}`",
             ))
         return obj_ty, obj_ty.fields[idx][1]
+
+    def _check_variant(self, fn: A.FuncDef, expr: A.Expr, locals_: Dict[str, T.Type]) -> T.Type:
+        """`Some(x)` / `None` / `Ok(x)` / `Err(e)` (spec 30). The expected type,
+        if any, fixes the payload types; otherwise the argument does, and an
+        undetermined part defaults to int."""
+        hint = self._type_hints.get(id(expr))
+        if isinstance(expr, A.NoneExpr):
+            return hint if isinstance(hint, T.OptionType) else T.OPTION_INT
+        assert isinstance(expr, (A.SomeExpr, A.OkExpr, A.ErrExpr))
+        if isinstance(expr, A.SomeExpr):
+            name, want = "Some", hint.inner if isinstance(hint, T.OptionType) else None
+        elif isinstance(expr, A.OkExpr):
+            name, want = "Ok", hint.ok if isinstance(hint, T.ResultType) else None
+        else:
+            name, want = "Err", hint.err if isinstance(hint, T.ResultType) else None
+        at = (self._check_expr_expect(fn, expr.arg, locals_, want) if want is not None
+              else self._check_expr(fn, expr.arg, locals_))
+        if at is T.VOID:
+            raise CompileError(Diagnostic(self.filename, expr.line, expr.col, len(name),
+                                          f"{name} argument cannot be void"))
+        if want is not None and at != want:
+            raise CompileError(Diagnostic(
+                self.filename, expr.line, expr.col, len(name),
+                f"{name} argument must be {want}, found `{at}`",
+            ))
+        if isinstance(expr, A.SomeExpr):
+            return T.option_of(at)
+        if isinstance(hint, T.ResultType):
+            return hint
+        return T.result_of(at, T.INT) if isinstance(expr, A.OkExpr) else T.result_of(T.INT, at)
 
     def _func_value_type(self, key: FuncKey) -> T.FunctionType:
         sig = self.result.functions[key]

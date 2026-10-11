@@ -31,7 +31,6 @@ I8P = I8.as_pointer()
 RW_STR_TY = ir.LiteralStructType([I64, I8P])  # { i64 len, i8* ptr }
 RW_LIST_INT_TY = ir.LiteralStructType([I64, I64, I64.as_pointer()])  # {len, cap, data*}
 RW_OPTION_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
-RW_RESULT_INT_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload} (named alias)
 
 
 def llvm_type_of(t: T.Type) -> ir.Type:
@@ -48,10 +47,12 @@ def llvm_type_of(t: T.Type) -> ir.Type:
     if isinstance(t, T.ListType):
         # Every List[T] has the same {len, cap, data*} layout (spec 22).
         return RW_LIST_INT_TY
-    if t is T.OPTION_INT:
-        return RW_OPTION_INT_TY
-    if t is T.RESULT_INT_INT:
-        return RW_RESULT_INT_INT_TY
+    if isinstance(t, T.OptionType):
+        # {tag, value}; identical to RW_OPTION_INT_TY for Option[int] (spec 30).
+        return ir.LiteralStructType([I64, llvm_type_of(t.inner)])
+    if isinstance(t, T.ResultType):
+        # {tag, ok, err} (spec 30).
+        return ir.LiteralStructType([I64, llvm_type_of(t.ok), llvm_type_of(t.err)])
     if t is T.VOID:
         return ir.VoidType()
     if isinstance(t, T.FutureType):
@@ -446,35 +447,38 @@ class IRGen:
             return
         if isinstance(stmt, A.MatchStmt):
             v = self._emit_expr(stmt.target, ctx)
+            target_ty = self.sema.expr_types[id(stmt.target)]
             tag = b.extract_value(v, 0)
-            payload = b.extract_value(v, 1)
             arm1_bb = ctx.function.append_basic_block("match.arm1")
             arm0_bb = ctx.function.append_basic_block("match.arm0")
             end_bb = ctx.function.append_basic_block("match.end")
             # tag == 1 -> arm1, default (tag == 0) -> arm0.
             sw = b.switch(tag, arm0_bb)
             sw.add_case(ir.Constant(I64, 1), arm1_bb)
-            if stmt.style == "option":
-                var1, block1 = stmt.some_var, stmt.some_block
-                var0, block0 = None, stmt.none_block
-            else:  # "result"
-                var1, block1 = stmt.ok_var, stmt.ok_block
-                var0, block0 = stmt.err_var, stmt.err_block
-            # arm1 (tag == 1)
+            # Payloads (spec 30): Option {tag, value}; Result {tag, ok, err}.
             b.position_at_end(arm1_bb)
-            self._emit_arm(var1, block1, payload, ctx, end_bb)
-            # arm0 (tag == 0)
-            b.position_at_end(arm0_bb)
-            self._emit_arm(var0, block0, payload, ctx, end_bb)
+            if stmt.style == "option":
+                assert isinstance(target_ty, T.OptionType)
+                self._emit_arm(stmt.some_var, stmt.some_block, b.extract_value(v, 1),
+                               target_ty.inner, ctx, end_bb)
+                b.position_at_end(arm0_bb)
+                self._emit_arm(None, stmt.none_block, None, None, ctx, end_bb)
+            else:  # "result"
+                assert isinstance(target_ty, T.ResultType)
+                self._emit_arm(stmt.ok_var, stmt.ok_block, b.extract_value(v, 1),
+                               target_ty.ok, ctx, end_bb)
+                b.position_at_end(arm0_bb)
+                self._emit_arm(stmt.err_var, stmt.err_block, b.extract_value(v, 2),
+                               target_ty.err, ctx, end_bb)
             b.position_at_end(end_bb)
             return
         raise RuntimeError(f"unsupported stmt: {type(stmt).__name__}")
 
-    def _emit_arm(self, var_name, block, payload, ctx, end_bb):
+    def _emit_arm(self, var_name, block, payload, payload_ty, ctx, end_bb):
         """Emit one match arm. var_name=None means no payload binding."""
         b = ctx.builder
         if var_name is not None:
-            slot = ctx.alloca(I64, name=var_name)
+            slot = ctx.alloca(llvm_type_of(payload_ty), name=var_name)
             b.store(payload, slot)
             saved = ctx.locals.get(var_name)
             ctx.locals[var_name] = slot
@@ -729,24 +733,17 @@ class IRGen:
             return self._emit_spawn(expr, ctx)
         if isinstance(expr, A.AwaitExpr):
             return self._emit_await(expr, ctx)
-        if isinstance(expr, A.SomeExpr):
+        if isinstance(expr, (A.SomeExpr, A.NoneExpr, A.OkExpr, A.ErrExpr)):
+            # Start from all-zero (tag 0) and insert the tag and the payload
+            # (spec 30): Some/Ok have tag 1; Some/Ok store at 1, Err at 2.
+            zero = ir.Constant(llvm_type_of(self.sema.expr_types[id(expr)]), None)
+            if isinstance(expr, A.NoneExpr):
+                return zero
             v = self._emit_expr(expr.arg, ctx)
-            base = ir.Constant(RW_OPTION_INT_TY,
-                               [ir.Constant(I64, 1), ir.Constant(I64, 0)])
-            return ctx.builder.insert_value(base, v, 1)
-        if isinstance(expr, A.NoneExpr):
-            return ir.Constant(RW_OPTION_INT_TY,
-                               [ir.Constant(I64, 0), ir.Constant(I64, 0)])
-        if isinstance(expr, A.OkExpr):
-            v = self._emit_expr(expr.arg, ctx)
-            base = ir.Constant(RW_RESULT_INT_INT_TY,
-                               [ir.Constant(I64, 1), ir.Constant(I64, 0)])
-            return ctx.builder.insert_value(base, v, 1)
-        if isinstance(expr, A.ErrExpr):
-            v = self._emit_expr(expr.arg, ctx)
-            base = ir.Constant(RW_RESULT_INT_INT_TY,
-                               [ir.Constant(I64, 0), ir.Constant(I64, 0)])
-            return ctx.builder.insert_value(base, v, 1)
+            if isinstance(expr, A.ErrExpr):
+                return ctx.builder.insert_value(zero, v, 2)
+            tagged = ctx.builder.insert_value(zero, ir.Constant(I64, 1), 0)
+            return ctx.builder.insert_value(tagged, v, 1)
         if isinstance(expr, A.IfExpr):
             return self._emit_if_expr(expr, ctx)
         raise RuntimeError(f"unsupported expr: {type(expr).__name__}")

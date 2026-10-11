@@ -272,38 +272,23 @@ class Parser:
         if t.kind == TokenKind.KW_OPTION:
             self.i += 1
             self.eat(TokenKind.LBRACK, "'[' after Option")
-            inner_tok = self.cur
-            if inner_tok.kind != TokenKind.KW_INT:
-                raise ParserError(
-                    "only Option[int] is supported in this version of rw",
-                    inner_tok.line, inner_tok.col, max(1, len(inner_tok.value)),
-                )
-            self.i += 1
-            self.eat(TokenKind.RBRACK, "']' to close Option[int]")
-            return A.TypeName("Option[int]", t.line, t.col)
+            if self.cur.kind == TokenKind.KW_INT and self.peek(1).kind == TokenKind.RBRACK:
+                self.i += 2
+                return A.TypeName("Option[int]", t.line, t.col)
+            inner = self.parse_type()
+            self.eat(TokenKind.RBRACK, "']' to close Option[...]")
+            return A.TypeOption(inner, t.line, t.col)
         if t.kind == TokenKind.KW_RESULT:
             self.i += 1
             self.eat(TokenKind.LBRACK, "'[' after Result")
-            inner1 = self.cur
-            if inner1.kind != TokenKind.KW_INT:
-                raise ParserError(
-                    "only Result[int, int] is supported in this version of rw",
-                    inner1.line, inner1.col, max(1, len(inner1.value)),
-                )
-            self.i += 1
+            ok = self.parse_type()
             self.eat(TokenKind.COMMA, "',' between Result type arguments")
-            inner2 = self.cur
-            if inner2.kind != TokenKind.KW_INT:
-                raise ParserError(
-                    "only Result[int, int] is supported in this version of rw",
-                    inner2.line, inner2.col, max(1, len(inner2.value)),
-                )
-            self.i += 1
-            self.eat(TokenKind.RBRACK, "']' to close Result[int, int]")
-            return A.TypeName("Result[int, int]", t.line, t.col)
-        # A bare identifier is a user-defined type name (a type alias or a
-        # class); `mod.Name` names a class of an imported module (spec 20).
-        # Both are resolved in Sema.
+            err = self.parse_type()
+            self.eat(TokenKind.RBRACK, "']' to close Result[...]")
+            if (isinstance(ok, A.TypeName) and ok.name == "int" and ok.module is None
+                    and isinstance(err, A.TypeName) and err.name == "int" and err.module is None):
+                return A.TypeName("Result[int, int]", t.line, t.col)
+            return A.TypeResult(ok, err, t.line, t.col)
         # `Callable[[P1, ...], R]` (spec 21). `Callable` is not a keyword; it is
         # only special in type position.
         if t.kind == TokenKind.IDENT and t.value == "Callable" and self.peek(1).kind == TokenKind.LBRACK:
