@@ -37,6 +37,10 @@ rw_str  rw_str_slice      (rw_str s, int64_t start, int64_t end);
 int8_t  rw_str_starts_with(rw_str s, rw_str prefix);
 rw_str  rw_str_from_int   (int64_t n);
 
+/* Conversions and ordering (spec 26). */
+rw_str  rw_str_from_float(double v);       /* shortest round-trip text */
+int64_t rw_str_cmp       (rw_str a, rw_str b);  /* <0, 0, >0 by bytes */
+
 /* List[int] type and ops.
  *
  * The struct is 3 words (24 bytes) which puts it past arm64's

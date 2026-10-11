@@ -64,7 +64,15 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "tcp_listen", "tcp_accept", "read", "write", "close", "file_open",
     "sqrt", "floor", "ceil", "exp", "log", "sin", "cos", "fabs", "pow",
     "str_find", "str_slice", "str_starts_with", "str_from_int", "str_to_int",
+    "int", "float", "str",
 })
+
+# Accepted argument types for the conversion builtins (spec 26).
+_CONVERSIONS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type, str]] = {
+    "int": ((T.INT, T.FLOAT, T.BOOL), T.INT, "int, float or bool"),
+    "float": ((T.INT, T.FLOAT), T.FLOAT, "int or float"),
+    "str": ((T.INT, T.FLOAT, T.BOOL, T.STRING), T.STRING, "int, float, bool or string"),
+}
 
 # Fixed signatures (parameter types, return type) for builtins that need no
 # special-casing beyond argument count and type checks. See spec 18.
@@ -743,10 +751,11 @@ class Sema:
                     ))
                 return T.BOOL
             if op in ("<", "<=", ">", ">="):
-                if lt != rt or not T.is_numeric(lt):
+                if lt != rt or not (T.is_numeric(lt) or lt is T.STRING):
                     raise CompileError(Diagnostic(
                         self.filename, expr.line, expr.col, len(op),
-                        f"`{op}` requires int or float on both sides, found `{lt}` and `{rt}`",
+                        f"`{op}` requires int or float on both sides, or two strings, "
+                        f"found `{lt}` and `{rt}`",
                     ))
                 return T.BOOL
             if op in ("and", "or"):
@@ -977,6 +986,20 @@ class Sema:
                     f"str_from_bytes argument must be Bytes, found `{at}`",
                 ))
             return T.STRING
+        if call.callee in _CONVERSIONS:
+            accepted, ret, names = _CONVERSIONS[call.callee]
+            if len(call.args) != 1:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"{call.callee} takes 1 argument, got {len(call.args)}",
+                ))
+            at = self._check_expr(fn, call.args[0], locals_)
+            if at not in accepted:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"{call.callee} argument must be {names}, found `{at}`",
+                ))
+            return ret
         if call.callee in _SIMPLE_BUILTIN_SIGS:
             params, ret = _SIMPLE_BUILTIN_SIGS[call.callee]
             if len(call.args) != len(params):

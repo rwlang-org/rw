@@ -288,3 +288,17 @@ def test_safepoints_at_function_entry_and_loop_head():
     # spin: entry + loop head; main: entry.
     assert len(loads) == 3
     assert re.search(r'call void @"rw_safepoint"\(\)', ir_text)
+
+
+def test_conversions_and_string_ordering_ir():
+    ir_text = ir_for(
+        "def main() -> int:\n"
+        "    f: float = float(3)\n"
+        "    s: string = str(f) + str(int(f))\n"
+        '    if s < "z":\n'
+        "        return 1\n"
+        "    return 0\n"
+    )
+    assert "sitofp" in ir_text and "fptosi" in ir_text
+    assert re.search(r'call .*@"rw_str_from_float"\(', ir_text)
+    assert re.search(r'call i64 @"rw_str_cmp"\(', ir_text)

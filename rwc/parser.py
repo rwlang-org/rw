@@ -925,6 +925,11 @@ class Parser:
         if t.kind == TokenKind.IDENT:
             self.i += 1
             return A.Name(t.value, t.line, t.col)
+        # `int(x)` / `float(x)` conversions (spec 26): the type keywords act
+        # as builtin function names when called.
+        if t.kind in (TokenKind.KW_INT, TokenKind.KW_FLOAT) and self.peek(1).kind == TokenKind.LPAREN:
+            self.i += 1
+            return A.Name(t.value, t.line, t.col)
         if t.kind == TokenKind.LPAREN:
             self.i += 1
             inner = self.parse_expr()

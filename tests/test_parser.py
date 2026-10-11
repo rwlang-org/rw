@@ -501,6 +501,15 @@ def test_parse_generic_list_types():
     assert isinstance(c, A.TypeName) and c.name == "List[int]"  # unchanged
 
 
+# ----- conversions (spec 26) -----
+
+def test_parse_int_and_float_conversion_calls():
+    mod = parse_src("def main() -> int:\n    f: float = float(1)\n    return int(f)\n")
+    decl, ret = mod.functions[0].body
+    assert isinstance(decl.value, A.Call) and decl.value.callee == "float"
+    assert isinstance(ret.value, A.Call) and ret.value.callee == "int"
+
+
 # ----- compound assignment (spec 27) -----
 
 @pytest.mark.parametrize("op", ["+", "-", "*", "/", "%", "&", "|", "^"])
