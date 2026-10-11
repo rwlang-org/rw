@@ -32,11 +32,14 @@ def test_for_while_condition_uses_or_of_two_comparisons():
     assert isinstance(w.cond, A.BinOp) and w.cond.op == "or"
 
 
-def test_for_body_ends_with_increment():
+def test_for_increment_is_the_update_step():
+    # The increment runs as the loop's update step, not as the last body
+    # statement, so `continue` cannot skip it.
     src = "def main() -> int:\n    for i in range(0, 3):\n        return i\n"
     mod = desugar_src(src)
     w = [s for s in mod.functions[0].body if isinstance(s, A.While)][0]
-    last = w.body[-1]
+    assert len(w.body) == 1 and isinstance(w.body[0], A.Return)
+    (incr,) = w.update
     # i = i + __step
-    assert isinstance(last, A.Assign) and last.name == "i"
-    assert isinstance(last.value, A.BinOp) and last.value.op == "+"
+    assert isinstance(incr, A.Assign) and incr.name == "i"
+    assert isinstance(incr.value, A.BinOp) and incr.value.op == "+"
