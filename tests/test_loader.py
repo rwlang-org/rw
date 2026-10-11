@@ -73,3 +73,22 @@ def test_duplicate_import_deduped(tmp_path):
     prog = load_program(entry, entry_path)
     # `lib` is reachable via both entry and other, but loaded once.
     assert set(prog.modules) == {"lib", "other"}
+
+
+def test_imported_main_error_points_at_imported_main(tmp_path):
+    lib_src = LIB + "\ndef main() -> int:\n    return 0\n"
+    lib_path = _write(tmp_path, "lib", lib_src)
+    entry_path = _write(tmp_path, "main", ENTRY)
+    with pytest.raises(CompileError) as ei:
+        load_program(ENTRY, entry_path)
+    diag = ei.value.diagnostic
+    assert diag.file == lib_path
+    assert diag.line == 4  # `def main` in lib.rw
+
+
+def test_records_module_paths(tmp_path):
+    lib_path = _write(tmp_path, "lib", LIB)
+    entry_path = _write(tmp_path, "main", ENTRY)
+    prog = load_program(ENTRY, entry_path)
+    assert prog.paths["main"] == entry_path
+    assert prog.paths["lib"] == lib_path

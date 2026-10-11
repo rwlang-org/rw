@@ -155,5 +155,44 @@ def test_qualified_call_emits_namespaced_symbol(tmp_path):
     program = load_program(entry_src, str(entry_path))
     res = analyze_program(program, filename=str(entry_path))
     ir_text = str(generate(program, res))
-    assert "rw_user_lib_add" in ir_text
+    assert "rw_user_lib.add" in ir_text
     assert "rw_user_main" in ir_text
+
+
+def _ir_for_program(tmp_path, entry_src: str, **libs: str) -> str:
+    from rwc.loader import load_program
+    for name, src in libs.items():
+        (tmp_path / f"{name}.rw").write_text(src, encoding="utf-8")
+    entry_path = tmp_path / "main.rw"
+    entry_path.write_text(entry_src, encoding="utf-8")
+    program = load_program(entry_src, str(entry_path))
+    res = analyze_program(program, filename=str(entry_path))
+    return str(generate(program, res))
+
+
+def test_entry_func_named_like_qualified_symbol_does_not_clash(tmp_path):
+    # Entry `lib_add` and `lib.add` used to both mangle to `rw_user_lib_add`.
+    ir_text = _ir_for_program(
+        tmp_path,
+        "import lib\n\ndef lib_add(a: int, b: int) -> int:\n    return 100\n\n"
+        "def main() -> int:\n    return lib.add(1, 2) + lib_add(1, 2)\n",
+        lib="def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+    assert "rw_user_lib_add" in ir_text
+    assert "rw_user_lib.add" in ir_text
+
+
+def test_underscore_module_names_do_not_clash(tmp_path):
+    # Module `a_b` func `c` vs module `a` func `b_c`.
+    ir_text = _ir_for_program(
+        tmp_path,
+        "import a_b\nimport a\n\ndef main() -> int:\n"
+        "    f1: Future[int] = spawn a_b.c()\n    f2: Future[int] = spawn a.b_c()\n"
+        "    return await f1 + await f2\n",
+        a_b="def c() -> int:\n    return 1\n",
+        a="def b_c() -> int:\n    return 2\n",
+    )
+    assert "rw_user_a_b.c" in ir_text
+    assert "rw_user_a.b_c" in ir_text
+    assert "rw_trampoline_a_b.c" in ir_text
+    assert "rw_trampoline_a.b_c" in ir_text

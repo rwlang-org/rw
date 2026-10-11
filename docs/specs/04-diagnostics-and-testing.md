@@ -1,8 +1,8 @@
-# rw 診断とテスト戦略
+# rw Diagnostics and Testing Strategy
 
-## 診断フォーマット
+## Diagnostic format
 
-すべての診断は **`file:line:col` + キャレット + メッセージ** の3点セット。
+Every diagnostic is a three-part set: **`file:line:col` + caret + message**.
 
 ```
 error: type mismatch
@@ -12,7 +12,7 @@ error: type mismatch
    |              ^^^^^^^ expected `int`, found `string`
 ```
 
-`diagnostics.py` は単一クラス `Diagnostic` を提供:
+`diagnostics.py` provides a single class `Diagnostic`:
 
 ```python
 @dataclass
@@ -27,68 +27,68 @@ class Diagnostic:
     def render(self, source: str) -> str: ...
 ```
 
-MVP は **最初のエラーで停止**。エラー回復(複数エラー収集)は将来。
+The MVP **stops at the first error**. Error recovery (collecting multiple errors) is future work.
 
-## 診断を出す箇所
+## Where diagnostics are emitted
 
-| ステージ | 例 |
+| Stage | Examples |
 |---|---|
 | Lexer | unterminated string, inconsistent indentation |
 | Parser | unexpected token, expected `:` after function signature |
 | Sema | undefined variable, type mismatch, wrong argument count, await on non-Future |
-| IRGen | 出さない(Sema で全部弾く) |
+| IRGen | none (everything is rejected in Sema) |
 | Driver | clang not found, link error |
 
-## テスト構成
+## Test structure
 
-`pytest` で全部回す。4階層:
+Everything runs under `pytest`. Four tiers:
 
-### 1. 単体テスト
+### 1. Unit tests
 
-- `tests/test_lexer.py`: 入力文字列 → トークン列を検証。INDENT/DEDENT、空行、
-  コメント行、インデント混在検出
-- `tests/test_parser.py`: トークン列 → AST を `repr` 比較
-- `tests/test_sema.py`: AST → 型付き AST、または期待される `Diagnostic`
+- `tests/test_lexer.py`: input string → verify the token stream. INDENT/DEDENT, blank lines,
+  comment lines, mixed-indentation detection
+- `tests/test_parser.py`: token stream → compare the AST via `repr`
+- `tests/test_sema.py`: AST → typed AST, or the expected `Diagnostic`
 
-### 2. IRGen スナップショットテスト
+### 2. IRGen snapshot tests
 
 `tests/test_irgen.py` + `tests/snapshots/*.ll`:
-- rw ソース → 生成 LLVM IR を文字列化
-- 既存スナップショットと差分があれば失敗
-- 意図変更は `pytest --update-snapshots` で更新
+- rw source → stringify the generated LLVM IR
+- Fail if it differs from the existing snapshot
+- Intentional changes are updated with `pytest --update-snapshots`
 
-### 3. E2E テスト
+### 3. E2E tests
 
 `tests/test_e2e.py`:
-- `examples/*.rw` を `rwc build` でコンパイル → 実行 → 標準出力を期待値と比較
-- 期待値は `examples/*.rw.expected` に同名で配置
-- CI は macOS arm64 + Linux x86_64 の両方で実行
+- Compile `examples/*.rw` with `rwc build` → run → compare stdout against the expected value
+- Expected values live alongside as `examples/*.rw.expected`
+- CI runs on both macOS arm64 and Linux x86_64
 
-### 4. 診断テスト
+### 4. Diagnostic tests
 
 `tests/test_diagnostics.py` + `tests/bad/*.rw`:
-- エラーになるべき rw コードを集める
-- ファイル先頭コメントに期待エラーを書く:
+- Collect rw code that should error
+- Write the expected error in a comment at the top of the file:
   ```python
   # ERROR: type mismatch
   # ERROR_LINE: 3
   x: int = "hello"
   ```
-- ランナーがコメントを抜き出し `rwc build` の出力と照合
+- The runner extracts the comments and matches them against the output of `rwc build`
 
-## MVP の examples(受け入れテスト相当)
+## MVP examples (equivalent to acceptance tests)
 
-| ファイル | 検証内容 |
+| File | What it verifies |
 |---|---|
-| `examples/hello.rw` | 文字列リテラルと `print` |
-| `examples/arith.rw` | 整数・浮動小数・bool・比較・if/else |
-| `examples/fib.rw` | 再帰関数 `fib(20)` |
-| `examples/while_count.rw` | `while` ループで 1..10 |
-| `examples/spawn_basic.rw` | `spawn add(3,4)` → `await` で 7 |
-| `examples/spawn_many.rw` | 4 スレッド並列で合計計算 |
-| `examples/spawn_string.rw` | `Future[string]` を返す関数 |
+| `examples/hello.rw` | String literals and `print` |
+| `examples/arith.rw` | Integers, floats, bools, comparisons, if/else |
+| `examples/fib.rw` | Recursive function `fib(20)` |
+| `examples/while_count.rw` | A `while` loop over 1..10 |
+| `examples/spawn_basic.rw` | `spawn add(3,4)` → `await` yields 7 |
+| `examples/spawn_many.rw` | Summation across 4 parallel threads |
+| `examples/spawn_string.rw` | A function returning `Future[string]` |
 
-**これら 7 本が緑になれば MVP 完成。**
+**Once these 7 are green, the MVP is complete.**
 
 ## CI
 
@@ -108,4 +108,4 @@ steps:
   - run: pytest -v
 ```
 
-clang はどちらのランナーにも標準で入っているので追加インストール不要。
+clang ships by default on both runners, so no extra installation is needed.

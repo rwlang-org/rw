@@ -80,12 +80,14 @@ class IRGen:
     @staticmethod
     def _symbol(key: FuncKey) -> str:
         """LLVM symbol for a user function. Entry-module functions keep the
-        historical `rw_user_<name>`; imported functions are qualified with the
-        module name to avoid cross-module symbol clashes."""
+        historical `rw_user_<name>`; imported functions are qualified as
+        `rw_user_<module>.<name>`. `.` cannot appear in an rw identifier, so
+        the qualified form never collides with an entry function (`lib_add`)
+        or another module (`a_b.c` vs `a.b_c`)."""
         module, name = key
         if module is None:
             return f"rw_user_{name}"
-        return f"rw_user_{module}_{name}"
+        return f"rw_user_{module}.{name}"
 
     # ---------- runtime declarations ----------
     def _declare_runtime(self) -> None:
@@ -747,7 +749,7 @@ class IRGen:
     def _get_or_make_trampoline(self, key: FuncKey, sig) -> ir.Function:
         # Each callee gets exactly one trampoline reused at every spawn site.
         module, callee = key
-        name = f"rw_trampoline_{callee}" if module is None else f"rw_trampoline_{module}_{callee}"
+        name = f"rw_trampoline_{callee}" if module is None else f"rw_trampoline_{module}.{callee}"
         if name in self.mod.globals:
             return self.mod.get_global(name)
         ret_ty = sig.return_type
