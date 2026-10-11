@@ -96,11 +96,13 @@ int64_t rw_sched_live_fibers(void);
  * or NULL if the calling thread is not a worker (main / netpoller). */
 rw_fiber_handle *rw_sched_current_fiber(void);
 
-/* Mark the current fiber as WAITING and swap out to the scheduler.
- * The fiber will NOT be re-enqueued by the scheduler; someone must
- * call rw_sched_enqueue_ready(handle) to wake it later. Used by the
- * netpoller to park fibers on fd readiness. */
-void rw_sched_park_current(void);
+/* Mark the current fiber as WAITING and swap out to the scheduler. After
+ * the fiber's context is saved, the worker calls commit(self, arg), which
+ * must arrange for someone to call rw_sched_enqueue_ready(self) later (or
+ * call it itself if that is impossible). Never make the fiber wakeable
+ * before parking: a waker could resume it with a half-saved context
+ * (spec 24). Used by the netpoller, the aio pool, and join. */
+void rw_sched_park_commit(void (*commit)(rw_fiber_handle *self, void *arg), void *arg);
 
 #ifdef __cplusplus
 }
