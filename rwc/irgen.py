@@ -337,7 +337,7 @@ class IRGen:
         if isinstance(stmt, A.VarDecl):
             mod_name, fn_name = ctx.func_key
             ty = self.sema.local_types[(mod_name, fn_name, stmt.name)]
-            slot = b.alloca(llvm_type_of(ty), name=stmt.name)
+            slot = ctx.alloca(llvm_type_of(ty), name=stmt.name)
             val = self._emit_expr(stmt.value, ctx)
             b.store(val, slot)
             ctx.locals[stmt.name] = slot
@@ -464,7 +464,7 @@ class IRGen:
         """Emit one match arm. var_name=None means no payload binding."""
         b = ctx.builder
         if var_name is not None:
-            slot = b.alloca(I64, name=var_name)
+            slot = ctx.alloca(I64, name=var_name)
             b.store(payload, slot)
             saved = ctx.locals.get(var_name)
             ctx.locals[var_name] = slot
@@ -526,13 +526,13 @@ class IRGen:
         list_ty = self.sema.expr_types[id(call.args[0])]
         assert isinstance(list_ty, T.ListType)
         elem_llvm = llvm_type_of(list_ty.elem)
-        in_slot = b.alloca(RW_LIST_INT_TY)
+        in_slot = ctx.alloca(RW_LIST_INT_TY)
         b.store(self._emit_expr(call.args[0], ctx), in_slot)
-        elem_slot = b.alloca(elem_llvm)
+        elem_slot = ctx.alloca(elem_llvm)
         size = self._sizeof(elem_llvm, b)
         if call.callee == "list_push":
             b.store(self._emit_expr(call.args[1], ctx), elem_slot)
-            out_slot = b.alloca(RW_LIST_INT_TY)
+            out_slot = ctx.alloca(RW_LIST_INT_TY)
             b.call(self._rw_list_push, [out_slot, in_slot, b.bitcast(elem_slot, I8P), size])
             return b.load(out_slot)
         idx = self._emit_expr(call.args[1], ctx)
@@ -814,7 +814,7 @@ class IRGen:
             if isinstance(aty, T.ListType):
                 # rw_list_int_len takes a pointer to a stack copy; it only
                 # reads `len`, so it serves every List[T].
-                slot = ctx.builder.alloca(RW_LIST_INT_TY)
+                slot = ctx.alloca(RW_LIST_INT_TY)
                 ctx.builder.store(v, slot)
                 return ctx.builder.call(self._rw_list_int_len, [slot])
             return ctx.builder.call(self._rw_str_len, [v])
@@ -824,13 +824,13 @@ class IRGen:
             return self._emit_expr(call.args[0], ctx)
         if call.callee == "str_split":
             sv, sep = (self._emit_expr(a, ctx) for a in call.args)
-            out_slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            out_slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.call(self._rw_str_split, [out_slot, sv, sep])
             return ctx.builder.load(out_slot)
         if call.callee == "str_join":
             lv = self._emit_expr(call.args[0], ctx)
             sep = self._emit_expr(call.args[1], ctx)
-            in_slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            in_slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.store(lv, in_slot)
             return ctx.builder.call(self._rw_str_join, [in_slot, sep])
         direct = {
@@ -851,11 +851,11 @@ class IRGen:
             return ctx.builder.call(fn, args)
         if call.callee == "str_to_int":
             sv = self._emit_expr(call.args[0], ctx)
-            out_slot = ctx.builder.alloca(RW_OPTION_INT_TY)
+            out_slot = ctx.alloca(RW_OPTION_INT_TY)
             ctx.builder.call(self._rw_str_to_int, [out_slot, sv])
             return ctx.builder.load(out_slot)
         if call.callee == "list_new" and self.sema.expr_types[id(call)] is not T.LIST_INT:
-            slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.call(self._rw_list_new, [slot])
             return ctx.builder.load(slot)
         if call.callee in ("list_push", "list_at") and self.sema.expr_types[id(call.args[0])] is not T.LIST_INT:
@@ -863,7 +863,7 @@ class IRGen:
         if call.callee == "list_new":
             # rw_list_int_new(rw_list_int *out) writes to a stack slot;
             # we then load the value back out as a SSA struct.
-            slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.call(self._rw_list_int_new, [slot])
             return ctx.builder.load(slot)
         if call.callee == "list_push":
@@ -871,23 +871,23 @@ class IRGen:
             vv = self._emit_expr(call.args[1], ctx)
             # Copy the input list onto the stack, call push with an
             # output slot, then load the new list back.
-            in_slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            in_slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.store(lv, in_slot)
-            out_slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            out_slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.call(self._rw_list_int_push, [out_slot, in_slot, vv])
             return ctx.builder.load(out_slot)
         if call.callee == "list_at":
             lv = self._emit_expr(call.args[0], ctx)
             iv = self._emit_expr(call.args[1], ctx)
-            slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.store(lv, slot)
             return ctx.builder.call(self._rw_list_int_at, [slot, iv])
         if call.callee == "list_at_opt":
             lv = self._emit_expr(call.args[0], ctx)
             iv = self._emit_expr(call.args[1], ctx)
-            in_slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            in_slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.store(lv, in_slot)
-            out_slot = ctx.builder.alloca(RW_OPTION_INT_TY)
+            out_slot = ctx.alloca(RW_OPTION_INT_TY)
             ctx.builder.call(self._rw_list_int_at_opt, [out_slot, in_slot, iv])
             return ctx.builder.load(out_slot)
         if call.callee == "tcp_listen":
@@ -899,7 +899,7 @@ class IRGen:
         if call.callee == "read":
             fd_v = self._emit_expr(call.args[0], ctx)
             mx_v = self._emit_expr(call.args[1], ctx)
-            out_slot = ctx.builder.alloca(RW_STR_TY)
+            out_slot = ctx.alloca(RW_STR_TY)
             ctx.builder.call(self._rw_read, [out_slot, fd_v, mx_v])
             return ctx.builder.load(out_slot)
         if call.callee == "write":
@@ -1053,6 +1053,15 @@ class FunctionCtx:
         # Stack of enclosing loops as (cond_bb, end_bb); continue -> cond_bb,
         # break -> end_bb. Pushed/popped around each While body emission.
         self.loop_stack: list = []
+
+    def alloca(self, ty: ir.Type, name: str = "") -> ir.AllocaInstr:
+        """Allocate a stack slot at the start of the entry block. An alloca
+        emitted where a local is declared would run on every loop iteration
+        and grow the (64 KiB) fiber stack without bound."""
+        entry = self.function.entry_basic_block
+        ab = ir.IRBuilder(entry)
+        ab.position_at_start(entry)
+        return ab.alloca(ty, name=name)
 
 
 def generate(program: LoadedProgram, sema: SemaResult) -> ir.Module:
