@@ -1549,3 +1549,37 @@ def test_duplicate_import_qualifier_errors(tmp_path):
             other="def add(a: int, b: int) -> int:\n    return a - b\n",
         )
     assert "duplicate import qualifier" in ei.value.diagnostic.message
+
+
+# ----- string search / conversion builtins (spec 18) -----
+
+def test_string_search_builtins_ok():
+    check(
+        "def main() -> int:\n"
+        '    s: string = "GET /x HTTP/1.1"\n'
+        '    i: int = str_find(s, " ")\n'
+        "    p: string = str_slice(s, 0, i)\n"
+        '    b: bool = str_starts_with(s, "GET")\n'
+        "    n: string = str_from_int(42)\n"
+        '    o: Option[int] = str_to_int("12")\n'
+        "    return i\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "call, msg",
+    [
+        ('str_find("a")', "str_find takes 2 arguments"),
+        ('str_find("a", 1)', "str_find argument 2 must be string"),
+        ('str_slice("a", 0)', "str_slice takes 3 arguments"),
+        ('str_slice("a", "0", 1)', "str_slice argument 2 must be int"),
+        ("str_starts_with(1, \"a\")", "str_starts_with argument 1 must be string"),
+        ('str_from_int("1")', "str_from_int argument 1 must be int"),
+        ("str_to_int(1)", "str_to_int argument 1 must be string"),
+        ("str_to_int()", "str_to_int takes 1 argument"),
+    ],
+)
+def test_string_search_builtins_reject_bad_args(call, msg):
+    e = err(f"def main() -> int:\n    x: int = 0\n    {call}\n    return 0\n")
+    assert msg in e.diagnostic.message
+

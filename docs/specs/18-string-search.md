@@ -91,8 +91,11 @@ void    rw_str_to_int     (rw_option_int *out, rw_str s);
 
 The builtins use a `str_` prefix (like the existing `str_from_bytes`) instead
 of overloading generic names, so that adding `bytes_find` etc. later does not
-require overload resolution. They are added to sema's builtin set, so a user
-function or a `from x import` name with the same name is rejected as before.
+require overload resolution. They are added to sema's builtin set, so a
+`from x import` name with the same name is rejected, and spawning them is an
+error, as for every other builtin. (A user function with a builtin's name is
+currently shadowed by the builtin rather than rejected; that applies to all
+builtins and is out of scope here.)
 
 ## Changes per component
 

@@ -54,7 +54,18 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "list_new", "list_push", "list_at", "list_at_opt",
     "tcp_listen", "tcp_accept", "read", "write", "close", "file_open",
     "sqrt", "floor", "ceil", "exp", "log", "sin", "cos", "fabs", "pow",
+    "str_find", "str_slice", "str_starts_with", "str_from_int", "str_to_int",
 })
+
+# Fixed signatures (parameter types, return type) for builtins that need no
+# special-casing beyond argument count and type checks. See spec 18.
+_SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
+    "str_find": ((T.STRING, T.STRING), T.INT),
+    "str_slice": ((T.STRING, T.INT, T.INT), T.STRING),
+    "str_starts_with": ((T.STRING, T.STRING), T.BOOL),
+    "str_from_int": ((T.INT,), T.STRING),
+    "str_to_int": ((T.STRING,), T.OPTION_INT),
+}
 
 
 _BUILTIN_TYPES: Dict[str, T.Type] = {
@@ -728,6 +739,22 @@ class Sema:
                     f"str_from_bytes argument must be Bytes, found `{at}`",
                 ))
             return T.STRING
+        if call.callee in _SIMPLE_BUILTIN_SIGS:
+            params, ret = _SIMPLE_BUILTIN_SIGS[call.callee]
+            if len(call.args) != len(params):
+                noun = "argument" if len(params) == 1 else "arguments"
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"{call.callee} takes {len(params)} {noun}, got {len(call.args)}",
+                ))
+            for i, (arg, want) in enumerate(zip(call.args, params), start=1):
+                at = self._check_expr(fn, arg, locals_)
+                if at is not want:
+                    raise CompileError(Diagnostic(
+                        self.filename, call.line, call.col, len(call.callee),
+                        f"{call.callee} argument {i} must be {want}, found `{at}`",
+                    ))
+            return ret
         # Builtin: list_new() -> List[int].
         if call.callee == "list_new":
             if len(call.args) != 0:
