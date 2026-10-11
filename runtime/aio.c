@@ -120,6 +120,14 @@ void rw_aio_shutdown(void) {
     g_nthreads = 0;
 }
 
+/* Commit for rw_sched_park_commit (spec 24): hand the task (which lives on
+ * the parked fiber's stack) to the pool only after the fiber's context is
+ * saved, so the pool cannot wake it early. */
+static void commit_task(rw_fiber_handle *self, void *arg) {
+    (void)self;
+    queue_push((rw_aio_task *)arg);
+}
+
 void rw_aio_read(rw_str *out, int64_t fd, int64_t max) {
     if (max <= 0) { out->len = 0; out->ptr = NULL; return; }
     rw_fiber_handle *me = rw_sched_current_fiber();
@@ -134,8 +142,7 @@ void rw_aio_read(rw_str *out, int64_t fd, int64_t max) {
     rw_aio_task t;
     t.op = RW_AIO_READ; t.fd = fd; t.out = out; t.max = max;
     t.waiter = me; t.next = NULL;
-    queue_push(&t);
-    rw_sched_park_current();
+    rw_sched_park_commit(commit_task, &t);
 }
 
 int64_t rw_aio_write(int64_t fd, rw_str b) {
@@ -148,7 +155,6 @@ int64_t rw_aio_write(int64_t fd, rw_str b) {
     rw_aio_task t;
     t.op = RW_AIO_WRITE; t.fd = fd; t.in = b; t.wret = 0;
     t.waiter = me; t.next = NULL;
-    queue_push(&t);
-    rw_sched_park_current();
+    rw_sched_park_commit(commit_task, &t);
     return t.wret;
 }

@@ -56,27 +56,33 @@ void rw_netpoller_shutdown(void) {
     g_netpoller_started = 0;
 }
 
+/* Commits for rw_sched_park_commit (spec 24): register the parked fiber
+ * only once its context is saved. If registration fails, wake it at once
+ * so the caller's retry loop does not deadlock. */
+static void commit_read(rw_fiber_handle *self, void *arg) {
+    if (rw_netpoller_register_read((int)(intptr_t)arg, self) != 0) {
+        rw_sched_enqueue_ready(self);
+    }
+}
+
+static void commit_write(rw_fiber_handle *self, void *arg) {
+    if (rw_netpoller_register_write((int)(intptr_t)arg, self) != 0) {
+        rw_sched_enqueue_ready(self);
+    }
+}
+
 void rw_net_park_read(int fd) {
-    rw_fiber_handle *me = rw_sched_current_fiber();
-    if (!me) {
+    if (!rw_sched_current_fiber()) {
         fputs("rw: rw_net_park_read called outside a fiber\n", stderr);
         abort();
     }
-    if (rw_netpoller_register_read(fd, me) != 0) {
-        /* Registration failed: fall back without parking to avoid deadlock. */
-        return;
-    }
-    rw_sched_park_current();
+    rw_sched_park_commit(commit_read, (void *)(intptr_t)fd);
 }
 
 void rw_net_park_write(int fd) {
-    rw_fiber_handle *me = rw_sched_current_fiber();
-    if (!me) {
+    if (!rw_sched_current_fiber()) {
         fputs("rw: rw_net_park_write called outside a fiber\n", stderr);
         abort();
     }
-    if (rw_netpoller_register_write(fd, me) != 0) {
-        return;
-    }
-    rw_sched_park_current();
+    rw_sched_park_commit(commit_write, (void *)(intptr_t)fd);
 }

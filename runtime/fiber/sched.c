@@ -182,6 +182,11 @@ typedef struct rw_M {
     /* Set by rw_safepoint right before it yields, so worker_main sends the
      * preempted fiber to the back of globq rather than the local runq. */
     int              preempted;
+    /* Deferred publication for a parking fiber (spec 24): set by
+     * rw_sched_park_commit, run by worker_main after the swap has saved
+     * the fiber's ctx, so no waker can see the fiber before then. */
+    void           (*park_commit)(rw_fiber_handle *, void *);
+    void            *park_arg;
 } rw_M;
 
 #define RW_MAX_WORKERS 64
@@ -442,17 +447,22 @@ static int64_t parse_preempt_ns(void) {
     return (int64_t)ms * 1000000;
 }
 
-/* Park the current fiber: mark it WAITING and swap to sched_ctx.
- * Unlike rw_sched_yield, the fiber is NOT re-enqueued — the caller
- * must arrange a wake-up via rw_sched_enqueue_ready(). Used by the
- * netpoller to park fibers on fd readiness. */
-void rw_sched_park_current(void) {
+/* Park the current fiber (spec 24): mark it WAITING and swap to sched_ctx;
+ * `commit(self, arg)` then runs on the worker's scheduler stack after the
+ * fiber's ctx is fully saved. `commit` is what makes the fiber wakeable
+ * (registers it with the netpoller, queues an aio task, joins a wait
+ * list) — doing that before the swap would let a waker resume a fiber
+ * whose registers are only half saved. If `commit` cannot arrange a
+ * wake-up it must call rw_sched_enqueue_ready(self) itself. */
+void rw_sched_park_commit(void (*commit)(rw_fiber_handle *, void *), void *arg) {
     rw_M *m = tls_m;
     if (!m) return;
     rw_fiber_handle *me = m->current;
     if (!me) return;
     atomic_store_explicit(&me->state, RW_FIBER_WAITING,
                           memory_order_relaxed);
+    m->park_commit = commit;
+    m->park_arg = arg;
     rw_fiber_swap(&me->ctx, &m->sched_ctx);
 }
 
@@ -491,6 +501,19 @@ static void *worker_main(void *arg) {
          * a different path (finalize_fiber for DONE, the target
          * trampoline for WAITING). */
         m->current = NULL;
+        if (m->park_commit) {
+            /* g parked: its ctx is saved, so it is now safe to make it
+             * wakeable (register with the netpoller, queue an aio task,
+             * join a wait list). It may be resumed elsewhere right away,
+             * so g must not be touched after this. */
+            void (*commit)(rw_fiber_handle *, void *) = m->park_commit;
+            void *arg = m->park_arg;
+            m->park_commit = NULL;
+            m->park_arg = NULL;
+            m->preempted = 0;
+            commit(g, arg);
+            continue;
+        }
         if (m->finished == g) {
             /* g finished on this M: its ctx is fully saved and its stack
              * is no longer in use. Hand it to its owner, or free it if the
@@ -525,28 +548,28 @@ static void *worker_main(void *arg) {
  * the trampoline puts us back on a run queue and a worker resumes us.
  * On entry: caller is running on a worker, has not yet observed DONE
  * on target, and wants to wait for it. */
-static void park_on(rw_fiber_handle *target) {
-    rw_M *m = tls_m;
-    rw_fiber_handle *me = m->current;
-
+/* Commit for park_on, run after the joiner's ctx is saved: join target's
+ * wait list, or wake right away if target finished in the meantime. */
+static void join_commit(rw_fiber_handle *self, void *arg) {
+    rw_fiber_handle *target = (rw_fiber_handle *)arg;
     rw_wait_lock_acquire(&target->wait_lock);
-    /* Re-check state under the lock to close the race with a
-     * trampoline that is just about to take the wait list. */
+    /* Re-check under the lock to close the race with a trampoline that
+     * is just about to take the wait list. */
     if (atomic_load_explicit(&target->state, memory_order_acquire)
         == RW_FIBER_DONE) {
         rw_wait_lock_release(&target->wait_lock);
+        enqueue_ready(self);
         return;
     }
-    me->next = target->wait_head;
-    target->wait_head = me;
-    atomic_store_explicit(&me->state, RW_FIBER_WAITING,
-                          memory_order_relaxed);
+    self->next = target->wait_head;
+    target->wait_head = self;
     rw_wait_lock_release(&target->wait_lock);
+}
 
-    /* Yield to the scheduler. enqueue_ready will skip us because our
-     * state is WAITING, not RUNNING. We resume only when the
-     * trampoline of `target` re-enqueues us as READY. */
-    rw_fiber_swap(&me->ctx, &m->sched_ctx);
+/* Park the calling fiber until target finishes. The caller re-checks
+ * target's state after we return. */
+static void park_on(rw_fiber_handle *target) {
+    rw_sched_park_commit(join_commit, target);
 }
 
 /* Common fiber-completion path: publish result + DONE, broadcast main
