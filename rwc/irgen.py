@@ -55,7 +55,15 @@ def llvm_type_of(t: T.Type) -> ir.Type:
         return ir.VoidType()
     if isinstance(t, T.FutureType):
         return I8P  # opaque pointer
+    if isinstance(t, T.ClassType):
+        return I8P  # pointer to a heap record (spec 20)
     raise RuntimeError(f"no LLVM mapping for type {t}")
+
+
+def record_struct_type(cls: T.ClassType) -> ir.LiteralStructType:
+    """In-memory layout of a record: its fields in declaration order. Record
+    fields are themselves i8*, so a layout never contains another by value."""
+    return ir.LiteralStructType([llvm_type_of(fty) for _, fty in cls.fields])
 
 
 # ---------- IR generator ----------
@@ -302,6 +310,12 @@ class IRGen:
             val = self._emit_expr(stmt.value, ctx)
             b.store(val, slot)
             return
+        if isinstance(stmt, A.FieldAssign):
+            obj_ty = self.sema.expr_types[id(stmt.obj)]
+            assert isinstance(obj_ty, T.ClassType)
+            ptr = self._field_ptr(self._emit_expr(stmt.obj, ctx), obj_ty, stmt.field, b)
+            b.store(self._emit_expr(stmt.value, ctx), ptr)
+            return
         if isinstance(stmt, A.ExprStmt):
             val = self._emit_expr(stmt.expr, ctx)
             if isinstance(stmt.expr, A.SpawnExpr):
@@ -419,8 +433,35 @@ class IRGen:
             b.branch(end_bb)
 
     # ---------- expressions ----------
+    def _field_ptr(
+        self, obj: ir.Value, cls: T.ClassType, field: str, b: ir.IRBuilder
+    ) -> ir.Value:
+        """Pointer to `field` inside the record `obj` (an i8*)."""
+        idx = cls.field_index(field)
+        assert idx is not None
+        rec = b.bitcast(obj, record_struct_type(cls).as_pointer())
+        return b.gep(rec, [ir.Constant(I32, 0), ir.Constant(I32, idx)])
+
+    def _emit_constructor(self, call: A.Call, cls: T.ClassType, ctx: "FunctionCtx") -> ir.Value:
+        """malloc a record and store each field (spec 20)."""
+        b = ctx.builder
+        values = [self._emit_expr(a, ctx) for a in call.args]
+        rec_ptr_ty = record_struct_type(cls).as_pointer()
+        # sizeof via the GEP-on-null idiom (as in _emit_spawn).
+        size = b.ptrtoint(b.gep(ir.Constant(rec_ptr_ty, None), [ir.Constant(I32, 1)]), I64)
+        size = b.select(b.icmp_unsigned(">", size, ir.Constant(I64, 0)), size, ir.Constant(I64, 1))
+        raw = b.call(self._malloc, [size])
+        rec = b.bitcast(raw, rec_ptr_ty)
+        for i, v in enumerate(values):
+            b.store(v, b.gep(rec, [ir.Constant(I32, 0), ir.Constant(I32, i)]))
+        return raw
+
     def _emit_expr(self, expr: A.Expr, ctx: "FunctionCtx") -> ir.Value:
         b = ctx.builder
+        if isinstance(expr, A.FieldAccess):
+            obj_ty = self.sema.expr_types[id(expr.obj)]
+            assert isinstance(obj_ty, T.ClassType)
+            return b.load(self._field_ptr(self._emit_expr(expr.obj, ctx), obj_ty, expr.field, b))
         if isinstance(expr, A.IntLit):
             return ir.Constant(I64, expr.value)
         if isinstance(expr, A.FloatLit):
@@ -604,6 +645,9 @@ class IRGen:
         raise RuntimeError(f"unknown binop {op}")
 
     def _emit_call(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
+        cls = self.sema.constructor_calls.get(id(call))
+        if cls is not None:
+            return self._emit_constructor(call, cls, ctx)
         # User-function calls (qualified or not) are recorded by sema in
         # call_resolution; builtins are not. This is the discriminator.
         key = self.sema.call_resolution.get(id(call))

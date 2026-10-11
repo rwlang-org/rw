@@ -230,3 +230,17 @@ def test_assigned_spawn_is_not_detached():
         "def main() -> int:\n    f: Future[int] = spawn work()\n    return await f\n"
     )
     assert not re.search(r'call void @"rw_detach"\(', ir_text)
+
+
+def test_record_constructor_and_fields_emit_malloc_gep():
+    ir_text = ir_for(
+        "class P:\n    x: int\n    s: string\n\n"
+        "def bump(p: P) -> int:\n    p.x = p.x + 1\n    return p.x\n\n"
+        'def main() -> int:\n    p: P = P(1, "a")\n    return bump(p)\n'
+    )
+    # Records are passed as i8* and allocated with malloc.
+    assert re.search(r'define i64 @"rw_user_bump"\(i8\* %"p"\)', ir_text)
+    assert re.search(r'call i8\* @"malloc"\(', ir_text)
+    # Field access goes through the {i64, {i64, i8*}} layout.
+    assert "{i64, {i64, i8*}}*" in ir_text
+    assert "getelementptr" in ir_text
