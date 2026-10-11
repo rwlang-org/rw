@@ -22,8 +22,15 @@ def _read_source(path: Path) -> str:
         sys.exit(1)
 
 
-def _report(err: CompileError, source: str) -> None:
+def _report(err: CompileError, source: str, src_path: Path) -> None:
     diag = err.diagnostic
+    # A diagnostic from an imported module names that module's file; render
+    # the snippet from it rather than from the entry source.
+    if diag.file != str(src_path):
+        try:
+            source = Path(diag.file).read_text(encoding="utf-8")
+        except OSError:
+            pass
     print(diag.render(source), file=sys.stderr)
 
 
@@ -34,7 +41,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     try:
         compile_source(source, filename=str(src_path), output=out_path)
     except CompileError as e:
-        _report(e, source)
+        _report(e, source, src_path)
         return 1
     return 0
 
@@ -49,7 +56,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         try:
             compile_source(source, filename=str(src_path), output=out)
         except CompileError as e:
-            _report(e, source)
+            _report(e, source, src_path)
             return 1
         return run_executable(out)
 
@@ -66,7 +73,7 @@ def cmd_emit_ir(args: argparse.Namespace) -> int:
         print(diag.render(source), file=sys.stderr)
         return 1
     except CompileError as e:
-        _report(e, source)
+        _report(e, source, src_path)
         return 1
     sys.stdout.write(text)
     if not text.endswith("\n"):

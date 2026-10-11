@@ -241,3 +241,24 @@ def test_function_signature_tokens():
         TokenKind.EOF,
     ]
     assert [t.kind for t in toks] == expected
+
+
+def test_dot_splits_qualified_call():
+    toks = tokenize("math_lib.add\n")
+    assert [t.kind for t in toks] == [
+        TokenKind.IDENT,
+        TokenKind.DOT,
+        TokenKind.IDENT,
+        TokenKind.NEWLINE,
+        TokenKind.EOF,
+    ]
+    assert toks[0].value == "math_lib"
+    assert toks[2].value == "add"
+
+
+def test_dot_does_not_break_float_literals():
+    # `.` between digits is a float, not a DOT token.
+    toks = tokenize("1.5 3.14e2\n")
+    assert toks[0].kind == TokenKind.FLOAT and toks[0].value == "1.5"
+    assert toks[1].kind == TokenKind.FLOAT and toks[1].value == "3.14e2"
+    assert TokenKind.DOT not in [t.kind for t in toks]

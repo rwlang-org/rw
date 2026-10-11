@@ -1,0 +1,6 @@
+import import_basic_lib
+
+def main() -> int:
+    print(import_basic_lib.add(2, 3))
+    print(import_basic_lib.mul(4, 5))
+    return 0

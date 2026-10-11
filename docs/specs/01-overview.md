@@ -53,7 +53,7 @@ spawn_string) should be **green on both macOS arm64 and Linux x86_64**.
 
 ## Non-goals (future extensions)
 
-- list / dict / for / class / import
+- list / dict / for / class / import (import was later added; see 17-namespaced-imports.md)
 - Type inference
 - GC (leaks are tolerated for now; only Future and malloc/free pairs are managed)
 - String concatenation / slicing
