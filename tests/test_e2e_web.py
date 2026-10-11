@@ -38,12 +38,16 @@ def server():
     out = td / "web_app"
     build = subprocess.run(
         [sys.executable, "-m", "rwc.cli", "build", str(td / "web_app.rw"), "-o", str(out)],
-        capture_output=True, text=True, cwd=REPO,
+        capture_output=True,
+        text=True,
+        cwd=REPO,
     )
     assert build.returncode == 0, f"rwc build failed:\n{build.stderr}"
     proc = subprocess.Popen(
-        [str(out)], env={**os.environ, "RW_WORKERS": "2"},
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        [str(out)],
+        env={**os.environ, "RW_WORKERS": "2"},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
     )
     time.sleep(0.5)
     if proc.poll() is not None:
