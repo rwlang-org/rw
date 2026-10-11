@@ -79,6 +79,14 @@ void    rw_sched_join_void(rw_fiber_handle *h);
  * any thread (uses the same mutex/cv as spawn). */
 void rw_sched_enqueue_ready(rw_fiber_handle *h);
 
+/* Give up ownership of a fiber without joining it (spec 19). Its handle
+ * and stack are freed as soon as it finishes. h must not be joined or
+ * detached again afterwards. */
+void rw_sched_detach(rw_fiber_handle *h);
+
+/* Number of fiber handles spawned but not yet freed. For tests. */
+int64_t rw_sched_live_fibers(void);
+
 /* Return the fiber handle currently running on this worker thread,
  * or NULL if the calling thread is not a worker (main / netpoller). */
 rw_fiber_handle *rw_sched_current_fiber(void);

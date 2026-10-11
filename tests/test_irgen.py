@@ -213,3 +213,20 @@ def test_string_search_builtins_emit_runtime_calls():
     )
     for sym in ("rw_str_find", "rw_str_slice", "rw_str_starts_with", "rw_str_from_int", "rw_str_to_int"):
         assert re.search(rf'call .*@"{sym}"\(', ir_text), sym
+
+
+def test_statement_spawn_is_detached():
+    # A spawn whose Future is discarded must be detached (spec 19).
+    ir_text = ir_for(
+        "def work() -> int:\n    return 1\n\n"
+        "def main() -> int:\n    spawn work()\n    return 0\n"
+    )
+    assert re.search(r'call void @"rw_detach"\(', ir_text)
+
+
+def test_assigned_spawn_is_not_detached():
+    ir_text = ir_for(
+        "def work() -> int:\n    return 1\n\n"
+        "def main() -> int:\n    f: Future[int] = spawn work()\n    return await f\n"
+    )
+    assert not re.search(r'call void @"rw_detach"\(', ir_text)

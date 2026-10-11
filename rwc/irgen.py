@@ -172,6 +172,9 @@ class IRGen:
         # spawn / await: declared lazily as needed
         self._spawn_funcs: Dict[str, ir.Function] = {}
         self._await_funcs: Dict[str, ir.Function] = {}
+        # Drop a Future without awaiting it (spec 19).
+        self._rw_detach = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [I8P]), "rw_detach")
 
     def _decl_spawn(self, ret_ty: T.Type) -> ir.Function:
         key = repr(ret_ty)
@@ -300,7 +303,11 @@ class IRGen:
             b.store(val, slot)
             return
         if isinstance(stmt, A.ExprStmt):
-            self._emit_expr(stmt.expr, ctx)
+            val = self._emit_expr(stmt.expr, ctx)
+            if isinstance(stmt.expr, A.SpawnExpr):
+                # The Future is discarded, so nobody will await it: detach
+                # the fiber so it is freed when it finishes (spec 19).
+                b.call(self._rw_detach, [val])
             return
         if isinstance(stmt, A.Return):
             if stmt.value is None:

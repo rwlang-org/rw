@@ -128,7 +128,22 @@ struct rw_fiber_handle {
      * out, then re-enqueues each waiter onto a runnable queue. */
     rw_wait_lock     wait_lock;
     struct rw_fiber_handle *wait_head;
+    /* Ownership handoff for freeing the handle (spec 19). The worker sets
+     * REAP_FINISHED once the fiber is DONE *and* has swapped off its stack;
+     * the owner sets REAP_RELEASED after join read the result, or on
+     * detach. Both use an atomic exchange and whoever arrives second frees,
+     * so each handle is freed exactly once and never while in use. */
+    _Atomic int      reap;
 };
+
+enum {
+    REAP_NONE = 0,
+    REAP_FINISHED,
+    REAP_RELEASED,
+};
+
+/* Spawned-minus-freed handles; read by tests via rw_sched_live_fibers(). */
+static _Atomic int64_t g_live_fibers = 0;
 
 /* ---- M:N scheduler globals (single-worker variant, Commit 3) ----
  *
@@ -148,6 +163,11 @@ typedef struct rw_M {
     int              id;
     rw_fiber_ctx     sched_ctx;
     rw_fiber_handle *current;
+    /* Set by finalize_fiber just before the finishing fiber swaps back to
+     * this M. A finished fiber always returns to the M that ran it, so this
+     * M-local flag (not g->state, which other threads may be changing) is
+     * how worker_main knows the fiber it resumed has finished. */
+    rw_fiber_handle *finished;
     rw_P            *p;
     /* xorshift64 PRNG state used to pick a random starting victim for
      * work-stealing. Seeded per-M at init. */
@@ -346,6 +366,8 @@ void rw_sched_park_current(void) {
     rw_fiber_swap(&me->ctx, &m->sched_ctx);
 }
 
+static void free_handle(rw_fiber_handle *h);
+
 /* Worker entry point. Sets tls_m and loops on find_runnable + execute
  * until shutdown. find_runnable's NULL return is the only way out.
  *
@@ -370,11 +392,21 @@ static void *worker_main(void *arg) {
          * on the queue; DONE / WAITING fibers re-enter the queue via
          * a different path (finalize_fiber for DONE, the target
          * trampoline for WAITING). */
-        if (atomic_load_explicit(&g->state, memory_order_relaxed)
-            == RW_FIBER_RUNNING) {
+        m->current = NULL;
+        if (m->finished == g) {
+            /* g finished on this M: its ctx is fully saved and its stack
+             * is no longer in use. Hand it to its owner, or free it if the
+             * owner already let go (spec 19). */
+            m->finished = NULL;
+            if (atomic_exchange_explicit(&g->reap, REAP_FINISHED,
+                                         memory_order_acq_rel)
+                == REAP_RELEASED) {
+                free_handle(g);
+            }
+        } else if (atomic_load_explicit(&g->state, memory_order_relaxed)
+                   == RW_FIBER_RUNNING) {
             enqueue_ready(g);
         }
-        m->current = NULL;
     }
     tls_m = NULL;
     return NULL;
@@ -441,6 +473,7 @@ static void finalize_fiber(rw_fiber_handle *h) {
     }
 
     rw_M *m = tls_m;
+    m->finished = h;
     rw_fiber_swap(&h->ctx, &m->sched_ctx);
 }
 
@@ -494,6 +527,8 @@ static rw_fiber_handle *spawn_common(rw_result_kind kind,
     /* Empty wait list for fiber-thread joiners. */
     rw_wait_lock_init(&h->wait_lock);
     h->wait_head = NULL;
+    atomic_store_explicit(&h->reap, REAP_NONE, memory_order_relaxed);
+    atomic_fetch_add_explicit(&g_live_fibers, 1, memory_order_relaxed);
 
     void *region = mmap(NULL, rw_region_size(),
                         PROT_READ | PROT_WRITE,
@@ -537,6 +572,24 @@ static void free_handle(rw_fiber_handle *h) {
         munmap(h->region, rw_region_size());
     }
     free(h);
+    atomic_fetch_sub_explicit(&g_live_fibers, 1, memory_order_relaxed);
+}
+
+/* The owner is done with h (join read the result, or detach). Free it now
+ * if the worker already finished with it; otherwise the worker frees it. */
+static void release_handle(rw_fiber_handle *h) {
+    if (atomic_exchange_explicit(&h->reap, REAP_RELEASED, memory_order_acq_rel)
+        == REAP_FINISHED) {
+        free_handle(h);
+    }
+}
+
+void rw_sched_detach(rw_fiber_handle *h) {
+    if (h) release_handle(h);
+}
+
+int64_t rw_sched_live_fibers(void) {
+    return atomic_load_explicit(&g_live_fibers, memory_order_relaxed);
 }
 
 /* Wait until h is DONE.
@@ -569,7 +622,7 @@ static void wait_done(rw_fiber_handle *h) {
     RETTY rw_sched_join_##NAME(rw_fiber_handle *h) {                       \
         wait_done(h);                                                      \
         RETTY r = h->result.FIELD;                                         \
-        free_handle(h);                                                    \
+        release_handle(h);                                                 \
         return r;                                                          \
     }
 
@@ -580,7 +633,7 @@ DEFINE_JOIN(str,  rw_str,  s)
 
 void rw_sched_join_void(rw_fiber_handle *h) {
     wait_done(h);
-    free_handle(h);
+    release_handle(h);
 }
 
 static int parse_workers(void) {
