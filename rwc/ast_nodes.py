@@ -146,11 +146,21 @@ class ErrExpr:
     col: int
 
 
+@dataclass
+class FieldAccess:
+    """`obj.field` on a record (spec 20)."""
+    obj: "Expr"
+    field: str
+    line: int
+    col: int
+
+
 Expr = Union[
     IntLit, FloatLit, BoolLit, StringLit, Name,
     UnaryOp, BinOp, IfExpr, Call, SpawnExpr, AwaitExpr,
     SomeExpr, NoneExpr,
     OkExpr, ErrExpr,
+    FieldAccess,
 ]
 
 
@@ -253,7 +263,20 @@ class MatchStmt:
     col: int
 
 
-Stmt = Union[VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt, Break, Continue, Assert]
+@dataclass
+class FieldAssign:
+    """`obj.field = value` on a record (spec 20)."""
+    obj: Expr
+    field: str
+    value: Expr
+    line: int
+    col: int
+
+
+Stmt = Union[
+    VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt, Break, Continue, Assert,
+    FieldAssign,
+]
 
 
 # ----- Top level -----
@@ -296,7 +319,25 @@ class Import:
 
 
 @dataclass
+class FieldDecl:
+    name: str
+    type_expr: TypeExpr
+    line: int
+    col: int
+
+
+@dataclass
+class ClassDef:
+    """A record type: `class Name:` with typed fields (spec 20)."""
+    name: str
+    fields: List[FieldDecl]
+    line: int
+    col: int
+
+
+@dataclass
 class Module:
     functions: List[FuncDef] = field(default_factory=list)
     type_aliases: List[TypeAlias] = field(default_factory=list)
     imports: List[Import] = field(default_factory=list)
+    classes: List[ClassDef] = field(default_factory=list)

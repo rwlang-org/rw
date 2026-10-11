@@ -132,9 +132,9 @@ class Parser:
         self.skip_newlines()
         while self.cur.kind != TokenKind.EOF:
             if self.cur.kind in (TokenKind.KW_IMPORT, TokenKind.KW_FROM):
-                if mod.functions or mod.type_aliases:
+                if mod.functions or mod.type_aliases or mod.classes:
                     raise ParserError(
-                        "import must appear before any 'def' or 'type'",
+                        "import must appear before any 'def', 'type', or 'class'",
                         self.cur.line,
                         self.cur.col,
                         max(1, len(self.cur.value)),
@@ -144,9 +144,11 @@ class Parser:
                 mod.functions.append(self.parse_func_def())
             elif self.cur.kind == TokenKind.KW_TYPE:
                 mod.type_aliases.append(self.parse_type_alias())
+            elif self.cur.kind == TokenKind.KW_CLASS:
+                mod.classes.append(self.parse_class_def())
             else:
                 raise ParserError(
-                    "expected 'import', 'def', or 'type' at module level",
+                    "expected 'import', 'def', 'type', or 'class' at module level",
                     self.cur.line,
                     self.cur.col,
                     max(1, len(self.cur.value)),
@@ -194,6 +196,26 @@ class Parser:
         target = self.parse_type()
         self.eat(TokenKind.NEWLINE)
         return A.TypeAlias(name_tok.value, target, kw.line, kw.col)
+
+    # ------- records (spec 20) -------
+    def parse_class_def(self) -> A.ClassDef:
+        kw = self.eat(TokenKind.KW_CLASS, "'class'")
+        name_tok = self.eat(TokenKind.IDENT, "class name")
+        self.eat(TokenKind.COLON, "':' to start class body")
+        self.eat(TokenKind.NEWLINE)
+        self.eat(TokenKind.INDENT, "indented block of fields")
+        fields: List[A.FieldDecl] = []
+        while self.cur.kind != TokenKind.DEDENT:
+            if self.cur.kind == TokenKind.NEWLINE:
+                self.i += 1
+                continue
+            f_tok = self.eat(TokenKind.IDENT, "field name")
+            self.eat(TokenKind.COLON, "':' after field name")
+            ty = self.parse_type()
+            self.eat(TokenKind.NEWLINE)
+            fields.append(A.FieldDecl(f_tok.value, ty, f_tok.line, f_tok.col))
+        self.eat(TokenKind.DEDENT)
+        return A.ClassDef(name_tok.value, fields, kw.line, kw.col)
 
     # ------- function definitions -------
     def parse_func_def(self) -> A.FuncDef:
@@ -595,9 +617,19 @@ class Parser:
         self.eat(TokenKind.NEWLINE)
         return A.Assign(name_tok.value, value, name_tok.line, name_tok.col)
 
-    def parse_expr_stmt(self) -> A.ExprStmt:
+    def parse_expr_stmt(self) -> A.Stmt:
         t = self.cur
         expr = self.parse_expr()
+        if self.cur.kind == TokenKind.ASSIGN:
+            # `obj.field = value` (spec 20): the only assignable expression.
+            if not isinstance(expr, A.FieldAccess):
+                raise ParserError(
+                    "invalid assignment target", t.line, t.col, max(1, len(t.value)),
+                )
+            self.i += 1  # consume '='
+            value = self.parse_expr()
+            self.eat(TokenKind.NEWLINE)
+            return A.FieldAssign(expr.obj, expr.field, value, expr.line, expr.col)
         self.eat(TokenKind.NEWLINE)
         return A.ExprStmt(expr, t.line, t.col)
 
@@ -766,19 +798,23 @@ class Parser:
 
     def parse_atom_postfix(self) -> A.Expr:
         atom = self.parse_atom()
-        # Qualified call `module.func(...)`: a bare Name followed by `.` must be
-        # a module-qualified call (rw has no member access otherwise). See spec 17.
-        if isinstance(atom, A.Name) and self.cur.kind == TokenKind.DOT:
-            self.i += 1  # consume '.'
-            method = self.eat(TokenKind.IDENT, "function name after '.'")
-            self.eat(TokenKind.LPAREN, "'(' after qualified call")
-            args = self._parse_arglist()
-            return A.Call(method.value, args, atom.line, atom.col, module=atom.name)
         # Only allow call when atom is a bare Name (MVP: no first-class fns).
-        while self.cur.kind == TokenKind.LPAREN and isinstance(atom, A.Name):
+        if self.cur.kind == TokenKind.LPAREN and isinstance(atom, A.Name):
             self.i += 1  # consume '('
             args = self._parse_arglist()
             atom = A.Call(atom.name, args, atom.line, atom.col)
+        while self.cur.kind == TokenKind.DOT:
+            self.i += 1  # consume '.'
+            name = self.eat(TokenKind.IDENT, "name after '.'")
+            if isinstance(atom, A.Name) and self.cur.kind == TokenKind.LPAREN:
+                # Module-qualified call `module.func(...)` (spec 17). Records
+                # have no methods, so `name.ident(` is never a field access.
+                self.i += 1  # consume '('
+                args = self._parse_arglist()
+                atom = A.Call(name.value, args, atom.line, atom.col, module=atom.name)
+            else:
+                # Field access `expr.field` (spec 20).
+                atom = A.FieldAccess(atom, name.value, name.line, name.col)
         return atom
 
     def _parse_arglist(self) -> List[A.Expr]:

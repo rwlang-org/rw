@@ -408,3 +408,52 @@ def test_from_import_after_def_is_error():
     src = "def main() -> int:\n    return 0\n\nfrom lib import add\n"
     with pytest.raises(ParserError):
         parse_src(src)
+
+
+# ----- records (spec 20) -----
+
+def test_parse_class_def():
+    mod = parse_src("class Point:\n    x: int\n    label: string\n\ndef main() -> int:\n    return 0\n")
+    assert len(mod.classes) == 1
+    c = mod.classes[0]
+    assert c.name == "Point"
+    assert [(f.name, f.type_expr.name) for f in c.fields] == [("x", "int"), ("label", "string")]
+
+
+def test_parse_class_requires_fields():
+    with pytest.raises(ParserError):
+        parse_src("class Empty:\n\ndef main() -> int:\n    return 0\n")
+
+
+def test_parse_import_after_class_is_error():
+    with pytest.raises(ParserError):
+        parse_src("class P:\n    x: int\nimport lib\n")
+
+
+def test_parse_field_access_chain():
+    mod = parse_src("def main() -> int:\n    return a.b.c\n")
+    expr = mod.functions[0].body[0].value
+    assert isinstance(expr, A.FieldAccess) and expr.field == "c"
+    assert isinstance(expr.obj, A.FieldAccess) and expr.obj.field == "b"
+    assert isinstance(expr.obj.obj, A.Name) and expr.obj.obj.name == "a"
+
+
+def test_parse_field_assign():
+    mod = parse_src("def main() -> int:\n    p.x = 1\n    p.q.y = 2\n    return 0\n")
+    s0, s1 = mod.functions[0].body[0], mod.functions[0].body[1]
+    assert isinstance(s0, A.FieldAssign) and s0.field == "x"
+    assert isinstance(s0.obj, A.Name) and s0.obj.name == "p"
+    assert isinstance(s1, A.FieldAssign) and s1.field == "y"
+    assert isinstance(s1.obj, A.FieldAccess)
+
+
+def test_parse_qualified_call_still_call():
+    mod = parse_src("def main() -> int:\n    return lib.f(1).x\n")
+    expr = mod.functions[0].body[0].value
+    assert isinstance(expr, A.FieldAccess)
+    assert isinstance(expr.obj, A.Call) and expr.obj.module == "lib" and expr.obj.callee == "f"
+
+
+def test_parse_assign_to_call_is_error():
+    with pytest.raises(ParserError):
+        parse_src("def main() -> int:\n    f() = 1\n    return 0\n")
