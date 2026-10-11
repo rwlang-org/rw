@@ -47,6 +47,13 @@ class SemaResult:
     call_resolution: Dict[int, FuncKey] = field(default_factory=dict)
     # id(Call) -> record type, for calls that construct a record (spec 20).
     constructor_calls: Dict[int, T.ClassType] = field(default_factory=dict)
+    # Function values (spec 21). func_refs: id(Name/FieldAccess) -> the
+    # referenced function. local_fn_calls: ids of `h(...)` calls through a
+    # local. field_fn_calls: id(Call) -> record type, for `r.f(...)` where r
+    # is a local record and f a function-valued field.
+    func_refs: Dict[int, FuncKey] = field(default_factory=dict)
+    local_fn_calls: set[int] = field(default_factory=set)
+    field_fn_calls: Dict[int, T.ClassType] = field(default_factory=dict)
 
 
 # Names of builtin functions. Spawning a builtin is an error, and a qualified
@@ -142,6 +149,15 @@ class Sema:
                 return self.class_map[ty.name]
             raise CompileError(Diagnostic(self.filename, ty.line, ty.col, len(ty.name),
                                           f"unknown type: {ty.name}"))
+        if isinstance(ty, A.TypeCallable):
+            params: List[T.Type] = []
+            for p in ty.params:
+                pt = self._resolve_type(p)
+                if pt is T.VOID:
+                    raise CompileError(Diagnostic(self.filename, ty.line, ty.col, 8,
+                                                  "Callable parameter type cannot be void"))
+                params.append(pt)
+            return T.FunctionType(params, self._resolve_type(ty.ret))
         if isinstance(ty, A.TypeFuture):
             inner = self._resolve_type(ty.inner)
             if inner is T.VOID:
@@ -601,12 +617,26 @@ class Sema:
         if isinstance(expr, A.StringLit):
             return T.STRING
         if isinstance(expr, A.Name):
-            if expr.name not in locals_:
+            if expr.name in locals_:
+                return locals_[expr.name]
+            # A function used as a value (spec 21).
+            ref: Optional[FuncKey] = None
+            if (self.current_module, expr.name) in self.result.functions:
+                ref = (self.current_module, expr.name)
+            elif expr.name in self._from_env:
+                ref = self._from_env[expr.name]
+            if ref is not None:
+                self.result.func_refs[id(expr)] = ref
+                return self._func_value_type(ref)
+            if expr.name in _BUILTIN_FUNCS:
                 raise CompileError(Diagnostic(
                     self.filename, expr.line, expr.col, len(expr.name),
-                    f"undefined variable: {expr.name}",
+                    f"cannot use builtin `{expr.name}` as a value",
                 ))
-            return locals_[expr.name]
+            raise CompileError(Diagnostic(
+                self.filename, expr.line, expr.col, len(expr.name),
+                f"undefined variable: {expr.name}",
+            ))
         if isinstance(expr, A.UnaryOp):
             inner = self._check_expr(fn, expr.operand, locals_)
             if expr.op == "-":
@@ -691,6 +721,25 @@ class Sema:
             ))
         if isinstance(expr, A.Call):
             return self._check_call(fn, expr, locals_)
+        if (
+            isinstance(expr, A.FieldAccess)
+            and isinstance(expr.obj, A.Name)
+            and expr.obj.name not in locals_
+            and expr.obj.name in self._import_env
+        ):
+            # `mod.f` used as a value (spec 21).
+            key: FuncKey = (self._import_env[expr.obj.name], expr.field)
+            if key not in self.result.functions:
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, len(expr.field),
+                    f"module '{expr.obj.name}' has no function `{expr.field}`",
+                ))
+            self.result.func_refs[id(expr)] = key
+            return self._func_value_type(key)
+        if isinstance(expr, A.CallValue):
+            callee_ty = self._check_expr(fn, expr.callee, locals_)
+            return self._check_fn_value_call(fn, callee_ty, expr.args, "function value",
+                                             expr.line, expr.col, locals_)
         if isinstance(expr, A.FieldAccess):
             obj_ty = self._check_expr(fn, expr.obj, locals_)
             _, fty = self._field_of(obj_ty, expr.field, expr.line, expr.col)
@@ -698,6 +747,13 @@ class Sema:
         if isinstance(expr, A.SpawnExpr):
             # spawn requires a user-defined function call.
             call = expr.call
+            if (call.module is not None and call.module in locals_) or (
+                call.module is None and isinstance(locals_.get(call.callee), T.FunctionType)
+            ):
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, 5,
+                    "cannot spawn a function value",
+                ))
             if call.module is None and call.callee in _BUILTIN_FUNCS:
                 raise CompileError(Diagnostic(
                     self.filename, expr.line, expr.col, 5,
@@ -802,6 +858,18 @@ class Sema:
         return key
 
     def _check_call(self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]) -> T.Type:
+        # Calls through function values (spec 21) come first: locals shadow
+        # functions, builtins, and import qualifiers.
+        if call.module is not None and call.module in locals_:
+            # `r.f(...)`: call the function stored in field f of record r.
+            cls, fty = self._field_of(locals_[call.module], call.callee, call.line, call.col)
+            self.result.field_fn_calls[id(call)] = cls
+            return self._check_fn_value_call(fn, fty, call.args, call.callee,
+                                             call.line, call.col, locals_)
+        if call.module is None and isinstance(locals_.get(call.callee), T.FunctionType):
+            self.result.local_fn_calls.add(id(call))
+            return self._check_fn_value_call(fn, locals_[call.callee], call.args, call.callee,
+                                             call.line, call.col, locals_)
         # Qualified calls (`mod.func`) are always user functions; skip the
         # builtin dispatch entirely. See spec 17.
         if call.module is not None:
@@ -1123,6 +1191,40 @@ class Sema:
                 f"{obj_ty} has no field `{field}`",
             ))
         return obj_ty, obj_ty.fields[idx][1]
+
+    def _func_value_type(self, key: FuncKey) -> T.FunctionType:
+        sig = self.result.functions[key]
+        return T.FunctionType([pt for _, pt in sig.params], sig.return_type)
+
+    def _check_fn_value_call(
+        self,
+        fn: A.FuncDef,
+        callee_ty: T.Type,
+        args: List[A.Expr],
+        what: str,
+        line: int,
+        col: int,
+        locals_: Dict[str, T.Type],
+    ) -> T.Type:
+        """Type-check a call through a function value of type callee_ty."""
+        if not isinstance(callee_ty, T.FunctionType):
+            raise CompileError(Diagnostic(
+                self.filename, line, col, max(1, len(what)),
+                f"`{callee_ty}` is not callable",
+            ))
+        if len(args) != len(callee_ty.params):
+            raise CompileError(Diagnostic(
+                self.filename, line, col, max(1, len(what)),
+                f"`{what}` expects {len(callee_ty.params)} argument(s), got {len(args)}",
+            ))
+        for i, (arg, pty) in enumerate(zip(args, callee_ty.params, strict=True), start=1):
+            at = self._check_expr(fn, arg, locals_)
+            if at != pty:
+                raise CompileError(Diagnostic(
+                    self.filename, line, col, max(1, len(what)),
+                    f"argument {i} of `{what}`: expected `{pty}`, found `{at}`",
+                ))
+        return callee_ty.ret
 
     def _check_user_call(self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]) -> T.Type:
         """Resolve and type-check a call to a user-defined function (qualified
