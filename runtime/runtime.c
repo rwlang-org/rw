@@ -128,6 +128,35 @@ rw_str rw_str_from_int(int64_t n) {
     return out;
 }
 
+rw_str rw_str_from_float(double v) {
+    char buf[40];
+    /* The fewest significant digits (15..17) that read back as the same
+     * double; 17 always does. */
+    int len = 0;
+    for (int prec = 15; prec <= 17; prec++) {
+        len = snprintf(buf, sizeof buf, "%.*g", prec, v);
+        if (strtod(buf, NULL) == v) break;
+    }
+    rw_str out;
+    out.len = 0;
+    out.ptr = NULL;
+    if (len <= 0) return out;
+    char *p = (char *)malloc((size_t)len);
+    if (!p) return out;
+    memcpy(p, buf, (size_t)len);
+    out.len = len;
+    out.ptr = p;
+    return out;
+}
+
+int64_t rw_str_cmp(rw_str a, rw_str b) {
+    int64_t n = a.len < b.len ? a.len : b.len;
+    int c = n > 0 ? memcmp(a.ptr, b.ptr, (size_t)n) : 0;
+    if (c != 0) return c < 0 ? -1 : 1;
+    if (a.len == b.len) return 0;
+    return a.len < b.len ? -1 : 1;
+}
+
 void rw_str_to_int(rw_option_int *out, rw_str s) {
     out->tag = 0;
     out->payload = 0;

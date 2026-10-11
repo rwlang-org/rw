@@ -57,8 +57,8 @@ added to the builtin set like the others.
 | `str(float)` | `rw_str_from_float` (new) |
 | `str(bool)` | a `select` between two string constants |
 
-`rw_str_from_float` formats with `%.15g`, and falls back to `%.17g` when
-the shorter text does not parse back to the same `double`.
+`rw_str_from_float` formats with `%.15g`, `%.16g`, then `%.17g`, and keeps
+the first text that parses back to the same `double` (17 digits always do).
 
 String ordering calls a new `rw_str_cmp(a, b) -> int64` (`memcmp` over the
 common prefix, then the shorter string first) and compares the result with

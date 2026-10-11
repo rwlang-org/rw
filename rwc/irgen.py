@@ -127,6 +127,11 @@ class IRGen:
             m, ir.FunctionType(I8, [RW_STR_TY, RW_STR_TY]), "rw_str_starts_with")
         self._rw_str_from_int = ir.Function(
             m, ir.FunctionType(RW_STR_TY, [I64]), "rw_str_from_int")
+        # conversions and string ordering (spec 26)
+        self._rw_str_from_float = ir.Function(
+            m, ir.FunctionType(RW_STR_TY, [F64]), "rw_str_from_float")
+        self._rw_str_cmp = ir.Function(
+            m, ir.FunctionType(I64, [RW_STR_TY, RW_STR_TY]), "rw_str_cmp")
         # List[int] ops — pointer-out ABI (see runtime.h for the
         # rationale: 24-byte struct is past arm64's "return in regs"
         # threshold, so we go through stack-allocated buffers).
@@ -696,6 +701,9 @@ class IRGen:
                 i1 = b.fcmp_ordered(pred, l, r)
             elif lty is T.BOOL and op in ("==", "!="):
                 i1 = b.icmp_unsigned(op, l, r)
+            elif is_str and op in ("<", "<=", ">", ">="):
+                cmp = b.call(self._rw_str_cmp, [l, r])
+                i1 = b.icmp_signed(op, cmp, ir.Constant(I64, 0))
             elif is_strlike and op in ("==", "!="):
                 eq_i8 = b.call(self._rw_str_eq, [l, r])
                 i1 = b.icmp_unsigned("!=", eq_i8, ir.Constant(I8, 0))
@@ -707,8 +715,39 @@ class IRGen:
 
         raise RuntimeError(f"unknown binop {op}")
 
+    def _emit_conversion(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
+        """int(x) / float(x) / str(x) (spec 26)."""
+        b = ctx.builder
+        v = self._emit_expr(call.args[0], ctx)
+        at = self.sema.expr_types[id(call.args[0])]
+        if call.callee == "int":
+            if at is T.FLOAT:
+                return b.fptosi(v, I64)
+            if at is T.BOOL:
+                return b.zext(v, I64)
+            return v
+        if call.callee == "float":
+            return b.sitofp(v, F64) if at is T.INT else v
+        if at is T.INT:
+            return b.call(self._rw_str_from_int, [v])
+        if at is T.FLOAT:
+            return b.call(self._rw_str_from_float, [v])
+        if at is T.BOOL:
+            is_true = b.icmp_unsigned("!=", v, ir.Constant(I8, 0))
+            return b.select(is_true, self._emit_string_literal("true", b),
+                            self._emit_string_literal("false", b))
+        return v
+
     def _emit_call(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
         b = ctx.builder
+        if (
+            call.module is None
+            and call.callee in ("int", "float", "str")
+            and id(call) not in self.sema.call_resolution
+            and id(call) not in self.sema.local_fn_calls
+            and id(call) not in self.sema.constructor_calls
+        ):
+            return self._emit_conversion(call, ctx)
         if id(call) in self.sema.local_fn_calls:
             callee = b.load(ctx.locals[call.callee])
             return b.call(callee, [self._emit_expr(a, ctx) for a in call.args])

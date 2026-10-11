@@ -1,0 +1,24 @@
+def average(total: int, n: int) -> float:
+    return float(total) / float(n)
+
+def main() -> int:
+    print("avg = " + str(average(7, 2)))
+    print(int(3.9))
+    print(int(-3.9))
+    print(int(true) + int(false))
+    print(float(2) * 1.5)
+    print(str(0.1))
+    print(str(1.0 / 3.0))
+    print(str(1e100))
+    print(str(-0.5))
+    print(str(42) + "/" + str(-7))
+    print(str(true) + " " + str(false))
+    if "apple" < "banana":
+        print("apple < banana")
+    if "abc" < "abd" and "ab" < "abc" and not ("b" < "a"):
+        print("byte order")
+    if "same" <= "same" and "same" >= "same" and not ("same" < "same"):
+        print("equal strings")
+    if "Zebra" < "apple":
+        print("uppercase first")
+    return 0
