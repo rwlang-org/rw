@@ -75,8 +75,14 @@ returns immediately (another worker's request, or the main thread).
 
 `rw_sched_yield()` only swaps to the worker's scheduler context; the worker
 loop re-enqueues the fiber after the swap has fully saved its context
-(the "publish after save" rule of the existing scheduler), at the tail of
-the run queue.
+(the "publish after save" rule of the existing scheduler). Like Go, a
+**preempted** fiber goes to the back of the global queue rather than the
+worker's local queue, so the fibers it held up run first.
+
+The scheduler also takes from the global queue first every 61st round (Go's
+interval). Without that, a fiber that keeps being re-enqueued locally would
+be picked again forever and fibers spawned from the main thread — which go
+to the global queue — would never run.
 
 If a fiber finishes or parks before reaching a safe point, the worker clears
 a pending request for itself when it regains control, so a stale request
@@ -117,7 +123,7 @@ uv run --frozen pytest -q
 
 | Risk | Mitigation |
 |---|---|
-| Overhead of a check in every loop iteration and call | One relaxed load + a never-taken branch; measured on `examples/fib.rw` and a tight loop and reported in the PR |
+| Overhead of a check in every loop iteration and call | One relaxed load + a never-taken branch. It is visible only in tight loops: a 300M-iteration loop whose body is one addition went from 163 ms to 598 ms at rwc's current `-O0` (32 → 91 ms at `-O2`), and recursive `fib(32)` from 15.5 to 19.1 ms. Compiling with `-O2` (#55) more than recovers the loss |
 | Publishing a half-saved context when a preempted fiber is re-enqueued | `rw_safepoint` only calls `rw_sched_yield`, which swaps; re-enqueueing stays in `worker_main` after the swap returns |
 | A request outliving the fiber it was meant for | The worker clears its own pending request each time it regains control |
 | New interleavings in user code (a field read and write can now be separated by another fiber) | Workers already run in parallel (M:N), so this adds no new kind of data race; synchronization primitives are #26 |

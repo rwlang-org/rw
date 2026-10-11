@@ -179,6 +179,9 @@ typedef struct rw_M {
     _Atomic uint64_t tick;
     _Atomic int      running;
     _Atomic int      preempt;
+    /* Set by rw_safepoint right before it yields, so worker_main sends the
+     * preempted fiber to the back of globq rather than the local runq. */
+    int              preempted;
 } rw_M;
 
 #define RW_MAX_WORKERS 64
@@ -387,6 +390,7 @@ void rw_safepoint(void) {
     if (!m || !m->current) return;
     if (atomic_exchange_explicit(&m->preempt, 0, memory_order_relaxed)) {
         atomic_fetch_sub_explicit(&rw_preempt_flag, 1, memory_order_relaxed);
+        m->preempted = 1;
         rw_sched_yield();
     }
 }
@@ -499,8 +503,19 @@ static void *worker_main(void *arg) {
             }
         } else if (atomic_load_explicit(&g->state, memory_order_relaxed)
                    == RW_FIBER_RUNNING) {
-            enqueue_ready(g);
+            if (m->preempted) {
+                /* Like Go, a preempted fiber goes to the back of the
+                 * global queue, so the fibers it held up run first. */
+                atomic_store_explicit(&g->state, RW_FIBER_READY, memory_order_relaxed);
+                rw_globq_push(&g_globq, g);
+                pthread_mutex_lock(&g_sched_mu);
+                pthread_cond_signal(&g_sched_cv);
+                pthread_mutex_unlock(&g_sched_mu);
+            } else {
+                enqueue_ready(g);
+            }
         }
+        m->preempted = 0;
     }
     tls_m = NULL;
     return NULL;
