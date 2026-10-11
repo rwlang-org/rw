@@ -74,6 +74,16 @@ class ClassType(Type):
         return None
 
 
+class FunctionType(Type):
+    """`Callable[[P1, ..., Pn], R]`: a pointer to a top-level function
+    (spec 21). Compared structurally through its display name."""
+
+    def __init__(self, params: List[Type], ret: Type) -> None:
+        self.params = params
+        self.ret = ret
+        self.name = f"Callable[[{', '.join(str(p) for p in params)}], {ret}]"
+
+
 def is_numeric(t: Type) -> bool:
     return t is INT or t is FLOAT
 

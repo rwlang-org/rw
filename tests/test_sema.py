@@ -1752,3 +1752,64 @@ def test_record_import_errors(tmp_path, entry, msg):
     with pytest.raises(CompileError) as ei:
         _check_program(tmp_path, entry, web=LIB_WEB)
     assert msg in ei.value.diagnostic.message
+
+
+# ----- function values (spec 21) -----
+
+FV_PRELUDE = (
+    "class Request:\n    path: string\n\n"
+    "class Response:\n    status: int\n\n"
+    "class Route:\n    path: string\n    handler: Callable[[Request], Response]\n\n"
+    "def hello(req: Request) -> Response:\n    return Response(200)\n\n"
+    "def nf(req: Request) -> Response:\n    return Response(404)\n\n"
+)
+
+
+def test_function_values_ok():
+    check(
+        FV_PRELUDE
+        + "def pick(found: bool) -> Callable[[Request], Response]:\n"
+        "    return hello if found else nf\n\n"
+        "def apply(h: Callable[[Request], Response], r: Request) -> int:\n"
+        "    return h(r).status\n\n"
+        "def main() -> int:\n"
+        '    req: Request = Request("/")\n'
+        '    rt: Route = Route("/", hello)\n'
+        "    a: int = rt.handler(req).status\n"
+        "    rt.handler = nf\n"
+        "    h: Callable[[Request], Response] = pick(true)\n"
+        "    b: int = h(req).status + pick(false)(req).status\n"
+        "    return a + b + apply(nf, req)\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ("    h: Callable[[Request], Response] = len\n", "cannot use builtin `len` as a value"),
+        ("    h: Callable[[Request], int] = hello\n", "type mismatch"),
+        ("    h: Callable[[Request], Response] = hello\n    h(1)\n", "argument 1"),
+        ("    h: Callable[[Request], Response] = hello\n    h()\n", "expects 1 argument"),
+        ('    rt: Route = Route("/", hello)\n    rt.nope(Request("/"))\n', "Route has no field `nope`"),
+        ('    rt: Route = Route("/", hello)\n    rt.path(Request("/"))\n', "`string` is not callable"),
+        ("    n: int = 1\n    n.f(1)\n", "`int` has no fields"),
+        ("    h: Callable[[Request], Response] = hello\n    print(h == h)\n", "cannot compare"),
+        ('    h: Callable[[Request], Response] = hello\n    f: Future[Response] = spawn h(Request("/"))\n',
+         "cannot spawn a function value"),
+    ],
+)
+def test_function_value_errors(body, msg):
+    e = err(FV_PRELUDE + "def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message
+
+
+def test_function_value_from_other_module(tmp_path):
+    _check_program(
+        tmp_path,
+        "import lib\nfrom lib import twice\n\n"
+        "def main() -> int:\n"
+        "    f: Callable[[int], int] = lib.inc\n"
+        "    g: Callable[[int], int] = twice\n"
+        "    return f(1) + g(2)\n",
+        lib="def inc(x: int) -> int:\n    return x + 1\n\ndef twice(x: int) -> int:\n    return x * 2\n",
+    )

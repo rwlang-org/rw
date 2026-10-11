@@ -244,3 +244,16 @@ def test_record_constructor_and_fields_emit_malloc_gep():
     # Field access goes through the {i64, {i64, i8*}} layout.
     assert "{i64, {i64, i8*}}*" in ir_text
     assert "getelementptr" in ir_text
+
+
+def test_function_value_indirect_call():
+    ir_text = ir_for(
+        "def inc(x: int) -> int:\n    return x + 1\n\n"
+        "def apply(f: Callable[[int], int], x: int) -> int:\n    return f(x)\n\n"
+        "def main() -> int:\n    return apply(inc, 1)\n"
+    )
+    # The parameter is a pointer to the function type, and the call goes
+    # through it; the reference passes the function symbol itself.
+    assert re.search(r'define i64 @"rw_user_apply"\(i64 \(i64\)\* %"f", i64 %"x"\)', ir_text)
+    assert re.search(r'call i64 %"f\.\d*"\(|call i64 %"\.\d+"\(', ir_text)
+    assert re.search(r'call i64 @"rw_user_apply"\(i64 \(i64\)\* @"rw_user_inc"', ir_text)

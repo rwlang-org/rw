@@ -1,0 +1,5 @@
+def inc(x: int) -> int:
+    return x + 1
+
+def twice(x: int) -> int:
+    return x * 2
