@@ -2,9 +2,11 @@
  * Generic fd I/O: read/write/close work on any file descriptor
  * (sockets, files, pipes). See docs/specs/15-file-io.md.
  *
- * The EAGAIN+park path handles nonblocking sockets (park on the
- * netpoller until ready); regular files never return EAGAIN on read(2)
- * so they fall through to a synchronous read. No fd-type branching.
+ * Sockets are nonblocking and use the EAGAIN+park path (park on the
+ * netpoller until ready). Every other fd — regular files (spec 16), and
+ * pipes, terminals, and other character devices (spec 25) — would block
+ * read(2)/write(2) in the kernel and pin the worker M, so it is offloaded
+ * to the aio thread pool while the fiber parks.
  */
 
 #include "io.h"
@@ -22,14 +24,19 @@
 
 #include "aio.h"
 
+/* True for fds whose read/write may block in the kernel: anything that is
+ * not a socket. Sockets accepted by rw are nonblocking (tcp.c). */
+static int needs_offload(int64_t fd) {
+    struct stat st;
+    return fstat((int)fd, &st) == 0 && !S_ISSOCK(st.st_mode);
+}
+
 void rw_read(rw_str *out, int64_t fd, int64_t max) {
     if (max <= 0) { out->len = 0; out->ptr = NULL; return; }
 
-    /* Regular files block on read(2) (no EAGAIN), pinning the worker M.
-     * Offload them to the aio thread pool so the fiber parks instead.
-     * Sockets keep the nonblocking + netpoller path below. */
-    struct stat st;
-    if (fstat((int)fd, &st) == 0 && S_ISREG(st.st_mode)) {
+    /* Blocking fds go to the aio pool so the fiber parks instead of
+     * pinning the worker. Sockets keep the netpoller path below. */
+    if (needs_offload(fd)) {
         rw_aio_read(out, fd, max);
         return;
     }
@@ -54,8 +61,7 @@ void rw_read(rw_str *out, int64_t fd, int64_t max) {
 int64_t rw_write(int64_t fd, rw_str b) {
     if (b.len <= 0) return 0;
 
-    struct stat st;
-    if (fstat((int)fd, &st) == 0 && S_ISREG(st.st_mode)) {
+    if (needs_offload(fd)) {
         return rw_aio_write(fd, b);
     }
 

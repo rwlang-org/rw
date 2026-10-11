@@ -1,0 +1,17 @@
+# Reading stdin must not hold a worker: on a single worker (RW_WORKERS=1),
+# `ticker` still runs while `reader` waits for input. Both use `write` on
+# fd 1 directly, so output is not held back by stdio buffering.
+def reader() -> int:
+    b: Bytes = read(0, 1024)
+    write(1, bytes_from_str("read: " + str_from_bytes(b)))
+    return len(b)
+
+def ticker() -> int:
+    write(1, bytes_from_str("tick\n"))
+    return 0
+
+def main() -> int:
+    r: Future[int] = spawn reader()
+    t: Future[int] = spawn ticker()
+    await t
+    return await r
