@@ -106,6 +106,15 @@ class IRGen:
             m, ir.FunctionType(I8, [RW_STR_TY, RW_STR_TY]), "rw_str_eq")
         self._rw_str_concat = ir.Function(
             m, ir.FunctionType(RW_STR_TY, [RW_STR_TY, RW_STR_TY]), "rw_str_concat")
+        # string search / conversion (spec 18)
+        self._rw_str_find = ir.Function(
+            m, ir.FunctionType(I64, [RW_STR_TY, RW_STR_TY]), "rw_str_find")
+        self._rw_str_slice = ir.Function(
+            m, ir.FunctionType(RW_STR_TY, [RW_STR_TY, I64, I64]), "rw_str_slice")
+        self._rw_str_starts_with = ir.Function(
+            m, ir.FunctionType(I8, [RW_STR_TY, RW_STR_TY]), "rw_str_starts_with")
+        self._rw_str_from_int = ir.Function(
+            m, ir.FunctionType(RW_STR_TY, [I64]), "rw_str_from_int")
         # List[int] ops — pointer-out ABI (see runtime.h for the
         # rationale: 24-byte struct is past arm64's "return in regs"
         # threshold, so we go through stack-allocated buffers).
@@ -126,6 +135,8 @@ class IRGen:
             m, ir.FunctionType(ir.VoidType(),
                                [option_ptr, list_ptr, I64]),
             "rw_list_int_at_opt")
+        self._rw_str_to_int = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [option_ptr, RW_STR_TY]), "rw_str_to_int")
         # TCP open ops (runtime/net/tcp.c)
         self._rw_tcp_listen = ir.Function(
             m, ir.FunctionType(I64, [I64]), "rw_tcp_listen")
@@ -624,6 +635,20 @@ class IRGen:
             # Both are noops at the IR level: the value carries the
             # same {len, ptr} layout, only the sema type changes.
             return self._emit_expr(call.args[0], ctx)
+        if call.callee in ("str_find", "str_slice", "str_starts_with", "str_from_int"):
+            fn = {
+                "str_find": self._rw_str_find,
+                "str_slice": self._rw_str_slice,
+                "str_starts_with": self._rw_str_starts_with,
+                "str_from_int": self._rw_str_from_int,
+            }[call.callee]
+            args = [self._emit_expr(a, ctx) for a in call.args]
+            return ctx.builder.call(fn, args)
+        if call.callee == "str_to_int":
+            sv = self._emit_expr(call.args[0], ctx)
+            out_slot = ctx.builder.alloca(RW_OPTION_INT_TY)
+            ctx.builder.call(self._rw_str_to_int, [out_slot, sv])
+            return ctx.builder.load(out_slot)
         if call.callee == "list_new":
             # rw_list_int_new(rw_list_int *out) writes to a stack slot;
             # we then load the value back out as a SSA struct.
