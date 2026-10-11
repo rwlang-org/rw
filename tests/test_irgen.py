@@ -302,3 +302,27 @@ def test_conversions_and_string_ordering_ir():
     assert "sitofp" in ir_text and "fptosi" in ir_text
     assert re.search(r'call .*@"rw_str_from_float"\(', ir_text)
     assert re.search(r'call i64 @"rw_str_cmp"\(', ir_text)
+
+
+def test_allocas_are_all_in_the_entry_block():
+    # An alloca inside a loop allocates on every iteration; fiber stacks are
+    # small, so every local and temporary must be allocated once, at entry.
+    ir_text = ir_for(
+        "def work(n: int) -> int:\n"
+        "    t: int = 0\n"
+        "    while t < n:\n"
+        '        s: string = "a"\n'
+        "        o: Option[int] = str_to_int(s)\n"
+        "        l: List[int] = list_push(list_new(), len(s))\n"
+        "        t = t + list_at(l, 0)\n"
+        "    return t\n\n"
+        "def main() -> int:\n    return work(3)\n"
+    )
+    body = ir_text.split('define i64 @"rw_user_work"', 1)[1].split("\n}\n", 1)[0]
+    # blocks[0] is the signature line; blocks[1] is the entry block.
+    blocks = re.split(r"\n(?=[\w.\"]+:)", body)
+    entry, rest = blocks[1], blocks[2:]
+    assert entry.startswith("entry:")
+    assert "alloca" in entry
+    for blk in rest:
+        assert "alloca" not in blk, blk
