@@ -1,0 +1,46 @@
+def show_int(s: string) -> int:
+    match str_to_int(s):
+        case Some(n):
+            print(n)
+        case None:
+            print("none")
+    return 0
+
+def main() -> int:
+    line: string = "GET /hello HTTP/1.1"
+    print(str_find(line, " "))
+    print(str_find(line, "HTTP"))
+    print(str_find(line, "POST"))
+    print(str_find(line, ""))
+
+    sp: int = str_find(line, " ")
+    rest: string = str_slice(line, sp + 1, len(line))
+    print(str_slice(rest, 0, str_find(rest, " ")))
+    print(str_slice(line, -5, 3))
+    print(len(str_slice(line, 10, 2)))
+    print(len(str_slice(line, 0, str_find(line, "POST"))))
+    print(str_slice(line, 15, 100))
+
+    if str_starts_with(line, "GET "):
+        print("starts GET")
+    if not str_starts_with(line, "POST"):
+        print("not POST")
+    if str_starts_with(line, ""):
+        print("empty prefix")
+
+    print(str_from_int(0))
+    print(str_from_int(-42))
+    print("Content-Length: " + str_from_int(1234))
+
+    show_int("12")
+    show_int("-7")
+    show_int("0")
+    show_int("9223372036854775807")
+    show_int("-9223372036854775808")
+    show_int("9223372036854775808")
+    show_int("")
+    show_int("-")
+    show_int(" 1")
+    show_int("+1")
+    show_int("12a")
+    return 0

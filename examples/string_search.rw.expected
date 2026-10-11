@@ -1,0 +1,26 @@
+3
+11
+-1
+0
+/hello
+GET
+0
+0
+/1.1
+starts GET
+not POST
+empty prefix
+0
+-42
+Content-Length: 1234
+12
+-7
+0
+9223372036854775807
+-9223372036854775808
+none
+none
+none
+none
+none
+none

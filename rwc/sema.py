@@ -747,7 +747,7 @@ class Sema:
                     self.filename, call.line, call.col, len(call.callee),
                     f"{call.callee} takes {len(params)} {noun}, got {len(call.args)}",
                 ))
-            for i, (arg, want) in enumerate(zip(call.args, params), start=1):
+            for i, (arg, want) in enumerate(zip(call.args, params, strict=True), start=1):
                 at = self._check_expr(fn, arg, locals_)
                 if at is not want:
                     raise CompileError(Diagnostic(
