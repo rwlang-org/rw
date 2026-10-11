@@ -1,0 +1,65 @@
+class Request:
+    method: string
+    path: string
+
+class Response:
+    status: int
+    req: Request
+    body: string
+    tags: List[int]
+    retry: Option[int]
+
+def handle(req: Request) -> Response:
+    status: int = 200 if req.method == "GET" else 405
+    return Response(status, req, "hello " + req.path, list_new(), None)
+
+def body_len(res: Response) -> int:
+    return len(res.body)
+
+def touch(res: Response) -> int:
+    # Records are references: this write is visible to the caller.
+    res.body = res.body + "!"
+    res.tags = list_push(res.tags, len(res.tags))
+    return 0
+
+def main() -> int:
+    req: Request = Request("GET", "/x")
+    res: Response = handle(req)
+    print(res.status)
+    print(res.body)
+    print(res.req.path)
+
+    # Aliasing: both names refer to the same record.
+    alias: Response = res
+    alias.status = 201
+    print(res.status)
+
+    touch(res)
+    touch(alias)
+    print(res.body)
+    print(len(res.tags))
+    print(list_at(res.tags, 1))
+
+    # Writing through a nested record.
+    res.req.path = "/y"
+    print(req.path)
+
+    match res.retry:
+        case Some(n):
+            print(n)
+        case None:
+            print("no retry")
+    res.retry = Some(3)
+    match res.retry:
+        case Some(n):
+            print(n)
+        case None:
+            print("no retry")
+
+    # Records cross a spawn boundary as a single pointer.
+    f: Future[int] = spawn body_len(res)
+    print(await f)
+
+    post: Response = handle(Request("POST", "/z"))
+    print(post.status)
+    return 0

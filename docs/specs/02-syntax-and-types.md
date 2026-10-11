@@ -113,8 +113,9 @@ def return if elif else while and or not true false void
 spawn await Future
 int float bool string
 import from as  # module imports, see 17-namespaced-imports.md
+class           # records, see 20-records.md
 # Reserved for future use (syntax error in the MVP):
-extern class for in None
+extern for in None
 ```
 
 ## Notes on lexical structure
