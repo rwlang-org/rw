@@ -57,6 +57,9 @@ def llvm_type_of(t: T.Type) -> ir.Type:
         return I8P  # opaque pointer
     if isinstance(t, T.ClassType):
         return I8P  # pointer to a heap record (spec 20)
+    if isinstance(t, T.FunctionType):
+        # Pointer to the function's own LLVM type (spec 21).
+        return ir.FunctionType(llvm_type_of(t.ret), [llvm_type_of(p) for p in t.params]).as_pointer()
     raise RuntimeError(f"no LLVM mapping for type {t}")
 
 
@@ -458,6 +461,11 @@ class IRGen:
 
     def _emit_expr(self, expr: A.Expr, ctx: "FunctionCtx") -> ir.Value:
         b = ctx.builder
+        ref = self.sema.func_refs.get(id(expr))
+        if ref is not None:
+            # A function used as a value (a Name or `mod.f`): the function
+            # symbol is its pointer (spec 21).
+            return self.funcs[ref]
         if isinstance(expr, A.FieldAccess):
             obj_ty = self.sema.expr_types[id(expr.obj)]
             assert isinstance(obj_ty, T.ClassType)
@@ -470,6 +478,9 @@ class IRGen:
             return ir.Constant(I8, 1 if expr.value else 0)
         if isinstance(expr, A.StringLit):
             return self._emit_string_literal(expr.value, b)
+        if isinstance(expr, A.CallValue):
+            callee = self._emit_expr(expr.callee, ctx)
+            return b.call(callee, [self._emit_expr(a, ctx) for a in expr.args])
         if isinstance(expr, A.Name):
             slot = ctx.locals[expr.name]
             return b.load(slot)
@@ -645,6 +656,16 @@ class IRGen:
         raise RuntimeError(f"unknown binop {op}")
 
     def _emit_call(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
+        b = ctx.builder
+        if id(call) in self.sema.local_fn_calls:
+            callee = b.load(ctx.locals[call.callee])
+            return b.call(callee, [self._emit_expr(a, ctx) for a in call.args])
+        rec_cls = self.sema.field_fn_calls.get(id(call))
+        if rec_cls is not None:
+            assert call.module is not None
+            obj = b.load(ctx.locals[call.module])
+            callee = b.load(self._field_ptr(obj, rec_cls, call.callee, b))
+            return b.call(callee, [self._emit_expr(a, ctx) for a in call.args])
         cls = self.sema.constructor_calls.get(id(call))
         if cls is not None:
             return self._emit_constructor(call, cls, ctx)

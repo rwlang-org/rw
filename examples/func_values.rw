@@ -1,0 +1,68 @@
+import func_values_lib as lib
+from func_values_lib import twice
+
+class Request:
+    path: string
+
+class Response:
+    status: int
+    body: string
+
+class Route:
+    path: string
+    handler: Callable[[Request], Response]
+
+def index(req: Request) -> Response:
+    return Response(200, "index")
+
+def hello(req: Request) -> Response:
+    return Response(200, "hello " + req.path)
+
+def not_found(req: Request) -> Response:
+    return Response(404, "not found")
+
+def pick(found: bool) -> Callable[[Request], Response]:
+    return index if found else not_found
+
+def dispatch(routes: Route, fallback: Callable[[Request], Response], req: Request) -> Response:
+    if req.path == routes.path:
+        return routes.handler(req)
+    return fallback(req)
+
+def apply(f: Callable[[int], int], x: int) -> int:
+    return f(x)
+
+def log(msg: string) -> void:
+    print("log: " + msg)
+
+def run(cb: Callable[[string], void]) -> int:
+    cb("called back")
+    return 0
+
+def main() -> int:
+    r: Route = Route("/hello", hello)
+    res: Response = dispatch(r, not_found, Request("/hello"))
+    print(str_from_int(res.status) + " " + res.body)
+    res = dispatch(r, not_found, Request("/other"))
+    print(str_from_int(res.status) + " " + res.body)
+
+    # Swap the handler stored in the record.
+    r.handler = index
+    print(r.handler(Request("/hello")).body)
+
+    # Function values returned from functions, and called immediately.
+    print(pick(true)(Request("/")).body)
+    print(pick(false)(Request("/")).status)
+
+    # Imported functions as values, both qualified and `from`-imported.
+    print(apply(lib.inc, 1))
+    print(apply(twice, 21))
+    h: Callable[[int], int] = lib.twice
+    print(h(5))
+
+    run(log)
+
+    # A function value crosses a spawn boundary as an argument.
+    f: Future[int] = spawn apply(twice, 4)
+    print(await f)
+    return 0
