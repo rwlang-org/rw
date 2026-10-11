@@ -326,3 +326,17 @@ def test_allocas_are_all_in_the_entry_block():
     assert "alloca" in entry
     for blk in rest:
         assert "alloca" not in blk, blk
+
+
+def test_list_syntax_lowering():
+    ir_text = ir_for(
+        "def main() -> int:\n"
+        '    xs: List[string] = ["a", "b"]\n'
+        "    t: int = 0\n"
+        "    for x in xs[1:]:\n"
+        "        t += len(x)\n"
+        '    return t + len(xs[-1]) + len("hey"[0])\n'
+    )
+    for sym in ("rw_list_push", "rw_list_slice", "rw_list_at", "rw_str_index"):
+        assert re.search(rf'call .*@"{sym}"\(', ir_text), sym
+    assert "for.update" in ir_text

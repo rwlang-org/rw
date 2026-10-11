@@ -54,6 +54,9 @@ class SemaResult:
     func_refs: Dict[int, FuncKey] = field(default_factory=dict)
     local_fn_calls: set[int] = field(default_factory=set)
     field_fn_calls: Dict[int, T.ClassType] = field(default_factory=dict)
+    # id(ForEach) -> type of its loop variable (spec 29). Kept per loop, not
+    # per name, because sibling loops may reuse a name with another type.
+    foreach_types: Dict[int, T.Type] = field(default_factory=dict)
 
 
 # Names of builtin functions. Spawning a builtin is an error, and a qualified
@@ -553,6 +556,30 @@ class Sema:
             self._check_block(fn, stmt.update, dict(locals_), ret_ty)
             return False  # while bodies don't guarantee return
 
+        if isinstance(stmt, A.ForEach):
+            it_ty = self._check_expr(fn, stmt.iterable, locals_)
+            if isinstance(it_ty, T.ListType):
+                elem: T.Type = it_ty.elem
+            elif it_ty is T.STRING:
+                elem = T.STRING
+            else:
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, 3,
+                    f"cannot iterate over `{it_ty}`",
+                ))
+            if stmt.var in locals_:
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, 3,
+                    f"variable `{stmt.var}` already declared",
+                ))
+            self.result.foreach_types[id(stmt)] = elem
+            body_locals = dict(locals_)
+            body_locals[stmt.var] = elem
+            self._loop_depth += 1
+            self._check_block(fn, stmt.body, body_locals, ret_ty)
+            self._loop_depth -= 1
+            return False
+
         if isinstance(stmt, A.Break):
             if self._loop_depth == 0:
                 raise CompileError(Diagnostic(
@@ -646,7 +673,7 @@ class Sema:
     def _hint_list_new(self, expr: A.Expr, expected: T.ListType, locals_: Dict[str, T.Type]) -> None:
         """Record the list type a `list_new()` should take, following the list
         argument of nested `list_push` calls."""
-        if self._is_builtin_call(expr, "list_new", locals_):
+        if self._is_builtin_call(expr, "list_new", locals_) or isinstance(expr, A.ListLit):
             self._list_new_hints[id(expr)] = expected
         elif self._is_builtin_call(expr, "list_push", locals_):
             assert isinstance(expr, A.Call)
@@ -798,6 +825,45 @@ class Sema:
                 ))
             self.result.func_refs[id(expr)] = key
             return self._func_value_type(key)
+        if isinstance(expr, A.ListLit):
+            hint = self._list_new_hints.get(id(expr))
+            if not expr.elems:
+                return hint or T.LIST_INT
+            elem_hint: Optional[T.Type] = hint.elem if hint else None
+            first = (
+                self._check_expr_expect(fn, expr.elems[0], locals_, elem_hint)
+                if elem_hint else self._check_expr(fn, expr.elems[0], locals_)
+            )
+            if first is T.VOID:
+                raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
+                                              "list elements cannot be void"))
+            for i, e in enumerate(expr.elems[1:], start=2):
+                et = self._check_expr_expect(fn, e, locals_, first)
+                if et != first:
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 1,
+                        f"list element {i} must be {first}, found `{et}`",
+                    ))
+            return T.list_of(first)
+        if isinstance(expr, A.Index):
+            obj_ty = self._check_expr(fn, expr.obj, locals_)
+            if not (isinstance(obj_ty, T.ListType) or obj_ty is T.STRING):
+                raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
+                                              f"cannot index `{obj_ty}`"))
+            if self._check_expr(fn, expr.index, locals_) is not T.INT:
+                raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
+                                              "index must be int"))
+            return obj_ty.elem if isinstance(obj_ty, T.ListType) else T.STRING
+        if isinstance(expr, A.Slice):
+            obj_ty = self._check_expr(fn, expr.obj, locals_)
+            if not (isinstance(obj_ty, T.ListType) or obj_ty is T.STRING):
+                raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
+                                              f"cannot slice `{obj_ty}`"))
+            for bound in (expr.start, expr.stop):
+                if bound is not None and self._check_expr(fn, bound, locals_) is not T.INT:
+                    raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
+                                                  "slice bounds must be int"))
+            return obj_ty
         if isinstance(expr, A.CallValue):
             callee_ty = self._check_expr(fn, expr.callee, locals_)
             return self._check_fn_value_call(fn, callee_ty, expr.args, "function value",

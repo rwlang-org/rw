@@ -1895,3 +1895,41 @@ def test_string_builtins_ok():
 def test_string_builtin_errors(expr, msg):
     e = err(f"def main() -> int:\n    print(len({expr}))\n    return 0\n")
     assert msg in e.diagnostic.message
+
+
+# ----- list syntax (spec 29) -----
+
+def test_list_syntax_ok():
+    check(
+        "class P:\n    name: string\n\n"
+        "def main() -> int:\n"
+        '    names: List[string] = ["a", "b"]\n'
+        "    empty: List[string] = []\n"
+        "    grid: List[List[int]] = [[], [1, 2]]\n"
+        '    ps: List[P] = [P("x")]\n'
+        "    n: int = len(names[1:]) + len(names[:-1]) + grid[1][0]\n"
+        '    s: string = names[0] + names[-1] + "word"[1:3] + "word"[0] + ps[0].name\n'
+        "    for name in names:\n"
+        "        print(name)\n"
+        '    for ch in "abc":\n'
+        "        print(ch)\n"
+        "    for p in ps:\n"
+        "        print(p.name)\n"
+        "    return n\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ('    xs: List[int] = [1, "a"]\n', "list element 2 must be int"),
+        ("    n: int = 5\n    print(n[0])\n", "cannot index `int`"),
+        ('    xs: List[int] = [1]\n    print(xs["a"])\n', "index must be int"),
+        ("    xs: List[int] = [1]\n    print(xs[0:\"a\"])\n", "slice bounds must be int"),
+        ("    n: int = 5\n    for x in n:\n        print(x)\n", "cannot iterate over `int`"),
+        ("    xs: List[int] = [1]\n    x: int = 0\n    for x in xs:\n        print(x)\n", "already declared"),
+    ],
+)
+def test_list_syntax_errors(body, msg):
+    e = err("def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message
