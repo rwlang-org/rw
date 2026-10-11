@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.0.9](https://github.com/rwlang-org/rw/compare/v0.0.8...v0.0.9) - 2026-10-11
+- feat: preempt long-running fibers at safe points by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/155
+- fix(runtime): make parked fibers wakeable only after their context is saved by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/157
+- feat(runtime): offload blocking fds (stdin, pipes) to the aio pool by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/158
+
 ## [v0.0.8](https://github.com/rwlang-org/rw/compare/v0.0.7...v0.0.8) - 2026-10-11
 - feat: string search and conversion builtins + HTTP hello server by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/147
 - fix(runtime): detach fire-and-forget fibers and free handles safely by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/149
