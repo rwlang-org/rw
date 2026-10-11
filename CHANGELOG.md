@@ -1,5 +1,14 @@
 # Changelog
 
+## [v0.0.8](https://github.com/rwlang-org/rw/compare/v0.0.7...v0.0.8) - 2026-10-11
+- feat: string search and conversion builtins + HTTP hello server by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/147
+- fix(runtime): detach fire-and-forget fibers and free handles safely by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/149
+- feat: records (class with fields) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/150
+- feat: import records from other modules by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/151
+- feat: function values (Callable[[...], R]) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/152
+- feat: List[T] for any element type by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/153
+- feat: a web application framework written in rw by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/154
+
 ## [v0.0.7](https://github.com/rwlang-org/rw/compare/v0.0.6...v0.0.7) - 2026-10-11
 - ci: bump actions/checkout from 4.2.2 to 7.0.1 by @dependabot[bot] in https://github.com/rwlang-org/rw/pull/140
 - ci: bump astral-sh/setup-uv from 6.1.0 to 10.1.0 by @dependabot[bot] in https://github.com/rwlang-org/rw/pull/143
