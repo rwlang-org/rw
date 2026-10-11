@@ -101,6 +101,10 @@ class Sema:
         # Record types per module (spec 20); `class_map` is the current one.
         self._classes_by_module: Dict[Optional[str], Dict[str, T.ClassType]] = {}
         self.class_map: Dict[str, T.ClassType] = {}
+        # Import qualifier -> real module, per module; `_import_env` is the
+        # current one. Built before any type is resolved so `mod.Class`
+        # type names work in signatures and fields.
+        self._import_envs: Dict[Optional[str], Dict[str, str]] = {}
         # The module currently being collected/checked. None = entry (root).
         self.current_module: Optional[str] = None
         # Qualifiers visible to the current module via `import`/`import as`:
@@ -120,12 +124,15 @@ class Sema:
         self.current_module = mod_name
         self.type_alias_map = self._aliases_by_module.setdefault(mod_name, {})
         self.class_map = self._classes_by_module.setdefault(mod_name, {})
+        self._import_env = self._import_envs.get(mod_name, {})
         if mod_name is None:
             self.filename = self._root_filename
         else:
             self.filename = self.program.paths.get(mod_name, self._root_filename)
 
     def _resolve_type(self, ty: A.TypeExpr) -> T.Type:
+        if isinstance(ty, A.TypeName) and ty.module is not None:
+            return self._qualified_class(ty.module, ty.name, ty.line, ty.col)
         if isinstance(ty, A.TypeName):
             if ty.name in _BUILTIN_TYPES:
                 return _BUILTIN_TYPES[ty.name]
@@ -168,6 +175,12 @@ class Sema:
                         f"class name `{cdef.name}` collides with a builtin",
                     ))
                 self.class_map[cdef.name] = T.ClassType(cdef.name, mod_name)
+
+        # Import qualifiers, and classes brought in by `from x import C`.
+        for mod_name, mod in self._all_modules:
+            self._enter_module(mod_name)
+            self._import_envs[mod_name] = self._build_import_env(mod)
+            self._bind_imported_classes(mod)
 
         for mod_name, mod in self._all_modules:
             self._enter_module(mod_name)
@@ -263,13 +276,47 @@ class Sema:
         # `current_module` / visible imports / from-bindings are scoped correctly.
         for mod_name, mod in self._all_modules:
             self._enter_module(mod_name)
-            self._import_env = self._build_import_env(mod)
             self._from_env = self._build_from_env(mod_name, mod)
             for fn in mod.functions:
                 self._check_func(fn)
 
         self._enter_module(None)
         return self.result
+
+    def _qualified_class(self, qualifier: str, name: str, line: int, col: int) -> T.ClassType:
+        """Resolve `qualifier.Name` to a class of an imported module."""
+        if qualifier not in self._import_env:
+            raise CompileError(Diagnostic(
+                self.filename, line, col, len(qualifier),
+                f"module '{qualifier}' is not imported here",
+            ))
+        real = self._import_env[qualifier]
+        cls = self._classes_by_module.get(real, {}).get(name)
+        if cls is None:
+            raise CompileError(Diagnostic(
+                self.filename, line, col, len(qualifier) + 1 + len(name),
+                f"module '{qualifier}' has no class `{name}`",
+            ))
+        return cls
+
+    def _bind_imported_classes(self, mod: A.Module) -> None:
+        """`from x import C [as D]` where C is a class of x: make it visible in
+        the current module's class table under its local name (spec 20)."""
+        local_funcs = {fn.name for fn in mod.functions}
+        for imp in mod.imports:
+            if imp.names is None:
+                continue
+            src_classes = self._classes_by_module.get(imp.module, {})
+            for src_name, alias in imp.names:
+                if src_name not in src_classes:
+                    continue  # a function import; handled by _build_from_env
+                local = alias or src_name
+                if local in self.class_map or local in local_funcs:
+                    raise CompileError(Diagnostic(
+                        self.filename, imp.line, imp.col, max(1, len(local)),
+                        f"imported name `{local}` collides with a local function or class",
+                    ))
+                self.class_map[local] = src_classes[src_name]
 
     def _build_import_env(self, mod: A.Module) -> Dict[str, str]:
         """Resolve module qualifiers for one module: visible name -> real
@@ -299,11 +346,13 @@ class Sema:
                 continue  # plain `import x` / `import x as m`
             for src_name, alias in imp.names:
                 local = alias or src_name
+                if src_name in self._classes_by_module.get(imp.module, {}):
+                    continue  # a class import; bound by _bind_imported_classes
                 src_key: FuncKey = (imp.module, src_name)
                 if src_key not in self.result.functions:
                     raise CompileError(Diagnostic(
                         self.filename, imp.line, imp.col, max(1, len(src_name)),
-                        f"module '{imp.module}' has no function `{src_name}`",
+                        f"module '{imp.module}' has no function or class `{src_name}`",
                     ))
                 if local in _BUILTIN_FUNCS:
                     raise CompileError(Diagnostic(
@@ -756,9 +805,13 @@ class Sema:
         # Qualified calls (`mod.func`) are always user functions; skip the
         # builtin dispatch entirely. See spec 17.
         if call.module is not None:
+            real = self._import_env.get(call.module)
+            qcls = self._classes_by_module.get(real, {}).get(call.callee) if real else None
+            if qcls is not None:
+                return self._check_constructor(fn, call, locals_, qcls)
             return self._check_user_call(fn, call, locals_)
         if call.callee in self.class_map:
-            return self._check_constructor(fn, call, locals_)
+            return self._check_constructor(fn, call, locals_, self.class_map[call.callee])
         # Builtin: print accepts any printable.
         if call.callee == "print":
             if len(call.args) != 1:
@@ -1038,10 +1091,9 @@ class Sema:
         return self._check_user_call(fn, call, locals_)
 
     def _check_constructor(
-        self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]
+        self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type], cls: T.ClassType
     ) -> T.Type:
         """`ClassName(args...)`: one positional argument per field (spec 20)."""
-        cls = self.class_map[call.callee]
         if len(call.args) != len(cls.fields):
             raise CompileError(Diagnostic(
                 self.filename, call.line, call.col, len(call.callee),

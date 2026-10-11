@@ -1,0 +1,13 @@
+class Request:
+    method: string
+    path: string
+
+class Response:
+    status: int
+    body: string
+
+def ok(body: string) -> Response:
+    return Response(200, body)
+
+def not_found(req: Request) -> Response:
+    return Response(404, "not found: " + req.path)
