@@ -38,7 +38,16 @@ class TypeCallable:
     col: int
 
 
-TypeExpr = Union[TypeName, TypeFuture, TypeCallable]
+@dataclass
+class TypeList:
+    """`List[T]` for a non-int element type (spec 22). `List[int]` stays a
+    `TypeName("List[int]")`."""
+    elem: "TypeExpr"
+    line: int
+    col: int
+
+
+TypeExpr = Union[TypeName, TypeFuture, TypeCallable, TypeList]
 
 
 # ----- Expressions -----

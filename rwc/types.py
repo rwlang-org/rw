@@ -33,7 +33,6 @@ BOOL = _Primitive("bool")
 STRING = _Primitive("string")
 VOID = _Primitive("void")
 BYTES = _Primitive("Bytes")
-LIST_INT = _Primitive("List[int]")
 OPTION_INT = _Primitive("Option[int]")
 RESULT_INT_INT = _Primitive("Result[int, int]")
 
@@ -82,6 +81,22 @@ class FunctionType(Type):
         self.params = params
         self.ret = ret
         self.name = f"Callable[[{', '.join(str(p) for p in params)}], {ret}]"
+
+
+class ListType(Type):
+    """`List[T]` (spec 22). Compared structurally; use `list_of` so that
+    `List[int]` is always the canonical `LIST_INT` object."""
+
+    def __init__(self, elem: Type) -> None:
+        self.elem = elem
+        self.name = f"List[{elem}]"
+
+
+LIST_INT = ListType(INT)
+
+
+def list_of(elem: Type) -> ListType:
+    return LIST_INT if elem is INT else ListType(elem)
 
 
 def is_numeric(t: Type) -> bool:

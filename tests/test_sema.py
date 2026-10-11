@@ -397,20 +397,6 @@ def test_list_int_type_annotation_parses():
     assert res.functions[(None, "takes_list")].params[0][1] is T.LIST_INT
 
 
-def test_list_with_non_int_param_is_parser_error():
-    # only List[int] supported.
-    import pytest
-    from rwc.lexer import tokenize
-    from rwc.parser import parse, ParserError
-    src = (
-        "def f(l: List[string]) -> int:\n"
-        "    return 0\n"
-        "def main() -> int:\n"
-        "    return 0\n"
-    )
-    with pytest.raises(ParserError) as ei:
-        parse(tokenize(src))
-    assert "List[int]" in str(ei.value) or "only List" in str(ei.value)
 
 
 # ---- List[int] builtin positive cases ----
@@ -1813,3 +1799,44 @@ def test_function_value_from_other_module(tmp_path):
         "    return f(1) + g(2)\n",
         lib="def inc(x: int) -> int:\n    return x + 1\n\ndef twice(x: int) -> int:\n    return x * 2\n",
     )
+
+
+# ----- List[T] (spec 22) -----
+
+def test_generic_list_ok():
+    check(
+        "class Route:\n    path: string\n    tags: List[string]\n\n"
+        "def names() -> List[string]:\n    return list_new()\n\n"
+        "def first(xs: List[Route]) -> Route:\n    return list_at(xs, 0)\n\n"
+        "def main() -> int:\n"
+        "    s: List[string] = list_new()\n"
+        '    s = list_push(s, "a")\n'
+        "    print(list_at(s, 0))\n"
+        "    rs: List[Route] = list_new()\n"
+        '    rs = list_push(rs, Route("/", list_new()))\n'
+        '    first(rs).tags = list_push(first(rs).tags, "x")\n'
+        "    nested: List[List[string]] = list_new()\n"
+        "    nested = list_push(nested, list_new())\n"
+        "    n: int = len(s) + len(rs) + len(list_at(nested, 0)) + len(names())\n"
+        "    ints: List[int] = list_new()\n"
+        "    legacy: int = len(list_push(list_new(), 1))\n"
+        "    return n + legacy\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ('    s: List[string] = list_new()\n    s = list_push(s, 1)\n',
+         "list_push second argument must be string"),
+        ("    s: List[string] = list_new()\n    n: int = list_at(s, 0)\n", "type mismatch"),
+        ("    s: List[string] = list_new()\n    i: List[int] = s\n", "type mismatch"),
+        ("    s: List[string] = list_new()\n    print(s == s)\n", "cannot compare"),
+        ("    s: List[string] = list_new()\n    o: Option[int] = list_at_opt(s, 0)\n",
+         "list_at_opt first argument must be List[int]"),
+        ("    v: List[void] = list_new()\n", "List element type cannot be void"),
+    ],
+)
+def test_generic_list_errors(body, msg):
+    e = err("def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message
