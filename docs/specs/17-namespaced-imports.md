@@ -1,89 +1,95 @@
-# rw 名前空間付き import (Python 風)
+# rw namespaced imports (Python style)
 
 ## Context
 
-ここまでの rw は **単一 `.rw` ファイル** しかコンパイルできない。`lexer.py` に
-`KW_IMPORT` が予約語として存在するだけで、parser 以降は完全に未処理だった。
-コードが育つにつれ「共通関数を別ファイルに切り出して使い回したい」= パッケージ
-管理の最初の一歩が必要になった。
+Until now rw could only compile a **single `.rw` file**. `lexer.py` had
+`KW_IMPORT` as a reserved word, but nothing past the lexer handled it. As code
+grows we want to "split shared functions into another file and reuse them" —
+the first step toward package management.
 
-目指すのは **Python と同じ書き味** の import:
+The goal is imports that **feel like Python**:
 
 ```rw
-import math_lib              # math_lib.add(...)  と修飾して呼ぶ
-from math_lib import add     # add(...)           と修飾なしで呼ぶ
-import math_lib as m         # m.add(...)         と別名で呼ぶ
+import math_lib              # call qualified:   math_lib.add(...)
+from math_lib import add     # call unqualified: add(...)
+import math_lib as m         # call via alias:   m.add(...)
 ```
 
-検索パスは **同一ディレクトリ相対のみ** (`import foo` → `<entry_dir>/foo.rw`)。
+The search path is **relative to the entry file's directory only**
+(`import foo` → `<entry_dir>/foo.rw`).
 
-これは `incremental-language-extensions` の鉄則「1 PR で触るコアレイヤーは 4 つ
-まで」を超える。3 形式すべてを名前空間付きで入れると lexer (`.` トークン) /
-parser (修飾呼び出し) / sema (名前空間テーブル) / irgen (シンボル規約) / 新規
-loader が同時に絡むためである。よって spec は本ファイル 1 本にまとめ、
-**独立 mergeable な 3 PR** に分割する。
+This exceeds the `incremental-language-extensions` rule of "touch at most 4
+core layers per PR": shipping all three forms with namespacing involves the
+lexer (`.` token), parser (qualified calls), sema (namespaced table), irgen
+(symbol convention), and a new loader at once. So the spec lives in this one
+file, and the work is split into **3 independently mergeable PRs**.
 
-- **PR1 (最重量・全インフラ)**: `import math_lib` + 修飾呼び出し `math_lib.add()`
-- **PR2**: `from math_lib import add` (選択取り込み・修飾なし呼び出し)
-- **PR3**: `import math_lib as m` (別名)
+- **PR1 (heaviest, all infrastructure)**: `import math_lib` + qualified call `math_lib.add()`
+- **PR2**: `from math_lib import add` (selective import, unqualified call)
+- **PR3**: `import math_lib as m` (alias)
 
-PR2 / PR3 は PR1 のローダと名前空間テーブルに乗るだけの薄い差分。
+PR2 / PR3 are thin diffs on top of PR1's loader and namespaced table.
 
 ## Goals
 
-- `import foo` でモジュール `foo.rw` (同一ディレクトリ) を取り込み、`foo.bar()`
-  と修飾して関数を呼べる (PR1)
-- `from foo import bar [as baz]` で選択シンボルを取り込み、修飾なしで `bar()` /
-  `baz()` と呼べる (PR2)
-- `import foo as f` で別名を付け `f.bar()` と呼べる (PR3)
-- import 文はモジュール冒頭 (最初の `def`/`type` より前) でのみ許可
-- 推移的 import を許す (import 先がさらに import)。循環は **検出してエラー**
-- import 先のモジュールに `main` を定義したらエラー (ライブラリに main は不要)
-- 別モジュールの同名関数が共存できる (フラット名前空間衝突を起こさない)
-- 既存の単一ファイルプログラム・既存テストはすべて無改変で緑
+- `import foo` loads module `foo.rw` (same directory) and functions can be
+  called qualified as `foo.bar()` (PR1)
+- `from foo import bar [as baz]` imports selected symbols, callable unqualified
+  as `bar()` / `baz()` (PR2)
+- `import foo as f` gives an alias, callable as `f.bar()` (PR3)
+- Import statements are only allowed at the top of a module (before the first
+  `def` / `type`)
+- Transitive imports are allowed (an imported module may import). Cycles are
+  **detected and reported as errors**
+- Defining `main` in an imported module is an error (libraries don't need main)
+- Same-named functions in different modules coexist (no flat-namespace clashes),
+  both in sema and in the emitted LLVM symbols
+- Diagnostics raised in an imported module name that module's file and line
+- All existing single-file programs and tests stay green without changes
 
 ## Non-Goals
 
-- パッケージ階層 (`import pkg.sub` のドット区切りモジュールパス)
-- 再エクスポート / ワイルドカード (`from foo import *`)
-- 可視性 / private (全 top-level 関数が import 可能)
-- 標準ライブラリ / `RW_PATH` 等の検索パス (同一ディレクトリ相対のみ)
-- 型エイリアスの import (PR1-3 は **関数のみ**。`type` は import 対象外)
-- import 文をブロック内 (関数本体) に書く
-- 循環 import の解決 (検出してエラーにするのみ)
-- import 先で発生したエラーの **正確な per-file 行番号** (統合後 sema は entry の
-  filename で診断する。既知の制限として記載)
+- Package hierarchies (dotted module paths like `import pkg.sub`)
+- Re-exports / wildcards (`from foo import *`)
+- Visibility / private (every top-level function is importable)
+- A standard library / search paths such as `RW_PATH` (same directory only)
+- Importing type aliases (PR1-3 import **functions only**; aliases are
+  module-local and never visible from another module)
+- Import statements inside blocks (function bodies)
+- Resolving import cycles (they are only detected and reported)
 
-## 設計
+## Design
 
-### 全体方針: ロード → マージせず統合 sema
+### Overall approach: load, don't merge, then a unified sema
 
-ローダが entry から import グラフをたどり、各モジュールを個別に
-tokenize/parse/desugar する。AST は **マージしない** (関数名の衝突を避け、
-モジュール境界を保つため)。代わりに sema が「モジュール名付き関数テーブル」を
-構築し、修飾呼び出しを `(module, name)` で解決する。
+The loader walks the import graph from the entry file and
+tokenizes/parses/desugars each module separately. ASTs are **not merged** (to
+avoid function-name clashes and keep module boundaries). Instead, sema builds a
+"module-qualified function table" and resolves qualified calls by
+`(module, name)`.
 
-### 修飾呼び出しの表現: `Call.module: Optional[str]`
+### Representing qualified calls: `Call.module: Optional[str]`
 
-`ast_nodes.Call` に `module: Optional[str] = None` を追加する。
+Add `module: Optional[str] = None` to `ast_nodes.Call`.
 
-- `add(2, 3)` → `Call(callee="add", module=None)` (従来どおり)
+- `add(2, 3)` → `Call(callee="add", module=None)` (unchanged)
 - `math_lib.add(2, 3)` → `Call(callee="add", module="math_lib")`
 
-デフォルト `None` なので既存の `A.Call(...)` 生成箇所は無改変。sema / irgen の
-巨大なビルトイン判定 (`call.callee == "print"` 等) は **`call.module is None` の
-ときだけ** 走らせる。member-access ノード化案は却下 (callee を式にすると数十の
-分岐が全壊するため)。rw に first-class 関数はなく `mod.func` は呼び出し位置に
-しか現れないので、これで足りる。
+Because the default is `None`, existing `A.Call(...)` construction sites need no
+changes. The large built-in checks in sema / irgen (`call.callee == "print"`,
+etc.) run **only when `call.module is None`**. Turning this into a
+member-access node was rejected (making the callee an expression would break
+dozens of branches). rw has no first-class functions, and `mod.func` only ever
+appears in call position, so this is sufficient.
 
-### import 文の AST: `Import`
+### Import statement AST: `Import`
 
 ```python
 @dataclass
 class Import:
     module: str                                       # "math_lib"
-    alias: Optional[str]                              # import x as m の m (PR3)
-    names: Optional[List[Tuple[str, Optional[str]]]]  # from x import y[,z as w] (PR2)
+    alias: Optional[str]                              # the m in `import x as m` (PR3)
+    names: Optional[List[Tuple[str, Optional[str]]]]  # from x import y[, z as w] (PR2)
     line: int
     col: int
 ```
@@ -93,124 +99,153 @@ class Import:
 - `from x import y` → `Import("x", None, [("y", None)])`
 - `from x import y as w` → `Import("x", None, [("y", "w")])`
 
-`Module` に `imports: List[Import] = field(default_factory=list)` を追加
-(デフォルト空なので既存生成は無改変)。
+Add `imports: List[Import] = field(default_factory=list)` to `Module` (empty by
+default, so existing construction is unchanged).
 
-### 関数テーブルの名前空間化: キーを `(Optional[str], str)`
+### Namespacing the function table: key is `(Optional[str], str)`
 
-`sema.SemaResult.functions` のキーを `str` から `Tuple[Optional[str], str]` に
-変える。ローカル関数は `(None, name)`、import 先は `(modname, name)`。
+Change the key of `sema.SemaResult.functions` from `str` to
+`Tuple[Optional[str], str]`. Local functions are `(None, name)`; imported ones
+are `(modname, name)`.
 
-- 重複検出は同一キーでのみ衝突 → 別モジュールの同名関数は自然に共存
-- `main` 直引きは `(None, "main")`。main 必須・無引数・int 戻りチェックは
-  **entry モジュールのみ** に適用
-- irgen の LLVM シンボルは `rw_user_<module>_<name>` (`module=None` は従来
-  `rw_user_<name>`) → シンボル衝突回避。`main` は常に `(None,"main")` で
-  `rw_user_main` のまま、C `@main` シム無改変
+- Duplicate detection only clashes on the same key → same-named functions in
+  different modules coexist naturally
+- `main` is looked up as `(None, "main")`. The "main is required, takes no
+  arguments, returns int" checks apply **to the entry module only**
+- irgen's LLVM symbol is `rw_user_<module>.<name>` (`module=None` keeps the
+  historical `rw_user_<name>`). `.` cannot appear in an rw identifier, so the
+  qualified form never collides with an entry function (`lib_add` vs
+  `lib.add`) or another module (`a_b.c` vs `a.b_c`). Spawn trampolines follow
+  the same rule (`rw_trampoline_<module>.<name>`). `main` is always
+  `(None, "main")` and stays `rw_user_main`, so the C `@main` shim is unchanged
 
-### 解決マップ: `SemaResult.call_resolution: Dict[int, Tuple[Optional[str], str]]`
+### Module-local scopes in sema
 
-`id(Call)` → 解決後の実体 `(module, name)`。`from`/`as` で呼び名が変わっても
-Call を変異させず irgen に実体を伝える。PR1 では修飾呼び出し/ローカル呼び出しを
-恒等的に埋める。PR2/PR3 がここに別名解決を流し込む。desugar は Call を再生成
-しない (`desugar.py` に Call 生成なし) ので `id` は sema 入力と irgen 入力で一致。
-既存の `expr_types`/`local_types` も同じ id 方式で実績あり。
+Sema checks one module at a time and switches three pieces of state together
+when it enters a module: the current module name (for resolving calls), that
+module's type-alias map, and that module's file name (used for every
+diagnostic). Consequently:
 
-### ローダ: `rwc/loader.py` (新規)
+- Type aliases are module-local: two modules may each declare `type Num`, and
+  a module cannot use an alias it did not declare
+- An error in an imported module's function body is reported against that
+  module's file, and the CLI renders the snippet from that file
+
+### Resolution map: `SemaResult.call_resolution: Dict[int, Tuple[Optional[str], str]]`
+
+Maps `id(Call)` → the resolved target `(module, name)`. Even when `from` / `as`
+change the name used at the call site, the Call is not mutated; the real
+target is passed to irgen through this map. In PR1 qualified and local calls
+map to themselves. PR2/PR3 feed alias resolution into it. desugar never
+recreates Call nodes (there is no Call construction in `desugar.py`), so the
+`id` matches between sema's input and irgen's input. The existing
+`expr_types` / `local_types` use the same id-based approach.
+
+### Loader: `rwc/loader.py` (new)
 
 ```python
 @dataclass
 class LoadedProgram:
-    root: A.Module                 # entry モジュール
-    modules: Dict[str, A.Module]   # import されたモジュール群 (name -> Module)
+    root: A.Module                 # the entry module
     root_name: str
+    modules: Dict[str, A.Module]   # imported modules (name -> Module)
+    sources: Dict[str, str]        # source text per module (root included)
+    paths: Dict[str, str]          # file path per module (root included)
 
 def load_program(root_source: str, root_filename: str) -> LoadedProgram: ...
 ```
 
-- entry を tokenize/parse/desugar
-- `imports` をたどり `Path(root_filename).parent / f"{name}.rw"` を読む。無ければ
-  「cannot find module 'foo' (looked for foo.rw)」エラー
-- import 先も tokenize/parse/desugar し、その `imports` を再帰的にたどる
-  (推移的 import)。visited 集合で **循環 import を検出 → CompileError**
-- import 先に `name == "main"` の関数があれば
-  「imported module must not define main」エラー
-- ロード済みモジュールは de-dup
+- Tokenize/parse/desugar the entry file
+- Follow `imports` and read `Path(root_filename).parent / f"{name}.rw"`. If it
+  is missing, error with "cannot find module 'foo' (looked for foo.rw)"
+- Tokenize/parse/desugar each imported module too, and follow its `imports`
+  recursively (transitive imports). A visited set **detects import cycles →
+  CompileError**
+- If an imported module has a function named `main`, error with "imported
+  module must not define main", pointing at that `main` in the imported file
+- Already-loaded modules are de-duplicated
 
-### driver 配線
+### Driver wiring
 
-`driver.py` の `compile_source` / `emit_ir` / `emit_ast` の **3 経路** を
-`parse(tokenize(...))` から `load_program(source, filename)` 経由に差し替え、
-sema を `analyze_program(loaded, filename)` 形に拡張して呼ぶ。`emit_ast` は
-entry の `Module` (imports を含む) を返す。
+Switch the **3 paths** in `driver.py` — `compile_source` / `emit_ir` /
+`emit_ast` — from `parse(tokenize(...))` to `load_program(source, filename)`,
+and call sema as `analyze_program(loaded, filename)`. `emit_ast` returns the
+entry `Module` (including its imports).
 
-## コンポーネント別の変更 (PR ごと)
+## Changes per component (per PR)
 
-### PR1: plain import + 修飾呼び出し
+### PR1: plain import + qualified calls
 
-触るコアレイヤー: lexer / parser / sema / irgen (4 つ) + 新規 loader + driver 配線。
-runtime は触らない。
+Core layers touched: lexer / parser / sema / irgen (4) + new loader + driver
+wiring. The runtime is not touched.
 
-- `rwc/lexer.py`: `TokenKind.DOT`、`one_char` に `".": DOT` (float と非衝突)
-- `rwc/ast_nodes.py`: `Import`、`Call.module=None`、`Module.imports`
-- `rwc/parser.py`: `parse_module` に `KW_IMPORT` 分岐 + `parse_import` (PR1 は plain
-  `import IDENT` のみ、`as`/`from` は parser error)。「import は def/type より前」
-  ガード。`parse_atom_postfix` で `Name` の次が `DOT` なら修飾呼び出し
-- `rwc/sema.py`: `functions` キーの `(module,name)` 化、`analyze_program`、
-  main は entry のみ、`call_resolution`、修飾呼び出し解決 (未 import / 未定義エラー)
-- `rwc/irgen.py`: `rw_user_<module>_<name>` シンボル、全モジュール宣言・emit、
-  `(module,name)` ルックアップ
-- `rwc/driver.py`: 3 経路を loader 経由に
+- `rwc/lexer.py`: `TokenKind.DOT`, `".": DOT` in `one_char` (does not clash with floats)
+- `rwc/ast_nodes.py`: `Import`, `Call.module=None`, `Module.imports`
+- `rwc/parser.py`: a `KW_IMPORT` branch in `parse_module` + `parse_import` (PR1
+  accepts only plain `import IDENT`; `as` / `from` are parser errors). A guard
+  for "imports come before def/type". In `parse_atom_postfix`, a `Name`
+  followed by `DOT` is a qualified call
+- `rwc/sema.py`: `(module, name)` keys for `functions`, `analyze_program`, main
+  in the entry only, `call_resolution`, qualified call resolution (errors for
+  not-imported / undefined), module-local aliases and per-file diagnostics
+- `rwc/irgen.py`: `rw_user_<module>.<name>` symbols, declare/emit all modules,
+  `(module, name)` lookups
+- `rwc/driver.py`: route the 3 paths through the loader
+- `rwc/cli.py`: render a diagnostic's snippet from the file it names
 - `examples/import_basic.rw` + `import_basic_lib.rw` + `.expected`
-- tests: `test_lexer`/`test_parser`/`test_sema`/`test_irgen` + `test_e2e` parametrize
+- tests: `test_lexer` / `test_parser` / `test_sema` / `test_irgen` /
+  `test_loader` / `test_diagnostics` + `test_e2e` parametrize
 
 ### PR2: `from x import y [as w]`
 
-触るレイヤー: lexer (`KW_FROM`) / parser / sema (irgen 無改変)。
+Layers touched: lexer (`KW_FROM`) / parser / sema (irgen unchanged).
 
-- `rwc/lexer.py`: `KEYWORDS` に `"from"` / `KW_FROM`
-- `rwc/parser.py`: `parse_import` を `from IDENT import IDENT [as IDENT] {, ...}` に
-- `rwc/sema.py`: モジュールごとの `from_env: Dict[localname, (real_mod, real_name)]`。
-  衝突検出 (ローカル関数名・ビルトイン・他 from)。修飾なし呼び出しを
-  ローカル→ビルトイン→`from_env` 順に解決し `call_resolution` へ
-- `examples/import_from.rw` + lib + `.expected`、tests
+- `rwc/lexer.py`: `"from"` / `KW_FROM` in `KEYWORDS`
+- `rwc/parser.py`: extend `parse_import` to `from IDENT import IDENT [as IDENT] {, ...}`
+- `rwc/sema.py`: a per-module `from_env: Dict[localname, (real_mod, real_name)]`.
+  Clash detection (local function names, built-ins, other `from` names).
+  Unqualified calls resolve local → built-in → `from_env` and are recorded in
+  `call_resolution`
+- `examples/import_from.rw` + lib + `.expected`, tests
 
 ### PR3: `import x as m`
 
-触るレイヤー: parser / sema (lexer `KW_AS` 既存、irgen 無改変)。
+Layers touched: parser / sema (lexer `KW_AS` already exists, irgen unchanged).
 
-- `rwc/parser.py`: plain import に `[as IDENT]` を許し `Import.alias`
-- `rwc/sema.py`: `import_env: Dict[visible_name, real_mod]` (plain `x→x`、as `m→x`)。
-  `Call(module=m)` 解決時に実モジュールへ変換。エイリアス二重定義・元名衝突を検出
-- `examples/import_as.rw` + lib + `.expected`、tests
+- `rwc/parser.py`: allow `[as IDENT]` on plain imports, stored in `Import.alias`
+- `rwc/sema.py`: `import_env: Dict[visible_name, real_mod]` (plain `x→x`, as
+  `m→x`). Resolving `Call(module=m)` maps to the real module. Detect duplicate
+  alias definitions
+- `examples/import_as.rw` + lib + `.expected`, tests
 
-## 検証
+## Verification
 
 ```sh
-# 単体
-uv run pytest tests/test_lexer.py tests/test_parser.py tests/test_sema.py tests/test_irgen.py
-# DOT が float と非衝突 / Call.module・Import パース / 名前空間テーブル /
-# 未 import 参照・循環・import 先 main・衝突の各エラー / rw_user_<mod>_<fn> シンボル
+# Unit
+uv run pytest tests/test_lexer.py tests/test_parser.py tests/test_sema.py tests/test_irgen.py tests/test_loader.py
+# DOT vs float / Call.module and Import parsing / namespaced table /
+# errors for not-imported refs, cycles, main in an import, clashes /
+# rw_user_<mod>.<fn> symbols / module-local aliases / per-file diagnostics
 
 # emit-ast / emit-ir
-uv run python -m rwc.cli emit-ast examples/import_basic.rw   # imports と Call(module=...)
-uv run python -m rwc.cli emit-ir  examples/import_basic.rw   # rw_user_import_basic_lib_add
+uv run python -m rwc.cli emit-ast examples/import_basic.rw   # imports and Call(module=...)
+uv run python -m rwc.cli emit-ir  examples/import_basic.rw   # rw_user_import_basic_lib.add
 
 # e2e
 uv run pytest tests/test_e2e.py -k import_
 uv run rwc run examples/import_basic.rw
 
-# 既存回帰
+# Existing regressions
 uv run pytest -q
 ```
 
-## リスクと対処
+## Risks and mitigations
 
-| リスク | 対処 |
+| Risk | Mitigation |
 |---|---|
-| `.` トークン追加が float リテラルと衝突 | lexer の `_read_number` は `.` の前後に数字を要求するため `1.5` は丸ごと FLOAT。`math_lib.add` は IDENT DOT IDENT に割れる。test_lexer で両方を検証 |
-| 既存ビルトイン分岐 (`callee == "print"`) を壊す | `Call.module` のデフォルトを `None` にし、ビルトイン分岐の冒頭に `if call.module is None:` ガードを足すだけ。修飾呼び出しはビルトイン判定に入らない |
-| import 先のエラー行番号が entry 基準で出る | per-file 正確診断は名前空間 PR では行わず、Non-Goals / 既知の制限に明記 |
-| 別モジュールの同名関数で LLVM シンボル衝突 | irgen シンボルを `rw_user_<module>_<name>` に。`main` だけ `(None,"main")` で従来名を維持し C シム無改変 |
-| 解決マップの `id(Call)` 寿命 | desugar は Call を再生成しない (既存 expr_types と同方式)。sema 入力と irgen 入力で id 一致 |
-| `spawn m.add()` (修飾呼び出しの spawn) | `_emit_spawn` / トランポリンも `(module,name)` 化すれば動く。PR1 ではテスト範囲を絞るため spawn+修飾は parser/sema で弾き Non-Goal に倒してもよい |
+| Adding a `.` token clashes with float literals | The lexer's `_read_number` requires digits around `.`, so `1.5` stays one FLOAT and `math_lib.add` splits into IDENT DOT IDENT. test_lexer covers both |
+| Breaking the existing built-in branches (`callee == "print"`) | Default `Call.module` to `None` and add an `if call.module is None:` guard at the top of the built-in branches. Qualified calls never enter built-in checks |
+| LLVM symbol clashes between same-named functions in different modules, or between a module-qualified name and an entry function | Symbols are `rw_user_<module>.<name>`; `.` is not valid in an rw identifier, so no rw name can produce the same symbol. Only `main` keeps the historical name via `(None, "main")`, leaving the C shim unchanged |
+| Errors in an imported module reported against the entry file | Sema tracks the file of the module being checked; the CLI renders the snippet from the diagnostic's file |
+| Lifetime of `id(Call)` in the resolution map | desugar never recreates Call nodes (same approach as the existing expr_types), so ids match between sema's and irgen's input |
+| `spawn m.add()` (spawning a qualified call) | `_emit_spawn` and the trampoline are keyed by `(module, name)`, so it works; covered by `test_irgen` |

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from . import ast_nodes as A
 from .desugar import desugar_module
@@ -36,6 +36,9 @@ class LoadedProgram:
     # Source text per module, keyed by module name (root included under
     # root_name), for diagnostics that need to render a snippet.
     sources: Dict[str, str] = field(default_factory=dict)
+    # File path per module, keyed like `sources`, so diagnostics raised while
+    # checking an imported module can name the right file.
+    paths: Dict[str, str] = field(default_factory=dict)
 
 
 def _parse_module(source: str, filename: str) -> A.Module:
@@ -48,8 +51,8 @@ def _parse_module(source: str, filename: str) -> A.Module:
         raise CompileError(Diagnostic(filename, e.line, e.col, e.length, e.message)) from e
 
 
-def _has_main(mod: A.Module) -> bool:
-    return any(fn.name == "main" for fn in mod.functions)
+def _find_main(mod: A.Module) -> Optional[A.FuncDef]:
+    return next((fn for fn in mod.functions if fn.name == "main"), None)
 
 
 def load_program(root_source: str, root_filename: str) -> LoadedProgram:
@@ -66,6 +69,7 @@ def load_program(root_source: str, root_filename: str) -> LoadedProgram:
 
     program = LoadedProgram(root=root, root_name=root_name)
     program.sources[root_name] = root_source
+    program.paths[root_name] = root_filename
 
     # DFS over the import graph. `stack` holds the current import chain so we
     # can point at the cycle; `loaded` de-dups modules already parsed.
@@ -98,15 +102,17 @@ def load_program(root_source: str, root_filename: str) -> LoadedProgram:
             target_source = target_path.read_text(encoding="utf-8")
             target_mod = _parse_module(target_source, str(target_path))
 
-            if _has_main(target_mod):
+            target_main = _find_main(target_mod)
+            if target_main is not None:
                 raise CompileError(Diagnostic(
-                    str(target_path), imp.line, imp.col, max(1, len(target)),
+                    str(target_path), target_main.line, target_main.col, len("main"),
                     f"imported module '{target}' must not define 'main'",
                 ))
 
             loaded[target] = target_mod
             program.modules[target] = target_mod
             program.sources[target] = target_source
+            program.paths[target] = str(target_path)
             visit(target_mod, target, str(target_path), stack + [target])
 
     visit(root, root_name, root_filename, [root_name])

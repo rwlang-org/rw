@@ -74,13 +74,16 @@ class Sema:
     def __init__(self, program: LoadedProgram, filename: str) -> None:
         self.program = program
         self.filename = filename
+        # The entry file; `filename` tracks the module currently being checked
+        # so diagnostics from an imported module name that module's file.
+        self._root_filename = filename
         self.result = SemaResult(filename=filename, functions={})
         # Depth of enclosing loops; break/continue are only valid when > 0.
         self._loop_depth = 0
-        # User-declared type aliases (name -> resolved concrete Type).
-        # Type aliases are module-local in spirit but PR1 keeps a single map
-        # (the entry module's aliases dominate; imported modules' aliases are
-        # processed when that module is checked). Type-alias import is a Non-Goal.
+        # User-declared type aliases (name -> resolved concrete Type), one map
+        # per module. Aliases are module-local: type-alias import is a Non-Goal,
+        # so `type_alias_map` always points at the current module's map.
+        self._aliases_by_module: Dict[Optional[str], Dict[str, T.Type]] = {}
         self.type_alias_map: Dict[str, T.Type] = {}
         # The module currently being collected/checked. None = entry (root).
         self.current_module: Optional[str] = None
@@ -94,6 +97,15 @@ class Sema:
         self._all_modules: List[Tuple[Optional[str], A.Module]] = [
             (None, program.root)
         ] + [(name, mod) for name, mod in program.modules.items()]
+
+    def _enter_module(self, mod_name: Optional[str]) -> None:
+        """Make `mod_name` the module whose names, aliases, and file are in scope."""
+        self.current_module = mod_name
+        self.type_alias_map = self._aliases_by_module.setdefault(mod_name, {})
+        if mod_name is None:
+            self.filename = self._root_filename
+        else:
+            self.filename = self.program.paths.get(mod_name, self._root_filename)
 
     def _resolve_type(self, ty: A.TypeExpr) -> T.Type:
         if isinstance(ty, A.TypeName):
@@ -121,6 +133,7 @@ class Sema:
         # they can never appear as an alias name (the parser requires IDENT).
         # Hence no built-in-shadowing check is needed here.
         for mod_name, mod in self._all_modules:
+            self._enter_module(mod_name)
             for alias in mod.type_aliases:
                 if alias.name in self.type_alias_map:
                     raise CompileError(Diagnostic(
@@ -133,6 +146,7 @@ class Sema:
         # First pass: collect signatures across all modules, keyed by
         # (module, name). Same-named functions in different modules coexist.
         for mod_name, mod in self._all_modules:
+            self._enter_module(mod_name)
             for fn in mod.functions:
                 key: FuncKey = (mod_name, fn.name)
                 if key in self.result.functions:
@@ -160,6 +174,7 @@ class Sema:
                 self.result.functions[key] = FuncSig(fn.name, params, rt, fn, mod_name)
 
         # main is required, in the entry module only.
+        self._enter_module(None)
         if (None, "main") not in self.result.functions:
             line = self.program.root.functions[0].line if self.program.root.functions else 1
             raise CompileError(Diagnostic(
@@ -181,12 +196,13 @@ class Sema:
         # Second pass: check each function body, module by module, so that
         # `current_module` / visible imports / from-bindings are scoped correctly.
         for mod_name, mod in self._all_modules:
-            self.current_module = mod_name
+            self._enter_module(mod_name)
             self._visible_imports = {imp.module for imp in mod.imports}
             self._from_env = self._build_from_env(mod_name, mod)
             for fn in mod.functions:
                 self._check_func(fn)
 
+        self._enter_module(None)
         return self.result
 
     def _build_from_env(self, mod_name: Optional[str], mod: A.Module) -> Dict[str, FuncKey]:
