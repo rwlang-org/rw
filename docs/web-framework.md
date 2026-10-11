@@ -1,0 +1,103 @@
+# rw web framework
+
+`examples/web.rw` is a small web application framework written in rw itself.
+It turns the language features added for it — string search (spec 18), fiber
+detach (spec 19), records (spec 20), function values (spec 21), and
+`List[T]` (spec 22) — into an HTTP/1.1 server with routing.
+
+```rw
+import web
+from web import App, Request, Response, text, param
+
+def hello(req: Request) -> Response:
+    return text(200, "hello, " + param(req, "name") + "\n")
+
+def main() -> int:
+    app: App = web.new_app()
+    web.get(app, "/hello/:name", hello)
+    return web.serve(app, 8080)
+```
+
+`import web` resolves to `web.rw` next to the entry file, so copy
+`examples/web.rw` beside your application. `examples/web_app.rw` is a complete
+example:
+
+```sh
+make -C runtime
+uv run rwc run examples/web_app.rw     # then: curl -i http://127.0.0.1:8080/hello/rw
+```
+
+## Types
+
+| Type | Fields |
+|---|---|
+| `Request` | `method`, `path`, `query` (the raw text after `?`), `headers: List[Header]`, `params: List[Header]` (path parameters), `body` |
+| `Response` | `status`, `headers: List[Header]`, `body` |
+| `Header` | `name`, `value` |
+| `App` | `routes`, `not_found` handler, `log` flag |
+
+A handler is any function of type `Callable[[Request], Response]`.
+
+## Application and routing
+
+| Function | Description |
+|---|---|
+| `new_app() -> App` | An app with no routes, the default 404 handler, and access logging on |
+| `get(app, pattern, handler) -> App` | Register a `GET` route |
+| `post(app, pattern, handler) -> App` | Register a `POST` route |
+| `route(app, method, pattern, handler) -> App` | Register a route for any method |
+| `set_not_found(app, handler) -> App` | Replace the 404 handler |
+| `set_log(app, on) -> App` | Turn the one-line-per-request access log on or off |
+| `serve(app, port) -> int` | Listen and serve forever; returns `1` if the port cannot be opened |
+
+`App` is a record, so the registration functions update the app in place; the
+return value is the same app, for convenience.
+
+Patterns are matched segment by segment. A `:name` segment captures any
+non-empty segment: `/users/:id/posts/:post` matches `/users/7/posts/42`.
+Routes are tried in registration order and the first match wins. A path that
+matches a route only under another method gets `405 Method Not Allowed`;
+anything else goes to the not-found handler.
+
+## Reading requests
+
+| Function | Description |
+|---|---|
+| `param(req, name) -> string` | A path parameter |
+| `query(req, name) -> string` | A query-string value (`?q=rw&page=2`); no percent-decoding |
+| `header(req, name) -> string` | A request header, case-insensitive |
+
+All three return `""` when the value is absent.
+
+## Building responses
+
+| Function | Description |
+|---|---|
+| `text(status, body)` | `text/plain; charset=utf-8` |
+| `html(status, body)` | `text/html; charset=utf-8` |
+| `json(status, body)` | `application/json` (the body is passed through as is) |
+| `response(status, content_type, body)` | Any content type |
+| `redirect(location)` | `302 Found` with a `Location` header |
+| `set_header(res, name, value) -> Response` | Add a response header |
+
+The framework adds `Content-Length` and `Connection: close` to every response.
+
+## Protocol behavior and limits
+
+- One request per connection (`Connection: close`); no keep-alive or pipelining
+- The request head may be up to 64 KiB (`413` above that); the body is read
+  according to `Content-Length`, up to 1 MiB (`413` above that). Chunked
+  request bodies are not supported
+- A malformed request line gets `400 Bad Request`
+- Responses are written completely even when `write` accepts only part of
+  the buffer
+- Each connection runs in its own fiber, which is freed when the connection
+  is done (spec 19)
+- The access log goes to stdout through `print`; when stdout is a pipe it is
+  block-buffered, so lines appear late or are lost if the process is killed
+
+## Not supported yet
+
+TLS, keep-alive, chunked transfer encoding, percent-decoding, cookies,
+middleware, static files, and templates. Strings and lists allocated while
+handling a request are not freed (memory management, #67).

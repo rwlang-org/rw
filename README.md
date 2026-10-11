@@ -27,6 +27,31 @@ uv run rwc run examples/hello.rw
 
 For installation prerequisites and detailed setup, see [INSTALL.md](INSTALL.md).
 
+## A web server in rw
+
+`examples/web.rw` is a small web framework written in rw, with routing, path
+parameters, and an HTTP/1.1 server that handles each connection in its own
+fiber:
+
+```rw
+import web
+from web import App, Request, Response, text, param
+
+def hello(req: Request) -> Response:
+    return text(200, "hello, " + param(req, "name") + "\n")
+
+def main() -> int:
+    app: App = web.new_app()
+    web.get(app, "/hello/:name", hello)
+    return web.serve(app, 8080)
+```
+
+```sh
+uv run rwc run examples/web_app.rw   # curl -i http://127.0.0.1:8080/hello/rw
+```
+
+See [docs/web-framework.md](docs/web-framework.md) for the API.
+
 ## Getting Help
 
 See [Issues](https://github.com/ryuichi1208/rw/issues) and the language specs
