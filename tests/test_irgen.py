@@ -7,6 +7,8 @@ generated IR — function names, the presence of runtime calls, etc.
 
 from __future__ import annotations
 
+import re
+
 from rwc.desugar import desugar_module
 from rwc.irgen import generate
 from rwc.lexer import tokenize
@@ -196,3 +198,18 @@ def test_underscore_module_names_do_not_clash(tmp_path):
     assert "rw_user_a.b_c" in ir_text
     assert "rw_trampoline_a_b.c" in ir_text
     assert "rw_trampoline_a.b_c" in ir_text
+
+
+def test_string_search_builtins_emit_runtime_calls():
+    ir_text = ir_for(
+        "def main() -> int:\n"
+        '    s: string = "GET / HTTP/1.1"\n'
+        '    i: int = str_find(s, " ")\n'
+        "    p: string = str_slice(s, 0, i)\n"
+        '    b: bool = str_starts_with(s, "GET")\n'
+        "    n: string = str_from_int(i)\n"
+        "    o: Option[int] = str_to_int(n)\n"
+        "    return 0\n"
+    )
+    for sym in ("rw_str_find", "rw_str_slice", "rw_str_starts_with", "rw_str_from_int", "rw_str_to_int"):
+        assert re.search(rf'call .*@"{sym}"\(', ir_text), sym

@@ -1,0 +1,50 @@
+# A minimal HTTP/1.1 server: parses the request line, routes on the path,
+# and answers with a Content-Length response. One request per connection.
+
+def respond(fd: int, status: string, body: string) -> int:
+    head: string = "HTTP/1.1 " + status + "\r\n"
+    head = head + "Content-Type: text/plain\r\n"
+    head = head + "Content-Length: " + str_from_int(len(body)) + "\r\n"
+    head = head + "Connection: close\r\n\r\n"
+    write(fd, bytes_from_str(head + body))
+    return close(fd)
+
+def handle(fd: int) -> int:
+    # Read until the end of the headers (or EOF / a 64 KiB cap).
+    req: string = ""
+    while str_find(req, "\r\n\r\n") < 0:
+        b: Bytes = read(fd, 4096)
+        if len(b) == 0:
+            return close(fd)
+        req = req + str_from_bytes(b)
+        if len(req) > 65536:
+            return respond(fd, "431 Request Header Fields Too Large", "too large\n")
+
+    # Request line: METHOD SP PATH SP VERSION
+    line: string = str_slice(req, 0, str_find(req, "\r\n"))
+    sp1: int = str_find(line, " ")
+    if sp1 < 0:
+        return respond(fd, "400 Bad Request", "bad request\n")
+    method: string = str_slice(line, 0, sp1)
+    rest: string = str_slice(line, sp1 + 1, len(line))
+    sp2: int = str_find(rest, " ")
+    if sp2 < 0:
+        return respond(fd, "400 Bad Request", "bad request\n")
+    path: string = str_slice(rest, 0, sp2)
+
+    if method != "GET":
+        return respond(fd, "405 Method Not Allowed", "method not allowed\n")
+    if path == "/":
+        return respond(fd, "200 OK", "Welcome to rw\n")
+    if path == "/hello":
+        return respond(fd, "200 OK", "hello, world\n")
+    if str_starts_with(path, "/echo/"):
+        return respond(fd, "200 OK", str_slice(path, 6, len(path)) + "\n")
+    return respond(fd, "404 Not Found", "not found: " + path + "\n")
+
+def main() -> int:
+    listen_fd: int = tcp_listen(8080)
+    while true:
+        client: int = tcp_accept(listen_fd)
+        spawn handle(client)
+    return 0

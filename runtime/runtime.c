@@ -80,6 +80,81 @@ rw_str rw_str_concat(rw_str a, rw_str b) {
     return out;
 }
 
+/* ---------- string search / conversion (spec 18) ---------- */
+
+int64_t rw_str_find(rw_str s, rw_str sub) {
+    if (sub.len == 0) return 0;
+    if (sub.len > s.len) return -1;
+    for (int64_t i = 0; i + sub.len <= s.len; i++) {
+        if (memcmp(s.ptr + i, sub.ptr, (size_t)sub.len) == 0) return i;
+    }
+    return -1;
+}
+
+rw_str rw_str_slice(rw_str s, int64_t start, int64_t end) {
+    /* Clamp both bounds to [0, len]; strings are immutable, so the slice
+     * shares the source buffer (zero-copy). */
+    if (start < 0) start = 0;
+    if (end > s.len) end = s.len;
+    rw_str out;
+    if (start >= end) {
+        out.len = 0;
+        out.ptr = NULL;
+        return out;
+    }
+    out.len = end - start;
+    out.ptr = s.ptr + start;
+    return out;
+}
+
+int8_t rw_str_starts_with(rw_str s, rw_str prefix) {
+    if (prefix.len > s.len) return 0;
+    if (prefix.len == 0) return 1;
+    return memcmp(s.ptr, prefix.ptr, (size_t)prefix.len) == 0 ? 1 : 0;
+}
+
+rw_str rw_str_from_int(int64_t n) {
+    char buf[32];
+    int len = snprintf(buf, sizeof buf, "%lld", (long long)n);
+    rw_str out;
+    out.len = 0;
+    out.ptr = NULL;
+    if (len <= 0) return out;
+    char *p = (char *)malloc((size_t)len);
+    if (!p) return out;  /* OOM: degrade to empty string, like concat. */
+    memcpy(p, buf, (size_t)len);
+    out.len = len;
+    out.ptr = p;
+    return out;
+}
+
+void rw_str_to_int(rw_option_int *out, rw_str s) {
+    out->tag = 0;
+    out->payload = 0;
+    int64_t i = 0;
+    int neg = 0;
+    if (i < s.len && s.ptr[i] == '-') {
+        neg = 1;
+        i++;
+    }
+    if (i >= s.len) return;  /* empty or a lone "-" */
+    /* Accumulate as a negative number so INT64_MIN parses too. */
+    int64_t acc = 0;
+    for (; i < s.len; i++) {
+        char c = s.ptr[i];
+        if (c < '0' || c > '9') return;
+        int64_t d = c - '0';
+        if (acc < (INT64_MIN + d) / 10) return;  /* overflow */
+        acc = acc * 10 - d;
+    }
+    if (!neg) {
+        if (acc == INT64_MIN) return;  /* overflow: 9223372036854775808 */
+        acc = -acc;
+    }
+    out->tag = 1;
+    out->payload = acc;
+}
+
 /* ---------- List[int] ops ----------
  *
  * All helpers use pointer arguments instead of passing the 24-byte

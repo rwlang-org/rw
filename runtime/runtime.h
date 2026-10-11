@@ -31,6 +31,12 @@ int64_t rw_str_len   (rw_str s);
 int8_t  rw_str_eq    (rw_str a, rw_str b);
 rw_str  rw_str_concat(rw_str a, rw_str b);
 
+/* string search / conversion (spec 18). Indices are byte offsets. */
+int64_t rw_str_find       (rw_str s, rw_str sub);
+rw_str  rw_str_slice      (rw_str s, int64_t start, int64_t end);
+int8_t  rw_str_starts_with(rw_str s, rw_str prefix);
+rw_str  rw_str_from_int   (int64_t n);
+
 /* List[int] type and ops.
  *
  * The struct is 3 words (24 bytes) which puts it past arm64's
@@ -60,6 +66,9 @@ void    rw_list_int_new (rw_list_int *out);
 void    rw_list_int_push(rw_list_int *out, const rw_list_int *l, int64_t v);
 int64_t rw_list_int_at  (const rw_list_int *l, int64_t i);
 int64_t rw_list_int_len (const rw_list_int *l);
+
+/* Parse a decimal int ("-"? digit+); None on any other input or overflow. */
+void rw_str_to_int(rw_option_int *out, rw_str s);
 
 /* List[int]: range-checked accessor returning Option[int]. */
 void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i);
