@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import List, Optional, Tuple
 
 
 class Type:
@@ -43,6 +44,34 @@ class FutureType(Type):
 
     def __post_init__(self) -> None:
         self.name = f"Future[{self.inner}]"
+
+
+class ClassType(Type):
+    """A user-declared record type (spec 20).
+
+    Compared by identity: two classes with the same name in different
+    modules are different types. `fields` is filled in after every class
+    name of the module is known, so classes may refer to later classes.
+    """
+
+    def __init__(self, name: str, module: Optional[str]) -> None:
+        # Display name: bare for the entry module, qualified for imports.
+        self.name = name if module is None else f"{module}.{name}"
+        self.short_name = name
+        self.module = module
+        self.fields: List[Tuple[str, Type]] = []
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+    def __hash__(self) -> int:
+        return id(self)
+
+    def field_index(self, name: str) -> Optional[int]:
+        for i, (fname, _) in enumerate(self.fields):
+            if fname == name:
+                return i
+        return None
 
 
 def is_numeric(t: Type) -> bool:

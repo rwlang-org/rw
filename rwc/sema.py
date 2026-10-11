@@ -45,6 +45,8 @@ class SemaResult:
     # uses this to pick the right LLVM symbol regardless of how the call was
     # written (qualified, unqualified, or — in later PRs — via from/as).
     call_resolution: Dict[int, FuncKey] = field(default_factory=dict)
+    # id(Call) -> record type, for calls that construct a record (spec 20).
+    constructor_calls: Dict[int, T.ClassType] = field(default_factory=dict)
 
 
 # Names of builtin functions. Spawning a builtin is an error, and a qualified
@@ -96,6 +98,9 @@ class Sema:
         # so `type_alias_map` always points at the current module's map.
         self._aliases_by_module: Dict[Optional[str], Dict[str, T.Type]] = {}
         self.type_alias_map: Dict[str, T.Type] = {}
+        # Record types per module (spec 20); `class_map` is the current one.
+        self._classes_by_module: Dict[Optional[str], Dict[str, T.ClassType]] = {}
+        self.class_map: Dict[str, T.ClassType] = {}
         # The module currently being collected/checked. None = entry (root).
         self.current_module: Optional[str] = None
         # Qualifiers visible to the current module via `import`/`import as`:
@@ -114,6 +119,7 @@ class Sema:
         """Make `mod_name` the module whose names, aliases, and file are in scope."""
         self.current_module = mod_name
         self.type_alias_map = self._aliases_by_module.setdefault(mod_name, {})
+        self.class_map = self._classes_by_module.setdefault(mod_name, {})
         if mod_name is None:
             self.filename = self._root_filename
         else:
@@ -125,6 +131,8 @@ class Sema:
                 return _BUILTIN_TYPES[ty.name]
             if ty.name in self.type_alias_map:
                 return self.type_alias_map[ty.name]
+            if ty.name in self.class_map:
+                return self.class_map[ty.name]
             raise CompileError(Diagnostic(self.filename, ty.line, ty.col, len(ty.name),
                                           f"unknown type: {ty.name}"))
         if isinstance(ty, A.TypeFuture):
@@ -144,9 +152,31 @@ class Sema:
         # Built-in type names (int, Bytes, List, ...) are lexer keywords, so
         # they can never appear as an alias name (the parser requires IDENT).
         # Hence no built-in-shadowing check is needed here.
+        # Record names first, so aliases and fields may refer to any class
+        # of the module (spec 20).
+        for mod_name, mod in self._all_modules:
+            self._enter_module(mod_name)
+            for cdef in mod.classes:
+                if cdef.name in self.class_map:
+                    raise CompileError(Diagnostic(
+                        self.filename, cdef.line, cdef.col, len(cdef.name),
+                        f"duplicate class: {cdef.name}",
+                    ))
+                if cdef.name in _BUILTIN_FUNCS:
+                    raise CompileError(Diagnostic(
+                        self.filename, cdef.line, cdef.col, len(cdef.name),
+                        f"class name `{cdef.name}` collides with a builtin",
+                    ))
+                self.class_map[cdef.name] = T.ClassType(cdef.name, mod_name)
+
         for mod_name, mod in self._all_modules:
             self._enter_module(mod_name)
             for alias in mod.type_aliases:
+                if alias.name in self.class_map:
+                    raise CompileError(Diagnostic(
+                        self.filename, alias.line, alias.col, len(alias.name),
+                        f"`{alias.name}` is already a class",
+                    ))
                 if alias.name in self.type_alias_map:
                     raise CompileError(Diagnostic(
                         self.filename, alias.line, alias.col, len(alias.name),
@@ -155,12 +185,36 @@ class Sema:
                 resolved = self._resolve_type(alias.target)
                 self.type_alias_map[alias.name] = resolved
 
+        # Record fields, now that every class and alias name is known.
+        for mod_name, mod in self._all_modules:
+            self._enter_module(mod_name)
+            for cdef in mod.classes:
+                cls = self.class_map[cdef.name]
+                for fdecl in cdef.fields:
+                    if cls.field_index(fdecl.name) is not None:
+                        raise CompileError(Diagnostic(
+                            self.filename, fdecl.line, fdecl.col, len(fdecl.name),
+                            f"duplicate field `{fdecl.name}` in class {cdef.name}",
+                        ))
+                    fty = self._resolve_type(fdecl.type_expr)
+                    if fty is T.VOID:
+                        raise CompileError(Diagnostic(
+                            self.filename, fdecl.line, fdecl.col, len(fdecl.name),
+                            f"field `{fdecl.name}` cannot be void",
+                        ))
+                    cls.fields.append((fdecl.name, fty))
+
         # First pass: collect signatures across all modules, keyed by
         # (module, name). Same-named functions in different modules coexist.
         for mod_name, mod in self._all_modules:
             self._enter_module(mod_name)
             for fn in mod.functions:
                 key: FuncKey = (mod_name, fn.name)
+                if fn.name in self.class_map:
+                    raise CompileError(Diagnostic(
+                        self.filename, fn.line, fn.col, len(fn.name),
+                        f"`{fn.name}` is already a class",
+                    ))
                 if key in self.result.functions:
                     raise CompileError(Diagnostic(
                         self.filename, fn.line, fn.col, len(fn.name),
@@ -239,7 +293,7 @@ class Sema:
         -> (source_module, source_name). Detects collisions with local
         functions, builtins, and other from-bindings."""
         env: Dict[str, FuncKey] = {}
-        local_names = {fn.name for fn in mod.functions}
+        local_names = {fn.name for fn in mod.functions} | {c.name for c in mod.classes}
         for imp in mod.imports:
             if imp.names is None:
                 continue  # plain `import x` / `import x as m`
@@ -259,7 +313,7 @@ class Sema:
                 if local in local_names:
                     raise CompileError(Diagnostic(
                         self.filename, imp.line, imp.col, max(1, len(local)),
-                        f"imported name `{local}` collides with a local function",
+                        f"imported name `{local}` collides with a local function or class",
                     ))
                 if local in env:
                     raise CompileError(Diagnostic(
@@ -347,6 +401,17 @@ class Sema:
 
         if isinstance(stmt, A.ExprStmt):
             self._check_expr(fn, stmt.expr, locals_)
+            return False
+
+        if isinstance(stmt, A.FieldAssign):
+            obj_ty = self._check_expr(fn, stmt.obj, locals_)
+            _, fty = self._field_of(obj_ty, stmt.field, stmt.line, stmt.col)
+            val_ty = self._check_expr(fn, stmt.value, locals_)
+            if val_ty != fty:
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, len(stmt.field),
+                    f"cannot assign `{val_ty}` to field `{stmt.field}` of type `{fty}`",
+                ))
             return False
 
         if isinstance(stmt, A.Return):
@@ -577,6 +642,10 @@ class Sema:
             ))
         if isinstance(expr, A.Call):
             return self._check_call(fn, expr, locals_)
+        if isinstance(expr, A.FieldAccess):
+            obj_ty = self._check_expr(fn, expr.obj, locals_)
+            _, fty = self._field_of(obj_ty, expr.field, expr.line, expr.col)
+            return fty
         if isinstance(expr, A.SpawnExpr):
             # spawn requires a user-defined function call.
             call = expr.call
@@ -590,6 +659,11 @@ class Sema:
             # Type-check the call as a normal call (we want arg types to flow through).
             self._check_call(fn, call, locals_)
             ret_ty = self.result.functions[key].return_type
+            if isinstance(ret_ty, T.ClassType):
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, 5,
+                    "cannot spawn a function returning a record",
+                ))
             return T.FutureType(ret_ty)
         if isinstance(expr, A.AwaitExpr):
             tgt = self._check_expr(fn, expr.target, locals_)
@@ -683,6 +757,8 @@ class Sema:
         # builtin dispatch entirely. See spec 17.
         if call.module is not None:
             return self._check_user_call(fn, call, locals_)
+        if call.callee in self.class_map:
+            return self._check_constructor(fn, call, locals_)
         # Builtin: print accepts any printable.
         if call.callee == "print":
             if len(call.args) != 1:
@@ -960,6 +1036,41 @@ class Sema:
                 ))
             return T.FLOAT
         return self._check_user_call(fn, call, locals_)
+
+    def _check_constructor(
+        self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]
+    ) -> T.Type:
+        """`ClassName(args...)`: one positional argument per field (spec 20)."""
+        cls = self.class_map[call.callee]
+        if len(call.args) != len(cls.fields):
+            raise CompileError(Diagnostic(
+                self.filename, call.line, call.col, len(call.callee),
+                f"{cls} takes {len(cls.fields)} arguments, got {len(call.args)}",
+            ))
+        for i, (arg, (fname, fty)) in enumerate(zip(call.args, cls.fields, strict=True), start=1):
+            at = self._check_expr(fn, arg, locals_)
+            if at != fty:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"field {i} (`{fname}`) of {cls} must be {fty}, found `{at}`",
+                ))
+        self.result.constructor_calls[id(call)] = cls
+        return cls
+
+    def _field_of(self, obj_ty: T.Type, field: str, line: int, col: int) -> Tuple[T.ClassType, T.Type]:
+        """Look up `field` on a record type, or raise a diagnostic."""
+        if not isinstance(obj_ty, T.ClassType):
+            raise CompileError(Diagnostic(
+                self.filename, line, col, len(field),
+                f"`{obj_ty}` has no fields",
+            ))
+        idx = obj_ty.field_index(field)
+        if idx is None:
+            raise CompileError(Diagnostic(
+                self.filename, line, col, len(field),
+                f"{obj_ty} has no field `{field}`",
+            ))
+        return obj_ty, obj_ty.fields[idx][1]
 
     def _check_user_call(self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]) -> T.Type:
         """Resolve and type-check a call to a user-defined function (qualified
