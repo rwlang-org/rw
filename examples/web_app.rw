@@ -1,0 +1,40 @@
+# A web application built on examples/web.rw.
+import web
+from web import App, Request, Response, text, html, json, param, query, header, set_header
+
+def index(req: Request) -> Response:
+    return html(200, "<h1>Hello from rw</h1>\n")
+
+def hello(req: Request) -> Response:
+    return text(200, "hello, " + param(req, "name") + "\n")
+
+def post_of_user(req: Request) -> Response:
+    return text(200, "user " + param(req, "id") + " post " + param(req, "post") + "\n")
+
+def search(req: Request) -> Response:
+    return json(200, "{\"q\": \"" + query(req, "q") + "\", \"page\": \"" + query(req, "page") + "\"}\n")
+
+def agent(req: Request) -> Response:
+    return text(200, header(req, "user-agent") + "\n")
+
+def echo(req: Request) -> Response:
+    res: Response = text(201, req.body)
+    return set_header(res, "X-Echo-Length", str_from_int(len(req.body)))
+
+def old(req: Request) -> Response:
+    return web.redirect("/")
+
+def missing(req: Request) -> Response:
+    return html(404, "<p>no page at " + req.path + "</p>\n")
+
+def main() -> int:
+    app: App = web.new_app()
+    web.get(app, "/", index)
+    web.get(app, "/hello/:name", hello)
+    web.get(app, "/users/:id/posts/:post", post_of_user)
+    web.get(app, "/search", search)
+    web.get(app, "/agent", agent)
+    web.post(app, "/echo", echo)
+    web.get(app, "/old", old)
+    web.set_not_found(app, missing)
+    return web.serve(app, 8080)
