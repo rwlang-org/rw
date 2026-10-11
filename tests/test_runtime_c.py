@@ -38,9 +38,21 @@ def test_c_runtime(librw: Path, name: str):
         exe = Path(td) / name
         libs = ["-lpthread", "-lm"] if sys.platform.startswith("linux") else []
         cc = subprocess.run(
-            [_cc(), "-std=c11", "-D_GNU_SOURCE", "-O2", "-I", str(RUNTIME),
-             str(src), str(librw), "-o", str(exe), *libs],
-            capture_output=True, text=True,
+            [
+                _cc(),
+                "-std=c11",
+                "-D_GNU_SOURCE",
+                "-O2",
+                "-I",
+                str(RUNTIME),
+                str(src),
+                str(librw),
+                "-o",
+                str(exe),
+                *libs,
+            ],
+            capture_output=True,
+            text=True,
         )
         assert cc.returncode == 0, cc.stderr
         run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=120)
