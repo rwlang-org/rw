@@ -85,8 +85,9 @@ class _Desugarer:
             A.BinOp("+", A.Name(f.var, ln, col), A.Name(step_name, ln, col), ln, col),
             ln, col,
         )
-        while_body = list(body) + [incr]
-        out.append(A.While(cond, while_body, ln, col))
+        # The increment is the loop's update step, not the last body
+        # statement, so `continue` cannot skip it.
+        out.append(A.While(cond, list(body), ln, col, update=[incr]))
         return out
 
 

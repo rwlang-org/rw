@@ -243,6 +243,10 @@ class While:
     body: List["Stmt"]
     line: int
     col: int
+    # Statements run after every iteration, including one ended by
+    # `continue` (like the third clause of a C `for`). Used by the desugared
+    # range-for to advance its variable.
+    update: List["Stmt"] = field(default_factory=list)
 
 
 @dataclass

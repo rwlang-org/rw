@@ -44,7 +44,7 @@ def _build_and_run(rw_path: Path) -> tuple[int, str]:
 
 @pytest.mark.parametrize(
     "name",
-    ["hello", "arith", "fib", "while_count", "spawn_basic", "spawn_many", "spawn_string", "string_ops", "bytes_basic", "list_basic", "option_basic", "result_basic", "for_count", "ternary", "file_io", "file_par", "num_literals", "bitops", "break_continue", "assert_ok", "type_alias", "math_basic", "import_basic", "import_from", "import_as", "string_search", "records", "import_records", "func_values", "generic_list", "preempt_basic", "conversions", "compound_assign"],
+    ["hello", "arith", "fib", "while_count", "spawn_basic", "spawn_many", "spawn_string", "string_ops", "bytes_basic", "list_basic", "option_basic", "result_basic", "for_count", "ternary", "file_io", "file_par", "num_literals", "bitops", "break_continue", "assert_ok", "type_alias", "math_basic", "import_basic", "import_from", "import_as", "string_search", "records", "import_records", "func_values", "generic_list", "preempt_basic", "conversions", "compound_assign", "for_continue"],
 )
 def test_synchronous_example(name: str):
     rw_path = EXAMPLES / f"{name}.rw"
