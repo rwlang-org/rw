@@ -132,6 +132,22 @@ class IRGen:
             m, ir.FunctionType(RW_STR_TY, [F64]), "rw_str_from_float")
         self._rw_str_cmp = ir.Function(
             m, ir.FunctionType(I64, [RW_STR_TY, RW_STR_TY]), "rw_str_cmp")
+        # string builtins (spec 28); split/join take the list by pointer.
+        s2s = ir.FunctionType(RW_STR_TY, [RW_STR_TY])
+        self._rw_str_strip = ir.Function(m, s2s, "rw_str_strip")
+        self._rw_str_lower = ir.Function(m, s2s, "rw_str_lower")
+        self._rw_str_upper = ir.Function(m, s2s, "rw_str_upper")
+        self._rw_str_replace = ir.Function(
+            m, ir.FunctionType(RW_STR_TY, [RW_STR_TY, RW_STR_TY, RW_STR_TY]), "rw_str_replace")
+        self._rw_str_contains = ir.Function(
+            m, ir.FunctionType(I8, [RW_STR_TY, RW_STR_TY]), "rw_str_contains")
+        self._rw_str_ends_with = ir.Function(
+            m, ir.FunctionType(I8, [RW_STR_TY, RW_STR_TY]), "rw_str_ends_with")
+        self._rw_str_split = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [RW_LIST_INT_TY.as_pointer(), RW_STR_TY, RW_STR_TY]),
+            "rw_str_split")
+        self._rw_str_join = ir.Function(
+            m, ir.FunctionType(RW_STR_TY, [RW_LIST_INT_TY.as_pointer(), RW_STR_TY]), "rw_str_join")
         # List[int] ops — pointer-out ABI (see runtime.h for the
         # rationale: 24-byte struct is past arm64's "return in regs"
         # threshold, so we go through stack-allocated buffers).
@@ -806,13 +822,31 @@ class IRGen:
             # Both are noops at the IR level: the value carries the
             # same {len, ptr} layout, only the sema type changes.
             return self._emit_expr(call.args[0], ctx)
-        if call.callee in ("str_find", "str_slice", "str_starts_with", "str_from_int"):
-            fn = {
-                "str_find": self._rw_str_find,
-                "str_slice": self._rw_str_slice,
-                "str_starts_with": self._rw_str_starts_with,
-                "str_from_int": self._rw_str_from_int,
-            }[call.callee]
+        if call.callee == "str_split":
+            sv, sep = (self._emit_expr(a, ctx) for a in call.args)
+            out_slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            ctx.builder.call(self._rw_str_split, [out_slot, sv, sep])
+            return ctx.builder.load(out_slot)
+        if call.callee == "str_join":
+            lv = self._emit_expr(call.args[0], ctx)
+            sep = self._emit_expr(call.args[1], ctx)
+            in_slot = ctx.builder.alloca(RW_LIST_INT_TY)
+            ctx.builder.store(lv, in_slot)
+            return ctx.builder.call(self._rw_str_join, [in_slot, sep])
+        direct = {
+            "str_find": self._rw_str_find,
+            "str_slice": self._rw_str_slice,
+            "str_starts_with": self._rw_str_starts_with,
+            "str_from_int": self._rw_str_from_int,
+            "str_strip": self._rw_str_strip,
+            "str_lower": self._rw_str_lower,
+            "str_upper": self._rw_str_upper,
+            "str_replace": self._rw_str_replace,
+            "str_contains": self._rw_str_contains,
+            "str_ends_with": self._rw_str_ends_with,
+        }
+        if call.callee in direct:
+            fn = direct[call.callee]
             args = [self._emit_expr(a, ctx) for a in call.args]
             return ctx.builder.call(fn, args)
         if call.callee == "str_to_int":

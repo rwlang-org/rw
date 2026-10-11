@@ -1,0 +1,28 @@
+def show(xs: List[string]) -> int:
+    print(str(len(xs)) + ": [" + str_join(xs, "|") + "]")
+    return 0
+
+def main() -> int:
+    show(str_split("a,b,c", ","))
+    show(str_split("a,,b,", ","))
+    show(str_split("key: value: more", ": "))
+    show(str_split("no-sep", ","))
+    show(str_split("", ","))
+    show(str_split("abc", ""))
+    print(str_join(str_split("x y z", " "), ", "))
+    empty: List[string] = list_new()
+    print("[" + str_join(empty, ",") + "]")
+    print("[" + str_strip("  \t hello world \r\n") + "]")
+    print("[" + str_strip("   ") + "]")
+    print(str_replace("a-b-c", "-", "+"))
+    print(str_replace("aaaa", "aa", "b"))
+    print(str_replace("hello", "l", ""))
+    print(str_replace("hello", "", "x"))
+    print(str_replace("hello", "z", "x"))
+    print(str_lower("Hello, WORLD 123"))
+    print(str_upper("Hello, world 123"))
+    if str_contains("Content-Type", "Type") and not str_contains("abc", "d"):
+        print("contains ok")
+    if str_ends_with("index.html", ".html") and not str_ends_with("a", "ab") and str_ends_with("x", ""):
+        print("ends_with ok")
+    return 0

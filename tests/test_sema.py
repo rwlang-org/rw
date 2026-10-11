@@ -1868,3 +1868,30 @@ def test_conversions_ok():
 def test_conversion_errors(expr, msg):
     e = err(f"def main() -> int:\n    print({expr})\n    return 0\n")
     assert msg in e.diagnostic.message
+
+
+# ----- string builtins (spec 28) -----
+
+def test_string_builtins_ok():
+    check(
+        "def main() -> int:\n"
+        '    parts: List[string] = str_split("a,b", ",")\n'
+        '    s: string = str_join(parts, "-") + str_strip("  x ") + str_replace("aa", "a", "b")\n'
+        "    s = str_lower(s) + str_upper(s)\n"
+        '    b: bool = str_contains(s, "x") and str_ends_with(s, "X")\n'
+        "    return len(parts)\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "expr, msg",
+    [
+        ('str_split("a")', "str_split takes 2 arguments"),
+        ('str_join("a", ",")', "str_join argument 1 must be List[string]"),
+        ("str_lower(1)", "str_lower argument 1 must be string"),
+        ('str_replace("a", "b")', "str_replace takes 3 arguments"),
+    ],
+)
+def test_string_builtin_errors(expr, msg):
+    e = err(f"def main() -> int:\n    print(len({expr}))\n    return 0\n")
+    assert msg in e.diagnostic.message
