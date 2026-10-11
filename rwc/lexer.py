@@ -86,6 +86,15 @@ class TokenKind(Enum):
     DOT = auto()  # . (qualified call: module.func)
     ARROW = auto()  # ->
     ASSIGN = auto()  # =
+    # Compound assignment (spec 27).
+    PLUS_ASSIGN = auto()     # +=
+    MINUS_ASSIGN = auto()    # -=
+    STAR_ASSIGN = auto()     # *=
+    SLASH_ASSIGN = auto()    # /=
+    PERCENT_ASSIGN = auto()  # %=
+    AMP_ASSIGN = auto()      # &=
+    PIPE_ASSIGN = auto()     # |=
+    CARET_ASSIGN = auto()    # ^=
     PLUS = auto()
     MINUS = auto()
     STAR = auto()
@@ -444,6 +453,14 @@ class Lexer:
             ">=": TokenKind.GE,
             "<<": TokenKind.LSHIFT,
             ">>": TokenKind.RSHIFT,
+            "+=": TokenKind.PLUS_ASSIGN,
+            "-=": TokenKind.MINUS_ASSIGN,
+            "*=": TokenKind.STAR_ASSIGN,
+            "/=": TokenKind.SLASH_ASSIGN,
+            "%=": TokenKind.PERCENT_ASSIGN,
+            "&=": TokenKind.AMP_ASSIGN,
+            "|=": TokenKind.PIPE_ASSIGN,
+            "^=": TokenKind.CARET_ASSIGN,
         }
         one_char = {
             "(": TokenKind.LPAREN,

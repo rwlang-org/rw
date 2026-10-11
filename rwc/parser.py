@@ -381,6 +381,19 @@ class Parser:
                 return self.parse_var_decl()
             if nxt == TokenKind.ASSIGN:
                 return self.parse_assign()
+            if nxt in self._COMPOUND_OPS:
+                # `x OP= e` -> `x = x OP e` (spec 27).
+                name_tok = self.eat(TokenKind.IDENT)
+                op = self._COMPOUND_OPS[self.cur.kind]
+                self.i += 1
+                value = self.parse_expr()
+                self.eat(TokenKind.NEWLINE)
+                target = A.Name(name_tok.value, name_tok.line, name_tok.col)
+                return A.Assign(
+                    name_tok.value,
+                    A.BinOp(op, target, value, name_tok.line, name_tok.col),
+                    name_tok.line, name_tok.col,
+                )
         # else: expression statement
         return self.parse_expr_stmt()
 
@@ -619,6 +632,18 @@ class Parser:
             kw.line, kw.col,
         )
 
+    # Compound assignment operator token -> the binary operator (spec 27).
+    _COMPOUND_OPS = {
+        TokenKind.PLUS_ASSIGN: "+",
+        TokenKind.MINUS_ASSIGN: "-",
+        TokenKind.STAR_ASSIGN: "*",
+        TokenKind.SLASH_ASSIGN: "/",
+        TokenKind.PERCENT_ASSIGN: "%",
+        TokenKind.AMP_ASSIGN: "&",
+        TokenKind.PIPE_ASSIGN: "|",
+        TokenKind.CARET_ASSIGN: "^",
+    }
+
     def parse_var_decl(self) -> A.VarDecl:
         name_tok = self.eat(TokenKind.IDENT)
         self.eat(TokenKind.COLON)
@@ -635,9 +660,33 @@ class Parser:
         self.eat(TokenKind.NEWLINE)
         return A.Assign(name_tok.value, value, name_tok.line, name_tok.col)
 
+    @staticmethod
+    def _is_plain_path(e: A.Expr) -> bool:
+        """A name, or field accesses on a name (no calls)."""
+        while isinstance(e, A.FieldAccess):
+            e = e.obj
+        return isinstance(e, A.Name)
+
     def parse_expr_stmt(self) -> A.Stmt:
         t = self.cur
         expr = self.parse_expr()
+        if self.cur.kind in self._COMPOUND_OPS:
+            # `a.b.f OP= e` -> `a.b.f = a.b.f OP e` (spec 27). The record path
+            # is evaluated twice, so it may only be names and field accesses.
+            if not isinstance(expr, A.FieldAccess) or not self._is_plain_path(expr.obj):
+                raise ParserError(
+                    "invalid compound assignment target", t.line, t.col, max(1, len(t.value)),
+                )
+            op = self._COMPOUND_OPS[self.cur.kind]
+            self.i += 1
+            value = self.parse_expr()
+            self.eat(TokenKind.NEWLINE)
+            current = A.FieldAccess(expr.obj, expr.field, expr.line, expr.col)
+            return A.FieldAssign(
+                expr.obj, expr.field,
+                A.BinOp(op, current, value, expr.line, expr.col),
+                expr.line, expr.col,
+            )
         if self.cur.kind == TokenKind.ASSIGN:
             # `obj.field = value` (spec 20): the only assignable expression.
             if not isinstance(expr, A.FieldAccess):
