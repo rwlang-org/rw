@@ -1,78 +1,83 @@
-# rw List[int] 型 (immutable, モノモーフ, echo 最小セット)
+# rw List[int] type (immutable, monomorphic, minimal echo set)
 
 ## Context
 
-本サブプロジェクトが想定する「現代の rw 言語」とは、コンパイラ・ランタイム・
-サンプルプログラム・テストが一体となって育っていく、書き手と実装者が同じ
-ループの中にいる小さな言語です。
+The "modern rw language" that this sub-project assumes is a small language in
+which the compiler, runtime, sample programs, and tests grow together as one,
+with the language user and the implementer inside the same loop.
 
-現実の進化はさまざまです。本来なら言語仕様を凍結してからコンパイラを書く
-やり方もあれば、最小ランタイムから出発して言語機能を徐々に積み上げていく
-やり方もあります。さらに、型システムを先に設計して評価器を後から付ける
-ようなアカデミックなアプローチも存在します。ただし、すべての言語実装が
-それらの「正しい」順序を踏んでいるわけではありません。
+Real-world evolution takes many forms. One way is to freeze the language
+specification and then write the compiler; another is to start from a minimal
+runtime and gradually stack up language features. There is even an academic
+approach that designs the type system first and bolts on the evaluator later.
+That said, not every language implementation follows one of those "correct"
+orderings.
 
-しかし方針の違いにかかわらず、新しい型を入れる、組込み関数を増やす、
-ランタイムに ABI を追加するといった作業は、現代の言語実装では必ず
-組み合わさって発生し、その接続部分に固有の複雑性が生まれます。
+Regardless of the chosen approach, however, tasks such as adding a new type,
+adding more built-in functions, or adding an ABI to the runtime inevitably
+combine in a modern language implementation, and their connection points give
+rise to complexity of their own.
 
-本仕様では、その複雑性の源泉を次の 3 つに整理します。まず **コンテナ型を
-言語にどう持ち込むかという問題そのもの**、次に **既存型 (string / Bytes /
-Future) との相互運用**、最後に **「ジェネリックは本当に必要か」を毎回
-問い直す段階的拡張の判断**です。
+This specification organizes the sources of that complexity into the following
+three. First, **the problem of how to bring a container type into the language
+in the first place**; next, **interoperation with existing types (string /
+Bytes / Future)**; and finally, **the judgment of incremental extension that
+re-asks "do we really need generics?" every time**.
 
-これまでに rw 言語に入れたプリミティブは:
+The primitives put into the rw language so far are:
 
 - `string` + `len` / `==` / `+` (#91)
-- `Bytes` + `len` / `==` / 相互変換 (#92)
+- `Bytes` + `len` / `==` / conversions (#92)
 
-`List[T]` は **本物のジェネリック型** だが、ロードマップの今段階で目的とする
-echo server に必要なのは「クライアント fd の配列を保持する」だけ。
-そのために **`List[int]` 1 種類だけ** を入れる。
+`List[T]` is a **true generic type**, but at this stage of the roadmap the echo
+server we are targeting only needs to "hold an array of client fds." For that,
+we introduce **only the single type `List[int]`**.
 
-将来の `List[string]` / `List[Bytes]` / 汎用 `List[T]` への拡張パスは残すが、
-今回は **言語にジェネリック構文を導入しない**。`List[int]` を 1 つの
-プリミティブ型として扱い、`int` 以外の型パラメータは parser でエラーにする。
+We keep the path open for future extension to `List[string]` / `List[Bytes]` /
+generic `List[T]`, but for now we **do not introduce generic syntax into the
+language**. We treat `List[int]` as one primitive type, and any type parameter
+other than `int` is turned into a parser error.
 
-ロードマップ:
+Roadmap:
 
-1. 文字列 `len` / `==` / `+` (済)
-2. Bytes 型 (済)
-3. **このサブプロジェクト**: List[int] 最小 API
+1. String `len` / `==` / `+` (done)
+2. Bytes type (done)
+3. **this sub-project**: minimal List[int] API
 4. Result[T, E] / Option[T]
 5. netpoller + TCP API
 
 ## Goals
 
-- 新しいプリミティブ型 `List[int]` を導入 (`Future[T]` と同様、parser が
-  `List` の後の `[int]` を要求する固定形)
-- 4 つの組込み:
+- Introduce a new primitive type `List[int]` (a fixed form in which, like
+  `Future[T]`, the parser requires `[int]` after `List`)
+- Four built-ins:
   - `list_new() -> List[int]`
-  - `list_push(l: List[int], v: int) -> List[int]` (新しい List を返す)
+  - `list_push(l: List[int], v: int) -> List[int]` (returns a new List)
   - `list_at(l: List[int], i: int) -> int`
-  - `len(l: List[int]) -> int` (既存 `len` をオーバーロード)
-- 公開 ABI 既存部分は不変
-- echo server で fd 配列を扱える状態にする
+  - `len(l: List[int]) -> int` (overloads the existing `len`)
+- The existing public ABI stays unchanged
+- Get to a state where the echo server can handle an fd array
 
 ## Non-Goals
 
-- 汎用 `List[T]` (T が int 以外): parser で「only `List[int]` is supported」
-  エラー
-- `Future[List[int]]` (= `spawn fn() -> List[int]`): Sema で禁止
-- mutable list (push が in-place で副作用): 値型 immutable のみ
+- Generic `List[T]` (T other than int): a "only `List[int]` is supported"
+  error in the parser
+- `Future[List[int]]` (= `spawn fn() -> List[int]`): forbidden in Sema
+- mutable list (push with in-place side effects): value-type, immutable only
 - `list_pop` / `list_remove` / `list_slice` / `list_concat` / `list_eq` /
-  `list_set` (要素更新)
-- `for x in l` のイテレーション構文
-- 範囲外アクセスを言語レベルで表現 (= `Result[int, IndexError]` 等は
-  まだ無いので、当面 `rw_list_int_at` は範囲外で `abort()`)
-- `print(l)` (debug 用に便利かもしれないが、`print` の挙動定義を
-  オーバーロードで広げる作業を今回は避ける)
+  `list_set` (element update)
+- `for x in l` iteration syntax
+- Expressing out-of-range access at the language level (= there is still no
+  `Result[int, IndexError]` etc., so for now `rw_list_int_at` calls `abort()`
+  on out-of-range)
+- `print(l)` (it might be handy for debugging, but we avoid the work of
+  widening the definition of `print`'s behavior via overloading this time)
 
-## 設計
+## Design
 
-### 内部表現
+### Internal representation
 
-`List[int]` は 3 ワード fat struct:
+`List[int]` is a 3-word fat struct:
 
 ```c
 typedef struct {
@@ -88,34 +93,35 @@ LLVM IR:
 %rw_list_int = { i64 len, i64 cap, i64* data }
 ```
 
-3 ワードを SSA 値としてそのまま渡し回す (Bytes/string が `{len, ptr}` 2 ワード
-fat struct なのと同じ流儀)。`Future[List[int]]` で `i8*` 経由の引き渡しを
-する必要がない (今回 non-goal)。
+We pass the 3 words around directly as an SSA value (the same style as Bytes /
+string being a `{len, ptr}` 2-word fat struct). There is no need to pass it via
+`i8*` through `Future[List[int]]` (a non-goal this time).
 
-### 不変性の取り扱い
+### Handling immutability
 
-`list_push` のたびに **新しい `data` 配列を malloc し、要素を全部 memcpy** し、
-末尾に新しい値を足し、新しい `{len+1, new_cap, new_data}` を返す。
-古い `data` は free しない (= 他の SSA がまだ参照しているかもしれない、
-**リーク許容**)。Push 計算量は O(n) だが、echo server スケール (fd 数 1024
-程度) では問題なし。
+On every `list_push`, we **malloc a new `data` array and memcpy all the
+elements**, append the new value at the end, and return a new
+`{len+1, new_cap, new_data}`. We do not free the old `data` (= another SSA might
+still be referencing it, **leak allowed**). Push is O(n), but at echo-server
+scale (around 1024 fds) that is no problem.
 
-シェアリングしないので、コードの読み手は「`l2 = list_push(l1, x)` の後でも
-`l1` は変わらない」と即断できる。これは Bytes/string と同じ「fat pointer 値型」
-モデルの自然な拡張。
+Because there is no sharing, a reader of the code can immediately conclude that
+"after `l2 = list_push(l1, x)`, `l1` is unchanged." This is a natural extension
+of the same "fat pointer value type" model used by Bytes / string.
 
-### 容量拡張ポリシー
+### Capacity growth policy
 
-毎回新しい配列を確保するので「ポリシー」は実質「初回は 4 個分、以降 2 倍」:
+Since we allocate a new array every time, the "policy" is effectively "4
+elements the first time, then double":
 
 ```c
 int64_t new_cap = (l.cap == 0) ? 4 : l.cap * 2;
 while (new_cap < l.len + 1) new_cap *= 2;
 ```
 
-`l.len + 1 <= new_cap` を保証して `malloc(new_cap * 8)` する。
+We guarantee `l.len + 1 <= new_cap` and then `malloc(new_cap * 8)`.
 
-### 言語レベルから見た挙動
+### Behavior as seen from the language level
 
 ```rw
 def main() -> int:
@@ -129,7 +135,7 @@ def main() -> int:
     return 0
 ```
 
-エラーになるケース:
+Cases that become errors:
 
 ```rw
 def main() -> int:
@@ -144,11 +150,12 @@ def main() -> int:
     return 0
 ```
 
-### コンポーネント別の変更
+### Changes by component
 
-#### ランタイム (`runtime/runtime.h`, `runtime/runtime.c`)
+#### Runtime (`runtime/runtime.h`, `runtime/runtime.c`)
 
-公開構造体 `rw_list_int` と 4 関数を追加 (string ops と同じスタイル):
+Add the public struct `rw_list_int` and 4 functions (same style as the string
+ops):
 
 ```c
 typedef struct {
@@ -163,14 +170,17 @@ int64_t      rw_list_int_at  (rw_list_int l, int64_t i);
 int64_t      rw_list_int_len (rw_list_int l);
 ```
 
-実装:
+Implementation:
 
-- `_new`: `{0, 0, NULL}` を返す。
-- `_push`: 上記の容量拡張ポリシーで malloc、`memcpy(new_data, l.data, l.len * 8)`、
-  `new_data[l.len] = v`、`{l.len+1, new_cap, new_data}` を返す。
-- `_at`: `i < 0 || i >= l.len` なら `fputs("rw: list_at: index out of bounds\n", stderr); abort();`。
-  範囲内なら `l.data[i]` を返す。
-- `_len`: `l.len` を返す (irgen の単純化用、`len(l)` の呼び先)。
+- `_new`: returns `{0, 0, NULL}`.
+- `_push`: malloc using the capacity growth policy above,
+  `memcpy(new_data, l.data, l.len * 8)`, `new_data[l.len] = v`, return
+  `{l.len+1, new_cap, new_data}`.
+- `_at`: if `i < 0 || i >= l.len`, do
+  `fputs("rw: list_at: index out of bounds\n", stderr); abort();`. If in range,
+  return `l.data[i]`.
+- `_len`: returns `l.len` (for irgen simplification; the call target of
+  `len(l)`).
 
 #### `rwc/types.py`
 
@@ -178,21 +188,22 @@ int64_t      rw_list_int_len (rw_list_int l);
 LIST_INT = _Primitive("List[int]")
 ```
 
-`is_printable` / `is_numeric` には含めない。
+Do not include it in `is_printable` / `is_numeric`.
 
 #### `rwc/lexer.py`
 
-変更なし。`List` は既存 `Future` と同じく **キーワードにせず、parser が
-IDENT として処理**する手もあったが、`Future` は実際は `KW_FUTURE` キーワード
-扱いになっている。同じくしたい。
+No change. We could have kept `List` **not a keyword and had the parser handle
+it as an IDENT**, just like the existing `Future`, but `Future` is in fact
+treated as a `KW_FUTURE` keyword. We want to do the same.
 
-→ **`KW_LIST = auto()` を追加し、`KEYWORDS["List"] = KW_LIST`**。
-spec 提案では parser で IDENT 扱いと書いたが、`Future` との一貫性のため
-キーワード化する (1 行で済む)。
+→ **Add `KW_LIST = auto()` and `KEYWORDS["List"] = KW_LIST`**. The spec proposal
+said the parser would treat it as IDENT, but for consistency with `Future` we
+make it a keyword (it takes just one line).
 
 #### `rwc/parser.py`
 
-`parse_type` で `Future` を処理する分岐の **直下** に `List` 用の分岐を追加:
+Add a branch for `List` **directly below** the branch in `parse_type` that
+handles `Future`:
 
 ```python
 if t.kind == TokenKind.KW_LIST:
@@ -209,93 +220,96 @@ if t.kind == TokenKind.KW_LIST:
     return A.TypeName("List[int]", t.line, t.col)
 ```
 
-AST には既存 `A.TypeName` をそのまま使う (名前 `"List[int]"`)。新しい AST
-ノードは不要。
+Reuse the existing `A.TypeName` as-is for the AST (name `"List[int]"`). No new
+AST node is needed.
 
 #### `rwc/sema.py`
 
-3 ヶ所:
+Three places:
 
-1. `_resolve_type` の dict に `"List[int]": T.LIST_INT` を追加。
-2. `_check_call` で `len` ハンドラを `T.LIST_INT` も許可するよう拡張。さらに
-   3 つの組込みを追加:
+1. Add `"List[int]": T.LIST_INT` to the dict in `_resolve_type`.
+2. In `_check_call`, extend the `len` handler to also allow `T.LIST_INT`.
+   Additionally add the 3 built-ins:
    - `list_new()` arity 0, returns `T.LIST_INT`
    - `list_push(List[int], int)` arity 2, returns `T.LIST_INT`
    - `list_at(List[int], int)` arity 2, returns `T.INT`
-3. SpawnExpr の禁止リストに `list_new` / `list_push` / `list_at` を追加。
+3. Add `list_new` / `list_push` / `list_at` to the SpawnExpr forbidden list.
 
 #### `rwc/irgen.py`
 
-- `RW_LIST_INT_TY` の定数を `RW_STR_TY` と同じレベルで定義:
+- Define the `RW_LIST_INT_TY` constant at the same level as `RW_STR_TY`:
   ```python
   RW_LIST_INT_TY = ir.LiteralStructType([I64, I64, I64.as_pointer()])
   ```
-- `llvm_type_of(T.LIST_INT) -> RW_LIST_INT_TY`。
-- `_declare_runtime` で 4 外部関数を宣言:
+- `llvm_type_of(T.LIST_INT) -> RW_LIST_INT_TY`.
+- Declare the 4 external functions in `_declare_runtime`:
   ```python
   self._rw_list_int_new  = ir.Function(m, ir.FunctionType(RW_LIST_INT_TY, []), "rw_list_int_new")
   self._rw_list_int_push = ir.Function(m, ir.FunctionType(RW_LIST_INT_TY, [RW_LIST_INT_TY, I64]), "rw_list_int_push")
   self._rw_list_int_at   = ir.Function(m, ir.FunctionType(I64, [RW_LIST_INT_TY, I64]), "rw_list_int_at")
   self._rw_list_int_len  = ir.Function(m, ir.FunctionType(I64, [RW_LIST_INT_TY]), "rw_list_int_len")
   ```
-- `_emit_call` で 3 つの組込み + `len(List[int])` を扱う。`len` は Sema で
-  渡された引数の型 (`self.sema.expr_types[id(call.args[0])]`) を見て
-  `T.LIST_INT` なら `rw_list_int_len` を、`T.STRING` / `T.BYTES` なら従来の
-  `rw_str_len` を呼ぶ。
-- `_decl_spawn` / `_decl_await` には `T.LIST_INT` を**追加しない** (= 渡された
-  場合は `RuntimeError`、ただし Sema が既に弾いているのでここに到達しない)。
+- Handle the 3 built-ins + `len(List[int])` in `_emit_call`. For `len`, look at
+  the argument type passed from Sema (`self.sema.expr_types[id(call.args[0])]`);
+  if it is `T.LIST_INT`, call `rw_list_int_len`, and if it is `T.STRING` /
+  `T.BYTES`, call the existing `rw_str_len`.
+- Do **not** add `T.LIST_INT` to `_decl_spawn` / `_decl_await` (= if passed, it
+  is a `RuntimeError`, but since Sema already rejects it, this point is never
+  reached).
 
-### ランタイムでの List[int] 値の引き渡し
+### Passing List[int] values in the runtime
 
-ABI 上、`{i64, i64, i64*}` の fat struct を C コードに値渡しする。アーキ別の
-calling convention:
-- aarch64 (Apple/Linux ARM64): struct が 16 バイト以下なら xN レジスタで渡す。
-  3 ワード (24 バイト) は **メモリ経由** で渡される (SysV AArch64 AAPCS では
-  HFA 規則の外なので通常はスタックまたは hidden pointer)。
-- x86_64 SysV: struct が 16 バイト超 → メモリ経由。
+At the ABI level, we pass a `{i64, i64, i64*}` fat struct to C code by value.
+Calling conventions differ by architecture:
+- aarch64 (Apple/Linux ARM64): a struct of 16 bytes or less is passed in xN
+  registers. 3 words (24 bytes) is passed **via memory** (under the SysV
+  AArch64 AAPCS it falls outside the HFA rules, so it normally goes on the stack
+  or via a hidden pointer).
+- x86_64 SysV: a struct larger than 16 bytes → passed via memory.
 
-clang は自動的に正しい convention を選ぶので、rwc が IR で `{i64, i64, i64*}`
-を引き渡すだけで OK。llvmlite は LLVM が ABI を解決する形のままで動く。
+clang picks the correct convention automatically, so rwc just needs to pass
+`{i64, i64, i64*}` through in the IR and it is OK. llvmlite works as-is with
+LLVM resolving the ABI.
 
-### スレッド安全性
+### Thread safety
 
-`rw_list_int_push` 単体は副作用 (`malloc` + `memcpy`) のみで、`l` を mutate
-しない。並行に同じ `l` を push しても両方が独立した新しい List を作る (= 元
-の `l` を共有して読むだけ)。問題なし。
+`rw_list_int_push` on its own only has side effects (`malloc` + `memcpy`) and
+does not mutate `l`. Even if the same `l` is pushed concurrently, both create
+independent new Lists (= they only share and read the original `l`). No problem.
 
-`l.data` の free は **しない** ので、別 fiber が古い data を read している
-最中に GC で free される事故は起こりえない (リーク許容の代償)。
+Because `l.data` is **never freed**, there is no risk of it being freed by GC
+while another fiber is reading the old data (the price of allowing leaks).
 
-## ファイル別変更
+## Changes by file
 
-### 変更
+### Changed
 
-- `runtime/runtime.h` — `rw_list_int` struct と 4 プロトタイプ
-- `runtime/runtime.c` — 4 関数実装
+- `runtime/runtime.h` — the `rw_list_int` struct and 4 prototypes
+- `runtime/runtime.c` — the 4 function implementations
 - `rwc/types.py` — `LIST_INT = _Primitive("List[int]")`
 - `rwc/lexer.py` — `KW_LIST` + `KEYWORDS["List"]`
-- `rwc/parser.py` — `parse_type` の Future 分岐の隣に List 分岐
-- `rwc/sema.py` — `_resolve_type` / `_check_call` (3 組込み + len) / SpawnExpr
-  禁止リスト 3 件
+- `rwc/parser.py` — a List branch next to the Future branch in `parse_type`
+- `rwc/sema.py` — `_resolve_type` / `_check_call` (3 built-ins + len) / 3
+  entries in the SpawnExpr forbidden list
 - `rwc/irgen.py` — `RW_LIST_INT_TY` / `llvm_type_of` / `_declare_runtime` /
   `_emit_call`
 - `tests/test_sema.py` — positive 4 + negative 7
-- `tests/test_e2e.py` — parametrize に `list_basic` を追加
+- `tests/test_e2e.py` — add `list_basic` to the parametrize
 - `.gitignore` — `runtime/fiber/test_list_int`
 
-### 新規
+### New
 
-- `runtime/fiber/test_list_int.c` — C 単体テスト
+- `runtime/fiber/test_list_int.c` — C unit test
 - `examples/list_basic.rw` + `.expected`
 
-### 変更なし
+### Unchanged
 
-- fiber 関連 (`runtime/fiber/sched.c` 等)、driver、`docs/specs/05`〜`08`
+- fiber-related (`runtime/fiber/sched.c` etc.), driver, `docs/specs/05`–`08`
 
-## 検証
+## Verification
 
 ```sh
-# ランタイム単体
+# runtime unit
 make -C runtime clean && make -C runtime
 cd runtime
 cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_list_int.c librw.a -o fiber/test_list_int
@@ -304,37 +318,39 @@ cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_list_int.c librw
 # pytest
 cd ..
 uv run pytest -q
-# 期待: 既存 87 + sema positive 4 + sema negative 7 + e2e 1 = 99 件全緑
+# expected: existing 87 + sema positive 4 + sema negative 7 + e2e 1 = 99 all green
 
-# 単独実行
+# standalone run
 uv run rwc run examples/list_basic.rw
 
-# 既存 example 回帰
+# existing example regression
 uv run rwc run examples/string_ops.rw
 uv run rwc run examples/bytes_basic.rw
 uv run rwc run examples/spawn_many.rw
 ```
 
-## コミット構成
+## Commit structure
 
 4 commits:
 
-1. **runtime**: `rw_list_int` 構造と 4 helper、`test_list_int.c` で単体テスト
-2. **rwc (lexer/parser/types)**: `KW_LIST`、`parse_type` の List 分岐、
-   `T.LIST_INT`、`_resolve_type` の dict 更新。型注釈だけ parse + resolve
-   できる状態 (Sema/irgen はまだ未対応で `list_*` 呼び出しはエラーになる)
-3. **rwc (sema + irgen)**: 4 組込みの Sema 検証、`len` のオーバーロード拡張、
-   irgen で IR 生成、negative テスト一括
-4. **examples + e2e**: `list_basic.rw` 追加と `tests/test_e2e.py` の
-   parametrize 更新
+1. **runtime**: the `rw_list_int` struct and 4 helpers, unit-tested with
+   `test_list_int.c`
+2. **rwc (lexer/parser/types)**: `KW_LIST`, the List branch in `parse_type`,
+   `T.LIST_INT`, updating the `_resolve_type` dict. A state where only the type
+   annotation can be parsed + resolved (Sema/irgen not yet supported, so
+   `list_*` calls error out)
+3. **rwc (sema + irgen)**: Sema validation for the 4 built-ins, the `len`
+   overload extension, IR generation in irgen, negative tests in one batch
+4. **examples + e2e**: add `list_basic.rw` and update the parametrize in
+   `tests/test_e2e.py`
 
-## リスクと対処
+## Risks and mitigations
 
-| リスク | 対処 |
+| Risk | Mitigation |
 |---|---|
-| `List` が既存の変数名 / 関数名と競合 | `grep -rE '\bList\b' examples/ tests/` で確認済み (該当なし)。`List` を新キーワードにすると、ユーザが `List` という識別子を使えなくなるが、`Future` と同じ扱いなので問題なし |
-| `list_at` の範囲外で abort するのは粗い | 本来 `Result[int, IndexError]` で返したいが Result 型未実装。spec の non-goals に明記、netpoller 後に Result を入れたら戻す |
-| 同じ `l` を 2 つの fiber が push しても安全か | `_push` は `l` を読むだけで mutate しないので並行 push 安全。両者が異なる新 List を返す (= シェアできない、broadcast like の用途には別 API が要る) |
-| `Future[List[int]]` を将来入れる時の互換性 | Sema が今は禁止しているので、後で `_decl_spawn` / `_decl_await` に LIST_INT を追加するだけで済む (struct を新 spawn helper で受け渡しする ABI 設計が要るが、別 PR) |
-| `cap` 拡張で 2^63 オーバーフロー | echo server スケールではあり得ない。実装上 `new_cap` は `int64_t`、`l.len + 1` チェックも `int64_t` で行うが、overflow 検査は省略 (rw は学習用) |
-| `int` 以外の List を書こうとしたユーザへの導線 | parser のエラーメッセージを「only `List[int]` is supported in this version of rw」と明示。誤って `List[string]` 等を書いた場合に意図が伝わる |
+| `List` clashes with an existing variable / function name | Confirmed with `grep -rE '\bList\b' examples/ tests/` (no hits). Making `List` a new keyword means a user can no longer use `List` as an identifier, but since it is treated the same as `Future`, this is no problem |
+| Aborting on out-of-range in `list_at` is crude | Ideally we would return `Result[int, IndexError]`, but the Result type is not implemented. Noted in the spec non-goals; revisit once Result is introduced after netpoller |
+| Is it safe if two fibers push the same `l`? | `_push` only reads `l` and does not mutate it, so concurrent push is safe. Both return distinct new Lists (= they cannot be shared; a broadcast-like use needs a separate API) |
+| Compatibility when introducing `Future[List[int]]` in the future | Sema forbids it for now, so later it is enough to add LIST_INT to `_decl_spawn` / `_decl_await` (an ABI design that hands off the struct via a new spawn helper is needed, but that is a separate PR) |
+| 2^63 overflow in `cap` growth | Impossible at echo-server scale. In the implementation `new_cap` is `int64_t` and the `l.len + 1` check is done in `int64_t` too, but the overflow check is omitted (rw is for learning) |
+| Guidance for users who try to write a List other than `int` | The parser error message makes it explicit: "only `List[int]` is supported in this version of rw". If someone mistakenly writes `List[string]` etc., the intent gets across |

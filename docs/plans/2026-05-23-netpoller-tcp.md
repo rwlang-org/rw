@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** rw 言語に最小 TCP API (`tcp_listen` / `tcp_accept` / `tcp_read` / `tcp_write` / `tcp_close`) と、それを支える netpoller (kqueue/epoll) を追加し、`examples/tcp_echo.rw` が動く状態にする。
+**Goal:** Add a minimal TCP API (`tcp_listen` / `tcp_accept` / `tcp_read` / `tcp_write` / `tcp_close`) to the rw language, along with the netpoller (kqueue/epoll) that backs it, so that `examples/tcp_echo.rw` runs.
 
-**Architecture:** 専用 netpoller pthread を 1 つ用意し、`kevent` / `epoll_wait` で fd readiness を ONESHOT モードで監視。fiber が `tcp_read` 等で EAGAIN を受けたら `rw_net_park_read(fd)` で netpoller に登録し WAITING、netpoller スレッドが ready 検知時に `enqueue_ready(fiber)` で起こす。main thread は fiber じゃないので `tcp_accept` を呼ぶと blocking accept で kernel sleep、worker M / netpoller は別 thread なので並行進行。
+**Architecture:** Run a single dedicated netpoller pthread that watches fd readiness in ONESHOT mode via `kevent` / `epoll_wait`. When a fiber gets EAGAIN from `tcp_read` and friends, it registers with the netpoller through `rw_net_park_read(fd)` and enters WAITING; when the netpoller thread detects readiness it wakes the fiber via `enqueue_ready(fiber)`. The main thread is not a fiber, so calling `tcp_accept` there does a blocking accept and the main thread sleeps in the kernel; the worker M's and the netpoller run on separate threads, so work proceeds concurrently.
 
-**Tech Stack:** C11 (ランタイム、kqueue on macOS / epoll on Linux)、Python 3.12 + llvmlite (コンパイラ)、pytest (テスト)。
+**Tech Stack:** C11 (runtime; kqueue on macOS / epoll on Linux), Python 3.12 + llvmlite (compiler), pytest (tests).
 
 **Spec:** `docs/specs/12-netpoller-tcp.md`
 
@@ -16,39 +16,39 @@
 
 | File | Responsibility | Action |
 |---|---|---|
-| `runtime/net/netpoller.h` | netpoller 共通 API | 新規 |
-| `runtime/net/netpoller.c` | init / shutdown / park / 共通ロジック | 新規 |
-| `runtime/net/netpoller_kqueue.c` | macOS 固有 (kevent) | 新規 |
-| `runtime/net/netpoller_epoll.c` | Linux 固有 (epoll) | 新規 |
-| `runtime/net/tcp.h` | TCP helper 宣言 | 新規 |
-| `runtime/net/tcp.c` | TCP helper 実装 | 新規 |
-| `runtime/runtime.h` | 5 つの tcp_* + 2 つの park プロトタイプ | 追加 |
-| `runtime/runtime.c` | `rw_init` / `rw_shutdown` で netpoller 呼び出し | 変更 |
-| `runtime/Makefile` | net/*.o + uname 分岐 | 変更 |
-| `runtime/fiber/sched.h` | netpoller 向け sched API export | 変更 |
-| `runtime/fiber/sched.c` | `rw_sched_enqueue_ready` / `rw_sched_current_fiber` を export | 変更 |
-| `runtime/fiber/test_netpoller_pipe.c` | C 単体テスト (pipe) | 新規 |
-| `runtime/fiber/test_tcp_loopback.c` | C 単体テスト (localhost) | 新規 |
-| `.gitignore` | test バイナリ無視 | 追加 |
-| `rwc/sema.py` | 5 組込み + spawn 禁止 | 変更 |
-| `rwc/irgen.py` | 5 組込み emit | 変更 |
-| `tests/test_sema.py` | positive 5 + negative 5 | 追加 |
-| `tests/test_e2e_tcp.py` | Python から socket で echo を検証 | 新規 |
-| `examples/tcp_echo.rw` | echo server デモ | 新規 |
+| `runtime/net/netpoller.h` | Shared netpoller API | New |
+| `runtime/net/netpoller.c` | init / shutdown / park / shared logic | New |
+| `runtime/net/netpoller_kqueue.c` | macOS-specific (kevent) | New |
+| `runtime/net/netpoller_epoll.c` | Linux-specific (epoll) | New |
+| `runtime/net/tcp.h` | TCP helper declarations | New |
+| `runtime/net/tcp.c` | TCP helper implementation | New |
+| `runtime/runtime.h` | The five tcp_* + two park prototypes | Add |
+| `runtime/runtime.c` | Call the netpoller from `rw_init` / `rw_shutdown` | Modify |
+| `runtime/Makefile` | net/*.o + uname branching | Modify |
+| `runtime/fiber/sched.h` | Export sched API for the netpoller | Modify |
+| `runtime/fiber/sched.c` | Export `rw_sched_enqueue_ready` / `rw_sched_current_fiber` | Modify |
+| `runtime/fiber/test_netpoller_pipe.c` | C unit test (pipe) | New |
+| `runtime/fiber/test_tcp_loopback.c` | C unit test (localhost) | New |
+| `.gitignore` | Ignore test binaries | Add |
+| `rwc/sema.py` | Five builtins + spawn prohibition | Modify |
+| `rwc/irgen.py` | Emit the five builtins | Modify |
+| `tests/test_sema.py` | 5 positive + 5 negative | Add |
+| `tests/test_e2e_tcp.py` | Verify echo over a socket from Python | New |
+| `examples/tcp_echo.rw` | Echo server demo | New |
 
 ---
 
-## Task 1: sched API を netpoller 向けに export
+## Task 1: Export the sched API for the netpoller
 
-netpoller スレッドから fiber を起こすため、sched.c の `enqueue_ready` と `tls_m->current` を外部に公開する。
+So the netpoller thread can wake fibers, expose sched.c's `enqueue_ready` and `tls_m->current` externally.
 
 **Files:**
 - Modify: `runtime/fiber/sched.h`
 - Modify: `runtime/fiber/sched.c`
 
-- [ ] **Step 1.1: `runtime/fiber/sched.h` に新 API を追加**
+- [ ] **Step 1.1: Add the new API to `runtime/fiber/sched.h`**
 
-ファイル末尾の `#ifdef __cplusplus ... #endif` の **直前** に追加:
+Add it **immediately before** the trailing `#ifdef __cplusplus ... #endif` at the end of the file:
 
 ```c
 /* ---- Exported for the netpoller (runtime/net/netpoller.c) ---- */
@@ -62,9 +62,9 @@ void rw_sched_enqueue_ready(rw_fiber_handle *h);
 rw_fiber_handle *rw_sched_current_fiber(void);
 ```
 
-- [ ] **Step 1.2: `runtime/fiber/sched.c` に export 関数を追加**
+- [ ] **Step 1.2: Add the export functions to `runtime/fiber/sched.c`**
 
-`enqueue_ready` (sched.c:206 付近、static) のすぐ下に export 関数を追加:
+Add the export functions right below `enqueue_ready` (near sched.c:206, static):
 
 ```c
 /* Public wrapper for rw_sched_enqueue_ready (see sched.h). */
@@ -79,20 +79,20 @@ rw_fiber_handle *rw_sched_current_fiber(void) {
 }
 ```
 
-- [ ] **Step 1.3: ビルドと既存テストが緑か確認**
+- [ ] **Step 1.3: Confirm the build and the existing tests are green**
 
 ```sh
 make -C /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime clean
 make -C /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime
 ```
 
-Expected: 警告なしビルド成功 (`librw.a` 生成)。
+Expected: Warning-free successful build (`librw.a` produced).
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: `131 passed`。
+Expected: `131 passed`.
 
 - [ ] **Step 1.4: Commit**
 
@@ -120,9 +120,9 @@ EOF
 
 ---
 
-## Task 2: netpoller スケルトン (init/shutdown + 共通ヘッダ)
+## Task 2: netpoller skeleton (init/shutdown + shared header)
 
-netpoller スレッドの起動・停止だけを実装する。park / wake はまだ動かない。
+Implement only the startup and shutdown of the netpoller thread. park / wake does not work yet.
 
 **Files:**
 - Create: `runtime/net/netpoller.h`
@@ -133,7 +133,7 @@ netpoller スレッドの起動・停止だけを実装する。park / wake は�
 - Modify: `runtime/runtime.h`
 - Modify: `runtime/runtime.c`
 
-- [ ] **Step 2.1: `runtime/net/netpoller.h` を新規作成**
+- [ ] **Step 2.1: Create `runtime/net/netpoller.h`**
 
 ```c
 #ifndef RW_NETPOLLER_H
@@ -185,7 +185,7 @@ int  rw_netpoller_register_write(int fd, rw_fiber_handle *h);
 #endif /* RW_NETPOLLER_H */
 ```
 
-- [ ] **Step 2.2: `runtime/net/netpoller.c` を新規作成**
+- [ ] **Step 2.2: Create `runtime/net/netpoller.c`**
 
 ```c
 /*
@@ -279,9 +279,9 @@ void rw_net_park_write(int fd) {
 }
 ```
 
-注: `rw_sched_park_current` は Task 3 で sched.c に追加する。
+Note: `rw_sched_park_current` is added to sched.c in Task 3.
 
-- [ ] **Step 2.3: `runtime/net/netpoller_kqueue.c` を新規作成**
+- [ ] **Step 2.3: Create `runtime/net/netpoller_kqueue.c`**
 
 ```c
 /*
@@ -359,7 +359,7 @@ int rw_netpoller_register_write(int fd, rw_fiber_handle *h) {
 #endif /* __APPLE__ || __FreeBSD__ */
 ```
 
-- [ ] **Step 2.4: `runtime/net/netpoller_epoll.c` を新規作成**
+- [ ] **Step 2.4: Create `runtime/net/netpoller_epoll.c`**
 
 ```c
 /*
@@ -454,9 +454,9 @@ int rw_netpoller_register_write(int fd, rw_fiber_handle *h) {
 #endif /* __linux__ */
 ```
 
-- [ ] **Step 2.5: `runtime/Makefile` を更新**
+- [ ] **Step 2.5: Update `runtime/Makefile`**
 
-`OBJS` 行を更新し、新しい .o を追加:
+Update the `OBJS` line to add the new .o files:
 
 ```makefile
 OBJS := runtime.o \
@@ -465,7 +465,7 @@ OBJS := runtime.o \
         $(FIBER_ASM)
 ```
 
-`UNAME_M` ブロックの **直下** に platform 分岐を追加:
+Add platform branching **directly below** the `UNAME_M` block:
 
 ```makefile
 UNAME_S := $(shell uname -s)
@@ -478,7 +478,7 @@ else
 endif
 ```
 
-各 .o 用のルールを既存ルール (`fiber/park.o`) のすぐ下に追加:
+Add a rule for each .o right below the existing rule (`fiber/park.o`):
 
 ```makefile
 net/netpoller.o: net/netpoller.c net/netpoller.h fiber/sched.h
@@ -494,9 +494,9 @@ net/tcp.o: net/tcp.c net/tcp.h net/netpoller.h fiber/sched.h
 	$(CC) $(CFLAGS) -c $< -o $@
 ```
 
-- [ ] **Step 2.6: `runtime/runtime.h` にプロトタイプ追加**
+- [ ] **Step 2.6: Add prototypes to `runtime/runtime.h`**
 
-`/* List[int] type and ops */` ブロックのすぐ下、`/* spawn (one per return type) */` の上に追加:
+Add them right below the `/* List[int] type and ops */` block and above `/* spawn (one per return type) */`:
 
 ```c
 /* TCP API (runtime/net/tcp.c). */
@@ -507,7 +507,7 @@ int64_t rw_tcp_write (int64_t fd, rw_str b);
 int64_t rw_tcp_close (int64_t fd);
 ```
 
-- [ ] **Step 2.7: `runtime/runtime.c` の `rw_init` / `rw_shutdown` に呼び出し追加**
+- [ ] **Step 2.7: Add the calls to `rw_init` / `rw_shutdown` in `runtime/runtime.c`**
 
 `rw_init`:
 
@@ -527,28 +527,28 @@ void rw_shutdown(void) {
 }
 ```
 
-`runtime.c` 先頭の `#include` ブロックに追加:
+Add to the `#include` block at the top of `runtime.c`:
 
 ```c
 #include "net/netpoller.h"
 ```
 
-- [ ] **Step 2.8: ビルドが緑か確認**
+- [ ] **Step 2.8: Confirm the build is green**
 
 ```sh
 make -C /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime clean
 make -C /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime
 ```
 
-Expected: 警告なしビルド成功。`librw.a` に `net/netpoller.o` 等が含まれる。
+Expected: Warning-free successful build. `librw.a` includes `net/netpoller.o` and the others.
 
-- [ ] **Step 2.9: 既存テスト緑か確認**
+- [ ] **Step 2.9: Confirm the existing tests are green**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: `131 passed`。netpoller スレッドは init/shutdown のみで実害無し。
+Expected: `131 passed`. The netpoller thread only does init/shutdown, so there is no harm.
 
 - [ ] **Step 2.10: Commit**
 
@@ -584,19 +584,19 @@ EOF
 
 ---
 
-## Task 3: park / wake 完成 + pipe テスト
+## Task 3: Complete park / wake + pipe test
 
-netpoller スレッドが既に動いているので、fiber を park する API を完成させ、ready 通知で fiber が起きることを C テストで確認する。
+The netpoller thread is already running, so complete the API that parks a fiber and use a C test to confirm the fiber wakes on a ready notification.
 
 **Files:**
-- Modify: `runtime/fiber/sched.h` (`rw_sched_park_current` を追加)
-- Modify: `runtime/fiber/sched.c` (`rw_sched_park_current` を実装)
+- Modify: `runtime/fiber/sched.h` (add `rw_sched_park_current`)
+- Modify: `runtime/fiber/sched.c` (implement `rw_sched_park_current`)
 - Create: `runtime/fiber/test_netpoller_pipe.c`
 - Modify: `.gitignore`
 
-- [ ] **Step 3.1: `runtime/fiber/sched.h` に `rw_sched_park_current` を追加**
+- [ ] **Step 3.1: Add `rw_sched_park_current` to `runtime/fiber/sched.h`**
 
-Task 1 で追加した export 群の下に:
+Below the exports added in Task 1:
 
 ```c
 /* Mark the current fiber as WAITING and swap out to the scheduler.
@@ -606,9 +606,9 @@ Task 1 で追加した export 群の下に:
 void rw_sched_park_current(void);
 ```
 
-- [ ] **Step 3.2: `runtime/fiber/sched.c` に `rw_sched_park_current` を実装**
+- [ ] **Step 3.2: Implement `rw_sched_park_current` in `runtime/fiber/sched.c`**
 
-既存 `rw_sched_yield` のすぐ下に追加:
+Add it right below the existing `rw_sched_yield`:
 
 ```c
 /* Park the current fiber: mark it WAITING and swap to sched_ctx.
@@ -625,20 +625,20 @@ void rw_sched_park_current(void) {
 }
 ```
 
-worker_main の `if (state == RUNNING) enqueue_ready(g)` 判定は既存のままで、
-WAITING の fiber は自動的に re-enqueue されないので意図通り動く。
+worker_main's `if (state == RUNNING) enqueue_ready(g)` check stays as-is, and since a WAITING
+fiber is not automatically re-enqueued, this works as intended.
 
-- [ ] **Step 3.3: ビルドが緑か確認**
+- [ ] **Step 3.3: Confirm the build is green**
 
 ```sh
 make -C /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime
 ```
 
-Expected: 警告なしビルド成功。
+Expected: Warning-free successful build.
 
-- [ ] **Step 3.4: `runtime/fiber/test_netpoller_pipe.c` を新規作成**
+- [ ] **Step 3.4: Create `runtime/fiber/test_netpoller_pipe.c`**
 
-pipe(2) を 2 つの fiber で読み書きして、reader が park → writer が write → reader が起きる挙動を確認:
+Read and write a pipe(2) across two fibers to confirm the behavior: reader parks -> writer writes -> reader wakes:
 
 ```c
 /*
@@ -722,26 +722,26 @@ int main(void) {
 }
 ```
 
-- [ ] **Step 3.5: `.gitignore` に test バイナリを追加**
+- [ ] **Step 3.5: Add the test binary to `.gitignore`**
 
-`runtime/fiber/test_option` の下に追加:
+Add below `runtime/fiber/test_option`:
 
 ```
 runtime/fiber/test_netpoller_pipe
 ```
 
-- [ ] **Step 3.6: テストをビルドして実行**
+- [ ] **Step 3.6: Build and run the test**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime
 cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_netpoller_pipe.c librw.a -o fiber/test_netpoller_pipe && ./fiber/test_netpoller_pipe
 ```
 
-Expected: `netpoller pipe test ok`。
+Expected: `netpoller pipe test ok`.
 
-タイムアウトする場合は netpoller スレッドが ready 通知を正しく `enqueue_ready` していない (Task 2 の platform 実装か Task 3.2 の park ロジックに問題)。`pkill test_netpoller_pipe` で殺してログを見直す。
+If it times out, the netpoller thread is not correctly `enqueue_ready`ing on ready notifications (a problem in the Task 2 platform implementation or the Task 3.2 park logic). Kill it with `pkill test_netpoller_pipe` and review the logs.
 
-- [ ] **Step 3.7: 既存テストも回帰なし**
+- [ ] **Step 3.7: Existing tests also stay regression-free**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
@@ -781,9 +781,9 @@ EOF
 
 ---
 
-## Task 4: tcp_* helper + localhost loopback テスト
+## Task 4: tcp_* helpers + localhost loopback test
 
-`runtime/net/tcp.c` / `tcp.h` を実装し、localhost で listen → connect → recv/send が動くことを C で確認。
+Implement `runtime/net/tcp.c` / `tcp.h` and confirm in C that listen -> connect -> recv/send works on localhost.
 
 **Files:**
 - Create: `runtime/net/tcp.h`
@@ -791,7 +791,7 @@ EOF
 - Create: `runtime/fiber/test_tcp_loopback.c`
 - Modify: `.gitignore`
 
-- [ ] **Step 4.1: `runtime/net/tcp.h` を新規作成**
+- [ ] **Step 4.1: Create `runtime/net/tcp.h`**
 
 ```c
 #ifndef RW_TCP_H
@@ -816,7 +816,7 @@ extern "C" {
 #endif /* RW_TCP_H */
 ```
 
-- [ ] **Step 4.2: `runtime/net/tcp.c` を新規作成**
+- [ ] **Step 4.2: Create `runtime/net/tcp.c`**
 
 ```c
 /*
@@ -931,9 +931,9 @@ int64_t rw_tcp_close(int64_t fd) {
 }
 ```
 
-- [ ] **Step 4.3: `runtime/fiber/test_tcp_loopback.c` を新規作成**
+- [ ] **Step 4.3: Create `runtime/fiber/test_tcp_loopback.c`**
 
-localhost で listen → 別 fiber が connect → recv/send を実施:
+Listen on localhost -> a separate fiber connects -> perform recv/send:
 
 ```c
 /*
@@ -1027,15 +1027,15 @@ int main(void) {
 }
 ```
 
-- [ ] **Step 4.4: `.gitignore` 更新**
+- [ ] **Step 4.4: Update `.gitignore`**
 
-`test_netpoller_pipe` の下に追加:
+Add below `test_netpoller_pipe`:
 
 ```
 runtime/fiber/test_tcp_loopback
 ```
 
-- [ ] **Step 4.5: ビルド + 実行**
+- [ ] **Step 4.5: Build + run**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime
@@ -1043,20 +1043,20 @@ make
 cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_tcp_loopback.c librw.a -o fiber/test_tcp_loopback && ./fiber/test_tcp_loopback
 ```
 
-Expected: `tcp loopback test ok`。
+Expected: `tcp loopback test ok`.
 
-タイムアウトする場合は `tcp_accept` で park した fiber が起きていない、もしくは `tcp_read` / `tcp_write` の park が動いていない。`netpoller_pipe` が動いているなら netpoller 自体は健全。
+If it times out, the fiber parked in `tcp_accept` is not waking, or the park in `tcp_read` / `tcp_write` is not working. If `netpoller_pipe` works, the netpoller itself is healthy.
 
-- [ ] **Step 4.6: pipe テストも引き続き緑か**
+- [ ] **Step 4.6: The pipe test also stays green**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime
 ./fiber/test_netpoller_pipe
 ```
 
-Expected: `netpoller pipe test ok`。
+Expected: `netpoller pipe test ok`.
 
-- [ ] **Step 4.7: pytest も緑**
+- [ ] **Step 4.7: pytest also green**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
@@ -1099,16 +1099,16 @@ EOF
 
 ---
 
-## Task 5: rwc に 5 つの組込みを追加 + sema/irgen テスト
+## Task 5: Add the five builtins to rwc + sema/irgen tests
 
 **Files:**
 - Modify: `rwc/sema.py`
 - Modify: `rwc/irgen.py`
 - Modify: `tests/test_sema.py`
 
-- [ ] **Step 5.1: Sema に 5 組込みを追加**
+- [ ] **Step 5.1: Add the five builtins to Sema**
 
-`rwc/sema.py` の `list_at_opt` の Sema 直下に追加:
+Add them right below the `list_at_opt` Sema in `rwc/sema.py`:
 
 ```python
         # Builtin: tcp_listen(int) -> int.
@@ -1195,9 +1195,9 @@ EOF
             return T.INT
 ```
 
-- [ ] **Step 5.2: SpawnExpr 禁止リストに 5 つ追加**
+- [ ] **Step 5.2: Add the five to the SpawnExpr prohibition list**
 
-`list_at_opt` の禁止分岐の **直下** に追加:
+Add them **directly below** the `list_at_opt` prohibition branch:
 
 ```python
                 if call.callee == "tcp_listen":
@@ -1227,9 +1227,9 @@ EOF
                     ))
 ```
 
-- [ ] **Step 5.3: irgen に 5 組込みの emit を追加**
+- [ ] **Step 5.3: Add emit for the five builtins to irgen**
 
-`rwc/irgen.py` の `_declare_runtime` で `rw_list_int_at_opt` の宣言の **直下** に追加:
+In `rwc/irgen.py`'s `_declare_runtime`, add **directly below** the `rw_list_int_at_opt` declaration:
 
 ```python
         # TCP API (runtime/net/tcp.c)
@@ -1247,7 +1247,7 @@ EOF
             m, ir.FunctionType(I64, [I64]), "rw_tcp_close")
 ```
 
-`_emit_call` で `list_at_opt` の分岐の **直下** に追加:
+In `_emit_call`, add **directly below** the `list_at_opt` branch:
 
 ```python
         if call.callee == "tcp_listen":
@@ -1271,9 +1271,9 @@ EOF
             return ctx.builder.call(self._rw_tcp_close, [v])
 ```
 
-- [ ] **Step 5.4: Positive テスト**
+- [ ] **Step 5.4: Positive tests**
 
-`tests/test_sema.py` の末尾に追加:
+Add to the end of `tests/test_sema.py`:
 
 ```python
 # ---- TCP builtins positive cases ----
@@ -1330,9 +1330,9 @@ def test_tcp_close_returns_int():
     check(src)
 ```
 
-- [ ] **Step 5.5: Negative テスト**
+- [ ] **Step 5.5: Negative tests**
 
-`tests/test_sema.py` の末尾に追加:
+Add to the end of `tests/test_sema.py`:
 
 ```python
 # ---- TCP builtins negative cases ----
@@ -1387,15 +1387,15 @@ def test_cannot_spawn_tcp_accept():
     assert "cannot spawn the builtin `tcp_accept`" in e.diagnostic.message
 ```
 
-- [ ] **Step 5.6: pytest を回す**
+- [ ] **Step 5.6: Run pytest**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: 既存 131 + positive 5 + negative 5 = `141 passed`。
+Expected: existing 131 + 5 positive + 5 negative = `141 passed`.
 
-- [ ] **Step 5.7: smoke check (IR を見て build できる)**
+- [ ] **Step 5.7: smoke check (inspect the IR and build)**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
@@ -1412,9 +1412,9 @@ ls -la /tmp/tcp_smoke && /tmp/tcp_smoke && echo "exit=$?"
 ```
 
 Expected:
-- IR に `declare i64 @"rw_tcp_listen"` と `call i64 @"rw_tcp_close"` などが見える
-- ビルド成功
-- 実行は `exit=0` (listen → close、即終了)
+- The IR shows `declare i64 @"rw_tcp_listen"`, `call i64 @"rw_tcp_close"`, and so on
+- Build succeeds
+- Execution gives `exit=0` (listen -> close, then exits immediately)
 
 - [ ] **Step 5.8: Commit**
 
@@ -1460,7 +1460,7 @@ EOF
 - Create: `examples/tcp_echo.rw`
 - Create: `tests/test_e2e_tcp.py`
 
-- [ ] **Step 6.1: `examples/tcp_echo.rw` を新規作成**
+- [ ] **Step 6.1: Create `examples/tcp_echo.rw`**
 
 ```rw
 def handle_client(fd: int) -> int:
@@ -1479,8 +1479,9 @@ def main() -> int:
     return 0
 ```
 
-`__PORT__` プレースホルダは e2e でテスト毎に動的な空きポートに置換する。
-ユーザが手動で `rwc run examples/tcp_echo.rw` するときは `__PORT__` のままだとパースエラーになるので、**最初から `8080` を埋めておき、e2e は別の tmp .rw をビルドする** 方が手軽。修正:
+The `__PORT__` placeholder is replaced with a dynamically-chosen free port per test in the e2e.
+Since `__PORT__` would cause a parse error when a user manually runs `rwc run examples/tcp_echo.rw`,
+it is simpler to **bake in `8080` from the start and have the e2e build a separate tmp .rw**. Revised:
 
 ```rw
 def handle_client(fd: int) -> int:
@@ -1499,9 +1500,9 @@ def main() -> int:
     return 0
 ```
 
-e2e は `examples/tcp_echo.rw` を読み、`tcp_listen(8080)` を `tcp_listen(<random>)` に sed して /tmp に保存、それをビルド+起動する。
+The e2e reads `examples/tcp_echo.rw`, seds `tcp_listen(8080)` to `tcp_listen(<random>)`, saves it to /tmp, then builds and launches it.
 
-- [ ] **Step 6.2: `tests/test_e2e_tcp.py` を新規作成**
+- [ ] **Step 6.2: Create `tests/test_e2e_tcp.py`**
 
 ```python
 """End-to-end tests for the TCP echo example."""
@@ -1591,7 +1592,7 @@ def test_echo_ten_concurrent_connections():
         proc.wait(timeout=2.0)
 ```
 
-- [ ] **Step 6.3: 手動 smoke**
+- [ ] **Step 6.3: Manual smoke**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
@@ -1603,19 +1604,19 @@ echo -n "hello" | nc -w 1 127.0.0.1 8080
 kill $SERVER_PID 2>/dev/null
 ```
 
-Expected: `hello` がそのまま返ってくる。
+Expected: `hello` comes back unchanged.
 
-- [ ] **Step 6.4: pytest を全件回す**
+- [ ] **Step 6.4: Run the full pytest suite**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: 既存 141 (Task 5 まで) + e2e_tcp 新規 2 = `143 passed`。
+Expected: existing 141 (through Task 5) + 2 new e2e_tcp = `143 passed`.
 
-`test_echo_ten_concurrent_connections` が flaky な場合 (CI で `sleep 0.3` が短すぎる等) は `_start_server` の `time.sleep` を 0.5 まで上げる。
+If `test_echo_ten_concurrent_connections` is flaky (e.g. `sleep 0.3` is too short in CI), raise `_start_server`'s `time.sleep` to 0.5.
 
-- [ ] **Step 6.5: 既存 example の回帰確認**
+- [ ] **Step 6.5: Verify existing examples are regression-free**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
@@ -1624,7 +1625,7 @@ RW_WORKERS=1 uv run rwc run examples/result_basic.rw
 RW_WORKERS=1 uv run rwc run examples/spawn_many.rw
 ```
 
-Expected: それぞれ `5\n-1`, `5\n0`, `30`。
+Expected: `5\n-1`, `5\n0`, and `30` respectively.
 
 - [ ] **Step 6.6: Commit**
 
@@ -1663,7 +1664,7 @@ EOF
 
 ---
 
-## Task 7: plan ファイル commit
+## Task 7: Commit the plan file
 
 - [ ] **Step 7.1: Commit**
 
@@ -1684,39 +1685,39 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 
 ### Spec coverage
 
-| Spec 要求 | カバーするタスク |
+| Spec requirement | Covering task |
 |---|---|
-| 専用 netpoller pthread (kqueue / epoll) | Task 2 (全 step) |
+| Dedicated netpoller pthread (kqueue / epoll) | Task 2 (all steps) |
 | `rw_net_park_read/write` | Task 2.2 + 3.2 |
 | `rw_set_nonblocking` | Task 2.2 |
 | `rw_netpoller_init/shutdown` from `rw_init/shutdown` | Task 2.7 |
 | Shutdown wake-up (kqueue EVFILT_USER / epoll eventfd) | Task 2.3 / 2.4 |
-| ONESHOT 監視 | Task 2.3 / 2.4 |
+| ONESHOT monitoring | Task 2.3 / 2.4 |
 | `tcp_listen(port) -> int` | Task 4.2 (runtime) + 5.1 (sema) + 5.3 (irgen) + 5.4 (test) |
-| `tcp_accept(int) -> int`、main は blocking / fiber は park | Task 4.2 + 5.1 + 5.3 + 5.4 |
-| `tcp_read(int, int) -> Bytes`、len==0 で EOF/error | Task 4.2 + 5.1 + 5.3 + 5.4 |
+| `tcp_accept(int) -> int`, main blocks / fiber parks | Task 4.2 + 5.1 + 5.3 + 5.4 |
+| `tcp_read(int, int) -> Bytes`, len==0 for EOF/error | Task 4.2 + 5.1 + 5.3 + 5.4 |
 | `tcp_write(int, Bytes) -> int` | Task 4.2 + 5.1 + 5.3 + 5.4 |
 | `tcp_close(int) -> int` | Task 4.2 + 5.1 + 5.3 + 5.4 |
-| 5 組込みすべて spawn 禁止 | Task 5.2 + test 5.5 (`test_cannot_spawn_tcp_accept`) |
-| C テスト: netpoller pipe | Task 3.4 |
-| C テスト: tcp loopback | Task 4.3 |
-| e2e: 1 接続 + 10 並列接続 | Task 6.2 |
+| All five builtins forbid spawn | Task 5.2 + test 5.5 (`test_cannot_spawn_tcp_accept`) |
+| C test: netpoller pipe | Task 3.4 |
+| C test: tcp loopback | Task 4.3 |
+| e2e: 1 connection + 10 concurrent connections | Task 6.2 |
 | `examples/tcp_echo.rw` | Task 6.1 |
-| 既存 131 テスト緑、既存 example 回帰なし | Task 2.9 / 3.7 / 4.7 / 6.4 / 6.5 |
-| sched.h に enqueue_ready / current_fiber export | Task 1 |
-| `rw_sched_park_current` 追加 | Task 3.1 + 3.2 |
-| Makefile uname 分岐 | Task 2.5 |
+| Existing 131 tests green, existing examples regression-free | Task 2.9 / 3.7 / 4.7 / 6.4 / 6.5 |
+| Export enqueue_ready / current_fiber from sched.h | Task 1 |
+| Add `rw_sched_park_current` | Task 3.1 + 3.2 |
+| Makefile uname branching | Task 2.5 |
 
-すべての spec 要求にタスクがある。
+Every spec requirement has a task.
 
-### Placeholder スキャン
+### Placeholder scan
 
-「TBD」「TODO」「(要確認)」「fill in」「Add appropriate」「Similar to Task N」は plan 内 0 件。
+"TBD", "TODO", "(needs confirmation)", "fill in", "Add appropriate", and "Similar to Task N" appear 0 times in the plan.
 
 ### Type consistency
 
-- `rw_netpoller_init` / `_shutdown` / `_platform_init` / `_platform_shutdown` / `_platform_run` / `_register_read` / `_register_write` のシグネチャを Task 2.1 (宣言) と Task 2.2/2.3/2.4 (実装) で完全一致
-- `rw_net_park_read` / `_write` / `rw_set_nonblocking` のシグネチャを Task 2.1 / 2.2 / 4.2 で揃って使用
-- `rw_sched_enqueue_ready` / `_current_fiber` / `_park_current` を Task 1.1 / 1.2 / 3.1 / 3.2 で揃えて宣言・実装、Task 2.2 / 2.3 / 2.4 / 4.2 で呼び出し
-- `rw_tcp_listen` / `_accept` / `_read` / `_write` / `_close` のシグネチャを Task 2.6 (runtime.h) / 4.2 (実装) / 5.3 (irgen 宣言) で完全一致
-- `RW_STR_TY` を `tcp_read` の pointer-out shim で使用 (Task 5.3)、既存 string ヘルパと同じ alloca/load パターン
+- The signatures of `rw_netpoller_init` / `_shutdown` / `_platform_init` / `_platform_shutdown` / `_platform_run` / `_register_read` / `_register_write` match exactly between Task 2.1 (declaration) and Task 2.2/2.3/2.4 (implementation)
+- The signatures of `rw_net_park_read` / `_write` / `rw_set_nonblocking` are used consistently across Task 2.1 / 2.2 / 4.2
+- `rw_sched_enqueue_ready` / `_current_fiber` / `_park_current` are consistently declared/implemented in Task 1.1 / 1.2 / 3.1 / 3.2 and called in Task 2.2 / 2.3 / 2.4 / 4.2
+- The signatures of `rw_tcp_listen` / `_accept` / `_read` / `_write` / `_close` match exactly between Task 2.6 (runtime.h) / 4.2 (implementation) / 5.3 (irgen declaration)
+- `RW_STR_TY` is used in `tcp_read`'s pointer-out shim (Task 5.3), following the same alloca/load pattern as the existing string helpers

@@ -1,48 +1,48 @@
 name: RFC
-description: 設計提案 (Request For Comments)
+description: Design proposal (Request For Comments)
 labels: ["rfc", "documentation"]
 body:
   - type: markdown
     attributes:
       value: |
-        言語仕様・ランタイム・標準ライブラリなどの設計変更を提案するためのテンプレートです。
-        実装着手前に議論したい大きな変更はこちらでお願いします。
+        A template for proposing design changes to the language specification, runtime, standard library, and so on.
+        Please use this for large changes you want to discuss before starting implementation.
   - type: input
     id: title
     attributes:
-      label: RFC タイトル
-      placeholder: "例: async generator の導入"
+      label: RFC title
+      placeholder: "e.g. Introduce async generators"
   - type: textarea
     id: summary
     attributes:
-      label: 要約 (TL;DR)
-      description: 提案内容を 2-3 行で要約してください。
+      label: Summary (TL;DR)
+      description: Summarize the proposal in 2-3 lines.
   - type: textarea
     id: motivation
     attributes:
-      label: 動機・背景
-      description: 解決したい問題、現状の制約、ユースケースなど。
+      label: Motivation and background
+      description: The problem you want to solve, current limitations, use cases, etc.
     validations:
       required: true
   - type: textarea
     id: design
     attributes:
-      label: 詳細設計
-      description: 構文 / セマンティクス / 型システム / ABI など、変更点を可能な限り詳細に。
+      label: Detailed design
+      description: Describe the changes in as much detail as possible, including syntax / semantics / type system / ABI.
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
-      label: 代替案
-      description: 検討した他の設計、それを採用しなかった理由。
+      label: Alternatives
+      description: Other designs you considered and why you did not adopt them.
   - type: textarea
     id: impact
     attributes:
-      label: 影響範囲・移行戦略
-      description: 既存コードへの影響、後方互換性、移行手順など。
+      label: Scope of impact and migration strategy
+      description: Impact on existing code, backward compatibility, migration steps, etc.
   - type: textarea
     id: open_questions
     attributes:
       label: Open Questions
-      description: 議論したい未解決の論点を列挙してください。
+      description: List any unresolved points you want to discuss.
