@@ -1,6 +1,6 @@
 # Changelog
 
-## [v0.0.6](https://github.com/rwlang-org/rw/compare/v0.0.5...v0.0.6) - 2026-06-21
+## [v0.0.6](https://github.com/rwlang-org/rw/compare/v0.0.5...v0.0.6) - 2026-10-11
 
 - ci: ruff/black/mypy による lint/format チェック (#76) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/124
 - chore: pre-commit-hooks 設定を追加 (#88) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/125
@@ -8,6 +8,7 @@
 - docs: Issue / PR テンプレートを追加 (#72) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/127
 - ci: GitHub Actions を SHA ピン留めし dependabot を追加 (#81) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/128
 - docs: CoC / SECURITY / LICENSE を整備 (#71) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/129
+- ci: fix tagpr action SHA pin by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/144
 
 ## [v0.0.5](https://github.com/rwlang-org/rw/compare/v0.0.4...v0.0.5) - 2026-06-06
 
