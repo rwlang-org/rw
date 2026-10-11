@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** rw 言語に `Result[int, int]` 型と `Ok(e)` / `Err(e)` の値構築式を追加し、既存の `match` 文を「Some/None ペア」または「Ok/Err ペア」のどちらか 2 アームを受けるよう拡張する。`div_checked(a, b) -> Result[int, int]` のような関数を rw 側で書いて `match` で分解できる状態に持っていく。
+**Goal:** Add a `Result[int, int]` type and `Ok(e)` / `Err(e)` value-construction expressions to the rw language, and extend the existing `match` statement to accept either a Some/None pair or an Ok/Err pair of two arms. The target state is that a function like `div_checked(a, b) -> Result[int, int]` can be written in rw and destructured with `match`.
 
-**Architecture:** `Result[int, int]` は `{i64 tag, i64 payload}` (tag=0 = Err, 1 = Ok) で `Option[int]` と同じ LLVM struct を持つが、Sema レベルで `T.OPTION_INT` と `T.RESULT_INT_INT` を別の型として区別する。`MatchStmt` AST に `style: "option" | "result"` フィールドを追加し、parser が最初のアームを見て style を確定する。Sema / irgen は style 別に分岐し、irgen 側は `_emit_arm` 共通 helper で Option / Result lowering を共有する。
+**Architecture:** `Result[int, int]` uses the same LLVM struct as `Option[int]` — `{i64 tag, i64 payload}` (tag=0 = Err, 1 = Ok) — but at the Sema level `T.OPTION_INT` and `T.RESULT_INT_INT` are distinguished as separate types. A `style: "option" | "result"` field is added to the `MatchStmt` AST, and the parser determines the style from the first arm. Sema / irgen branch on the style, and on the irgen side a shared `_emit_arm` helper factors out the Option / Result lowering.
 
-**Tech Stack:** Python 3.12 + llvmlite (コンパイラ)、pytest (テスト)。ランタイム変更なし。
+**Tech Stack:** Python 3.12 + llvmlite (compiler), pytest (tests). No runtime changes.
 
 **Spec:** `docs/specs/11-result-type.md`
 
@@ -16,49 +16,49 @@
 
 | File | Responsibility | Action |
 |---|---|---|
-| `rwc/types.py` | プリミティブ型定義 | `RESULT_INT_INT` 追加 |
-| `rwc/lexer.py` | キーワード認識 | `KW_RESULT` / `KW_OK` / `KW_ERR` |
-| `rwc/ast_nodes.py` | AST ノード | `OkExpr` / `ErrExpr` 追加、`MatchStmt` に style と Result 用フィールド追加 |
-| `rwc/parser.py` | 型 + 式 + 文のパース | `parse_type` の Result 分岐、`Ok(e)` / `Err(e)` 式、`parse_match` 全面書き直し |
-| `rwc/sema.py` | 型解決 + 式/文 Sema | `_resolve_type` / `OkExpr` / `ErrExpr` Sema / `MatchStmt` style 分岐 |
-| `rwc/irgen.py` | LLVM IR 生成 | `RW_RESULT_INT_INT_TY` / `Ok` / `Err` emit / `MatchStmt` を `_emit_arm` 経由で style 別 lowering |
-| `tests/test_sema.py` | 型検査 positive/negative | テスト追加 |
-| `tests/test_e2e.py` | parametrize に result_basic | 1 行追加 |
-| `examples/result_basic.rw` | デモ | 新規 |
-| `examples/result_basic.rw.expected` | 期待出力 | 新規 |
+| `rwc/types.py` | Primitive type definitions | Add `RESULT_INT_INT` |
+| `rwc/lexer.py` | Keyword recognition | `KW_RESULT` / `KW_OK` / `KW_ERR` |
+| `rwc/ast_nodes.py` | AST nodes | Add `OkExpr` / `ErrExpr`; add style and Result fields to `MatchStmt` |
+| `rwc/parser.py` | Type + expression + statement parsing | Result branch in `parse_type`, `Ok(e)` / `Err(e)` expressions, full rewrite of `parse_match` |
+| `rwc/sema.py` | Type resolution + expr/stmt Sema | `_resolve_type` / `OkExpr` / `ErrExpr` Sema / `MatchStmt` style branching |
+| `rwc/irgen.py` | LLVM IR generation | `RW_RESULT_INT_INT_TY` / `Ok` / `Err` emit / style-specific lowering of `MatchStmt` via `_emit_arm` |
+| `tests/test_sema.py` | Positive/negative type checking | Add tests |
+| `tests/test_e2e.py` | Add result_basic to parametrize | Add 1 line |
+| `examples/result_basic.rw` | Demo | New |
+| `examples/result_basic.rw.expected` | Expected output | New |
 
-ランタイム (`runtime/*`) と fiber 関連には一切触れない。
+The runtime (`runtime/*`) and anything fiber-related are left untouched.
 
 ---
 
-## Task 1: lexer / parser / types / AST で `Result[int, int]` 構文を認識
+## Task 1: Recognize `Result[int, int]` syntax in lexer / parser / types / AST
 
-このタスクで `Result[int, int]` の型注釈、`Ok(e)` / `Err(e)` の式、`match v: case Ok(x): ... case Err(e): ...` の文 (および既存 Some/None) が **AST まで構築できる** ようにする。`MatchStmt` の AST 構造を style 統合形に書き換える破壊的変更を含むので、既存の Option-style コード/テストが回帰しないことを確認する。
+This task makes the `Result[int, int]` type annotation, `Ok(e)` / `Err(e)` expressions, and the `match v: case Ok(x): ... case Err(e): ...` statement (as well as the existing Some/None) **constructible all the way to the AST**. It includes a breaking change that rewrites the `MatchStmt` AST structure into a style-unified form, so verify that existing Option-style code/tests do not regress.
 
 **Files:**
 - Modify: `rwc/types.py`
 - Modify: `rwc/lexer.py`
 - Modify: `rwc/ast_nodes.py`
 - Modify: `rwc/parser.py`
-- Modify: `rwc/sema.py` (`_resolve_type` だけ追加 + 既存 `_check_stmt` の MatchStmt を style 分岐に対応)
-- Modify: `rwc/irgen.py` (既存 `_emit_stmt` の MatchStmt を style 分岐に対応)
+- Modify: `rwc/sema.py` (add only `_resolve_type` + make the existing `_check_stmt` MatchStmt handle style branching)
+- Modify: `rwc/irgen.py` (make the existing `_emit_stmt` MatchStmt handle style branching)
 - Modify: `tests/test_sema.py`
 
 ### types / lexer
 
-- [ ] **Step 1.1: `rwc/types.py` に `RESULT_INT_INT` を追加**
+- [ ] **Step 1.1: Add `RESULT_INT_INT` to `rwc/types.py`**
 
-`OPTION_INT = _Primitive("Option[int]")` の **直下** に追加:
+Add it **directly below** `OPTION_INT = _Primitive("Option[int]")`:
 
 ```python
 RESULT_INT_INT = _Primitive("Result[int, int]")
 ```
 
-`is_printable` / `is_numeric` には含めない。
+Do not include it in `is_printable` / `is_numeric`.
 
-- [ ] **Step 1.2: `rwc/lexer.py` に 3 つのキーワードを追加**
+- [ ] **Step 1.2: Add three keywords to `rwc/lexer.py`**
 
-`TokenKind` enum の `KW_NONE = auto()` の **直下** に:
+**Directly below** `KW_NONE = auto()` in the `TokenKind` enum:
 
 ```python
     KW_RESULT = auto()
@@ -66,7 +66,7 @@ RESULT_INT_INT = _Primitive("Result[int, int]")
     KW_ERR = auto()
 ```
 
-`KEYWORDS` dict の `"None": TokenKind.KW_NONE,` の **直下** に:
+**Directly below** `"None": TokenKind.KW_NONE,` in the `KEYWORDS` dict:
 
 ```python
     "Result": TokenKind.KW_RESULT,
@@ -76,9 +76,9 @@ RESULT_INT_INT = _Primitive("Result[int, int]")
 
 ### AST
 
-- [ ] **Step 1.3: `rwc/ast_nodes.py` に `OkExpr` / `ErrExpr` を追加**
+- [ ] **Step 1.3: Add `OkExpr` / `ErrExpr` to `rwc/ast_nodes.py`**
 
-既存 `NoneExpr` の **直下** に:
+**Directly below** the existing `NoneExpr`:
 
 ```python
 @dataclass
@@ -95,7 +95,7 @@ class ErrExpr:
     col: int
 ```
 
-`Expr` Union に 2 つ追加:
+Add two entries to the `Expr` Union:
 
 ```python
 Expr = Union[
@@ -106,9 +106,9 @@ Expr = Union[
 ]
 ```
 
-- [ ] **Step 1.4: `rwc/ast_nodes.py` の `MatchStmt` を style 統合形に拡張**
+- [ ] **Step 1.4: Extend `MatchStmt` in `rwc/ast_nodes.py` into the style-unified form**
 
-現在の `MatchStmt`:
+The current `MatchStmt`:
 
 ```python
 @dataclass
@@ -121,7 +121,7 @@ class MatchStmt:
     col: int
 ```
 
-を以下に置き換え:
+Replace it with the following:
 
 ```python
 @dataclass
@@ -141,13 +141,13 @@ class MatchStmt:
     col: int
 ```
 
-`Optional` を import していなければ追加。
+Add an import for `Optional` if it is not already imported.
 
 ### parser
 
-- [ ] **Step 1.5: `parse_type` の Option 分岐の直下に Result 分岐**
+- [ ] **Step 1.5: Add the Result branch directly below the Option branch in `parse_type`**
 
-`rwc/parser.py` の `parse_type` 内、Option 分岐の **直下** に追加:
+**Directly below** the Option branch inside `parse_type` in `rwc/parser.py`:
 
 ```python
         if t.kind == TokenKind.KW_RESULT:
@@ -172,9 +172,9 @@ class MatchStmt:
             return A.TypeName("Result[int, int]", t.line, t.col)
 ```
 
-- [ ] **Step 1.6: `parse_unary` で `Ok(e)` / `Err(e)` を式として受ける**
+- [ ] **Step 1.6: Accept `Ok(e)` / `Err(e)` as expressions in `parse_unary`**
 
-`KW_NONE` 分岐の **直下** に追加:
+**Directly below** the `KW_NONE` branch:
 
 ```python
         if t.kind == TokenKind.KW_OK:
@@ -191,9 +191,9 @@ class MatchStmt:
             return A.ErrExpr(arg, t.line, t.col)
 ```
 
-- [ ] **Step 1.7: `parse_match` を style 統合形に書き直す**
+- [ ] **Step 1.7: Rewrite `parse_match` into the style-unified form**
 
-既存 `parse_match` メソッドを **丸ごと** 以下に置き換え:
+Replace the **entire** existing `parse_match` method with the following:
 
 ```python
     def parse_match(self) -> A.MatchStmt:
@@ -331,9 +331,9 @@ class MatchStmt:
 
 ### Sema and irgen: minimal updates to match the new AST shape
 
-- [ ] **Step 1.8: `_resolve_type` に `Result[int, int]` を追加**
+- [ ] **Step 1.8: Add `Result[int, int]` to `_resolve_type`**
 
-`rwc/sema.py` の `_resolve_type` の `m` dict に 1 行:
+Add one line to the `m` dict of `_resolve_type` in `rwc/sema.py`:
 
 ```python
         m = {
@@ -349,9 +349,9 @@ class MatchStmt:
         }
 ```
 
-- [ ] **Step 1.9: 既存 Sema の `MatchStmt` 分岐を style 分岐対応に最小修正**
+- [ ] **Step 1.9: Minimally update the existing Sema `MatchStmt` branch to support style branching**
 
-`rwc/sema.py` の `_check_stmt` 内の `MatchStmt` 分岐 (現状は Option-style ハードコード) を以下に置き換え。Task 2 で `style == "result"` の本格 Sema が完成するが、ここでは「既存の Option 用ロジックを `style == "option"` のときだけ走らせる」最小ガードを入れて、新 AST フィールドの存在で既存テストが死なないようにする:
+Replace the `MatchStmt` branch in `_check_stmt` of `rwc/sema.py` (currently hardcoded to Option-style) with the following. Full `style == "result"` Sema is completed in Task 2; here, add a minimal guard that "runs the existing Option logic only when `style == "option"`" so that the presence of the new AST fields does not break existing tests:
 
 ```python
         if isinstance(stmt, A.MatchStmt):
@@ -376,9 +376,9 @@ class MatchStmt:
             ))
 ```
 
-- [ ] **Step 1.10: 既存 irgen の `MatchStmt` 分岐も同様に style ガード**
+- [ ] **Step 1.10: Add a similar style guard to the existing irgen `MatchStmt` branch**
 
-`rwc/irgen.py` の `_emit_stmt` 内の `MatchStmt` 分岐の最初に 1 行追加:
+Add one line at the start of the `MatchStmt` branch in `_emit_stmt` of `rwc/irgen.py`:
 
 ```python
         if isinstance(stmt, A.MatchStmt):
@@ -390,13 +390,13 @@ class MatchStmt:
             # ... existing Option-style lowering, unchanged ...
 ```
 
-(現状の Option-style 本体はそのまま `if stmt.style != "option": raise ...` の **下** に残す)
+(Leave the current Option-style body as-is, **below** the `if stmt.style != "option": raise ...` guard.)
 
 ### Tests for Task 1
 
-- [ ] **Step 1.11: 型注釈 + 構文だけ通るテスト**
+- [ ] **Step 1.11: Tests that pass only the type annotation + syntax**
 
-`tests/test_sema.py` の末尾に追加:
+Append to the end of `tests/test_sema.py`:
 
 ```python
 def test_result_int_int_type_annotation_parses():
@@ -444,17 +444,17 @@ def test_match_with_mixed_arms_is_parser_error():
     assert "mixed match arms" in str(ei.value)
 ```
 
-- [ ] **Step 1.12: 既存テストを含めて pytest 全件を回し緑か確認**
+- [ ] **Step 1.12: Run the full pytest suite (including existing tests) and confirm green**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: 既存 115 + Task 1 新規 3 = `118 passed`。
+Expected: existing 115 + 3 new in Task 1 = `118 passed`.
 
-既存 Option-style の `test_match_*` 系テストは parser/Sema が新 AST を出すよう
-になっても挙動同一を保つ前提。もし落ちる場合は `MatchStmt` のフィールド
-順序や Optional 設定を Step 1.4 と照合。
+The existing Option-style `test_match_*` tests are expected to behave
+identically even after the parser/Sema emit the new AST. If they fail,
+cross-check the `MatchStmt` field order and Optional settings against Step 1.4.
 
 - [ ] **Step 1.13: Commit**
 
@@ -494,17 +494,17 @@ EOF
 
 ---
 
-## Task 2: Sema で `OkExpr` / `ErrExpr` / Result-style `MatchStmt` を完成させる
+## Task 2: Complete `OkExpr` / `ErrExpr` / Result-style `MatchStmt` in Sema
 
-このタスクで Sema が Result の式と match を理解する。Task 1 で `"not yet implemented"` を投げていた箇所を実装で置き換える。
+In this task Sema learns to understand Result expressions and match. Replace the places that raised `"not yet implemented"` in Task 1 with real implementations.
 
 **Files:**
 - Modify: `rwc/sema.py`
 - Modify: `tests/test_sema.py`
 
-- [ ] **Step 2.1: `_check_expr` で `OkExpr` / `ErrExpr` を扱う**
+- [ ] **Step 2.1: Handle `OkExpr` / `ErrExpr` in `_check_expr`**
 
-`rwc/sema.py` の `_check_expr` で、既存 `SomeExpr` / `NoneExpr` の **直下** に追加:
+**Directly below** the existing `SomeExpr` / `NoneExpr` in `_check_expr` of `rwc/sema.py`:
 
 ```python
         if isinstance(expr, A.OkExpr):
@@ -525,9 +525,9 @@ EOF
             return T.RESULT_INT_INT
 ```
 
-- [ ] **Step 2.2: `_check_stmt` の `MatchStmt` の Result-style ガードを実装に置き換え**
+- [ ] **Step 2.2: Replace the Result-style guard of `MatchStmt` in `_check_stmt` with a real implementation**
 
-Task 1 で `raise "not yet implemented"` していた箇所を以下に置き換え:
+Replace the place that did `raise "not yet implemented"` in Task 1 with the following:
 
 ```python
             if stmt.style == "option":
@@ -552,9 +552,9 @@ Task 1 で `raise "not yet implemented"` していた箇所を以下に置き換
             return ok_ret and err_ret
 ```
 
-- [ ] **Step 2.3: Positive テスト**
+- [ ] **Step 2.3: Positive tests**
 
-`tests/test_sema.py` の末尾に追加:
+Append to the end of `tests/test_sema.py`:
 
 ```python
 # ---- Result[int, int] positive cases ----
@@ -638,9 +638,9 @@ def test_match_result_terminates_via_both_arms_return():
     check(src)
 ```
 
-- [ ] **Step 2.4: Negative テスト**
+- [ ] **Step 2.4: Negative tests**
 
-`tests/test_sema.py` に続けて追加:
+Append further to `tests/test_sema.py`:
 
 ```python
 # ---- Result[int, int] negative cases ----
@@ -717,25 +717,25 @@ def test_ok_eq_some_is_type_error():
     assert "same type" in e.diagnostic.message
 ```
 
-- [ ] **Step 2.5: pytest を走らせる**
+- [ ] **Step 2.5: Run pytest**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest tests/test_sema.py -q 2>&1 | tail -5
 ```
 
-Expected: 既存 64 + Task 1 で追加した 3 + ここで positive 6 + negative 6 = `79 passed`。
+Expected: existing 64 + 3 added in Task 1 + 6 positive here + 6 negative = `79 passed`.
 
-irgen がまだ Result-style match を扱わないので `examples/result_basic.rw` を
-実行しようとすると失敗する (Step 1.10 で `"not yet implemented"` を投げる)。
-Sema レベルでは完全に通っている状態。
+Since irgen does not yet handle Result-style match, trying to run
+`examples/result_basic.rw` will fail (Step 1.10 raises `"not yet implemented"`).
+At the Sema level everything passes cleanly.
 
-- [ ] **Step 2.6: 全 pytest**
+- [ ] **Step 2.6: Full pytest**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: 既存 115 + Task 1 で 3 + Task 2 で 12 = `130 passed`。
+Expected: existing 115 + 3 in Task 1 + 12 in Task 2 = `130 passed`.
 
 - [ ] **Step 2.7: Commit**
 
@@ -774,35 +774,35 @@ EOF
 
 ---
 
-## Task 3: irgen で `Ok` / `Err` / Result-style `MatchStmt` を実装
+## Task 3: Implement `Ok` / `Err` / Result-style `MatchStmt` in irgen
 
-このタスクで rw コードが実際に Result を扱って動く。Task 1 で立てた irgen の
-ガード (`if stmt.style != "option": raise`) を外し、Option / Result の lowering
-を共通 helper `_emit_arm` 経由で実装する。
+In this task rw code actually handles Result and runs. Remove the irgen
+guard put in place in Task 1 (`if stmt.style != "option": raise`) and
+implement the Option / Result lowering via the shared `_emit_arm` helper.
 
 **Files:**
 - Modify: `rwc/irgen.py`
 
-- [ ] **Step 3.1: `RW_RESULT_INT_INT_TY` を irgen に追加**
+- [ ] **Step 3.1: Add `RW_RESULT_INT_INT_TY` to irgen**
 
-`rwc/irgen.py` 上部、`RW_OPTION_INT_TY = ...` の **直下** に:
+At the top of `rwc/irgen.py`, **directly below** `RW_OPTION_INT_TY = ...`:
 
 ```python
 RW_RESULT_INT_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
 ```
 
-- [ ] **Step 3.2: `llvm_type_of` に Result を追加**
+- [ ] **Step 3.2: Add Result to `llvm_type_of`**
 
-`if t is T.OPTION_INT:` の **直下** に:
+**Directly below** `if t is T.OPTION_INT:`:
 
 ```python
     if t is T.RESULT_INT_INT:
         return RW_RESULT_INT_INT_TY
 ```
 
-- [ ] **Step 3.3: `_emit_expr` で `OkExpr` / `ErrExpr` を扱う**
+- [ ] **Step 3.3: Handle `OkExpr` / `ErrExpr` in `_emit_expr`**
 
-既存 `SomeExpr` / `NoneExpr` 分岐の **直下** に追加:
+**Directly below** the existing `SomeExpr` / `NoneExpr` branch:
 
 ```python
         if isinstance(expr, A.OkExpr):
@@ -817,9 +817,9 @@ RW_RESULT_INT_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
             return ctx.builder.insert_value(base, v, 1)
 ```
 
-- [ ] **Step 3.4: `_emit_arm` 共通 helper を追加**
+- [ ] **Step 3.4: Add the shared `_emit_arm` helper**
 
-既存 `_emit_match` の **直上** (なければ `_emit_stmt` の前) にメソッドを追加:
+Add the method **directly above** the existing `_emit_match` (or before `_emit_stmt` if there is none):
 
 ```python
     def _emit_arm(self, var_name, block, payload, ctx, end_bb):
@@ -841,11 +841,11 @@ RW_RESULT_INT_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
             b.branch(end_bb)
 ```
 
-- [ ] **Step 3.5: `_emit_stmt` の `MatchStmt` を style 別 lowering で書き直す**
+- [ ] **Step 3.5: Rewrite `MatchStmt` in `_emit_stmt` with style-specific lowering**
 
-Task 1 で立てた `if stmt.style != "option": raise ...` のガードを **削除** し、
-既存の Option-style 本体も含めて以下に置き換え (`_emit_match` というメソッド
-名で切り出しても良いが、ここではインラインに):
+**Remove** the `if stmt.style != "option": raise ...` guard added in Task 1
+and replace it, including the existing Option-style body, with the following
+(you may factor it out into a method named `_emit_match`, but keep it inline here):
 
 ```python
         if isinstance(stmt, A.MatchStmt):
@@ -874,7 +874,7 @@ Task 1 で立てた `if stmt.style != "option": raise ...` のガードを **削
             return
 ```
 
-- [ ] **Step 3.6: smoke check**
+- [ ] **Step 3.6: Smoke check**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
@@ -906,15 +906,15 @@ uv run rwc run /tmp/result_smoke.rw
 
 Expected:
 
-IR に `switch i64` と `insertvalue` がそれぞれ含まれる (`{i64 0, i64 0}` の constant Err base と `{i64 1, i64 0}` の constant Ok base が両方出る)。
+The IR contains both `switch i64` and `insertvalue` (both the constant Err base `{i64 0, i64 0}` and the constant Ok base `{i64 1, i64 0}` appear).
 
-実行結果:
+Execution result:
 ```
 5
 0
 ```
 
-- [ ] **Step 3.7: 既存 Option の smoke も回帰なし**
+- [ ] **Step 3.7: No regression in the existing Option smoke test**
 
 ```sh
 RW_WORKERS=1 uv run rwc run examples/option_basic.rw
@@ -926,15 +926,15 @@ Expected:
 -1
 ```
 
-`_emit_arm` 経由で Option-style もこの commit で書き直されるので回帰確認は必須。
+Since Option-style is also rewritten in this commit via `_emit_arm`, the regression check is mandatory.
 
-- [ ] **Step 3.8: 全 pytest**
+- [ ] **Step 3.8: Full pytest**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: `130 passed` (Task 2 の数のまま、このタスクでテスト追加なし)。
+Expected: `130 passed` (same count as Task 2; no tests added in this task).
 
 - [ ] **Step 3.9: Commit**
 
@@ -977,7 +977,7 @@ EOF
 - Create: `examples/result_basic.rw.expected`
 - Modify: `tests/test_e2e.py`
 
-- [ ] **Step 4.1: `examples/result_basic.rw` を書く**
+- [ ] **Step 4.1: Write `examples/result_basic.rw`**
 
 ```rw
 def div_checked(a: int, b: int) -> Result[int, int]:
@@ -1008,40 +1008,40 @@ def main() -> int:
 0
 ```
 
-(末尾改行ありで保存。)
+(Save with a trailing newline.)
 
-- [ ] **Step 4.3: 手元で byte 一致**
+- [ ] **Step 4.3: Confirm byte-for-byte match locally**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
 diff <(RW_WORKERS=1 uv run rwc run examples/result_basic.rw 2>&1) examples/result_basic.rw.expected && echo OK
 ```
 
-Expected: `OK` だけが表示される。
+Expected: only `OK` is printed.
 
-- [ ] **Step 4.4: `tests/test_e2e.py` の parametrize に `result_basic` を追加**
+- [ ] **Step 4.4: Add `result_basic` to the parametrize in `tests/test_e2e.py`**
 
-`tests/test_e2e.py:45` の以下の行:
+The following line at `tests/test_e2e.py:45`:
 
 ```python
     ["hello", "arith", "fib", "while_count", "spawn_basic", "spawn_many", "spawn_string", "string_ops", "bytes_basic", "list_basic", "option_basic"],
 ```
 
-を以下に変更:
+changes to the following:
 
 ```python
     ["hello", "arith", "fib", "while_count", "spawn_basic", "spawn_many", "spawn_string", "string_ops", "bytes_basic", "list_basic", "option_basic", "result_basic"],
 ```
 
-- [ ] **Step 4.5: 全 pytest**
+- [ ] **Step 4.5: Full pytest**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: 130 + 1 = `131 passed`。
+Expected: 130 + 1 = `131 passed`.
 
-- [ ] **Step 4.6: 既存 example 回帰**
+- [ ] **Step 4.6: Existing example regression**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
@@ -1073,7 +1073,7 @@ hello
 30
 ```
 
-- [ ] **Step 4.7: ランタイム単体テストも緑か (ランタイム変更なしだが念のため)**
+- [ ] **Step 4.7: Confirm the runtime unit tests are green too (no runtime changes, but just in case)**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime
@@ -1113,37 +1113,37 @@ EOF
 
 ### Spec coverage
 
-| Spec 要求 | カバーするタスク |
+| Spec requirement | Covering tasks |
 |---|---|
-| 新型 `Result[int, int]` (キーワード `Result`、parser が `[int, int]` 強制) | Task 1.1 / 1.2 / 1.5 / 1.8 |
-| `Ok(int) -> Result[int, int]` / `Err(int) -> Result[int, int]` 式 | Task 1.3 (AST) / 1.6 (parser) / 2.1 (sema) / 3.3 (irgen) |
-| match を Option / Result の 2 style に対応 | Task 1.4 (AST style field) / 1.7 (parse_match 書き直し) / 1.9 (sema 分岐) / 2.2 (Result-style sema) / 3.5 (irgen 分岐) |
-| Some/None と Ok/Err の混在禁止 (parser) | Task 1.7 (`mixed match arms`) + test 1.11 |
-| Result-style match の Ok/Err bound 変数が int | Task 2.2 (sema) + test 2.3 |
-| return-coverage が Result の両 arm を見る | Task 2.2 (`ok_ret and err_ret`) + test 2.3 |
-| 内部表現 16 バイト value 返し | Task 3.1 (`RW_RESULT_INT_INT_TY = LiteralStructType([I64, I64])`) |
-| `Result[string, int]` 等は parser エラー | Task 1.5 + test 1.11 |
-| match の片側欠落は parser エラー (両 style) | Task 1.7 + test 1.11 (mixed arms と片欠落は別エラー、両方が parser でカバー) |
-| `print(Result[int, int])` は型エラー | `is_printable` 不変 + test 2.4 |
-| `Result == Result` は型エラー | == whitelist 不変 + test 2.4 |
-| `Ok(string)` / `Err(string)` は型エラー | Task 2.1 + test 2.4 |
-| match ターゲットが Result[int, int] でないと型エラー | Task 2.2 + test 2.4 |
-| `Future[Result[int, int]]` 禁止 | `_decl_spawn`/`_decl_await` に追加しないことで自動禁止 (Option と同じ判断) |
-| 既存 115 テスト緑 | Task 1.12, 2.6, 3.8, 4.5 |
-| Option-style match の挙動回帰なし | Task 1.7 の `style == "option"` パスを保つ + Task 3.5 の `_emit_arm` 共通化後の smoke (Step 3.7) + Task 4.6 |
+| New type `Result[int, int]` (keyword `Result`, parser enforces `[int, int]`) | Task 1.1 / 1.2 / 1.5 / 1.8 |
+| `Ok(int) -> Result[int, int]` / `Err(int) -> Result[int, int]` expressions | Task 1.3 (AST) / 1.6 (parser) / 2.1 (sema) / 3.3 (irgen) |
+| match supports two styles, Option / Result | Task 1.4 (AST style field) / 1.7 (parse_match rewrite) / 1.9 (sema branching) / 2.2 (Result-style sema) / 3.5 (irgen branching) |
+| Disallow mixing Some/None and Ok/Err (parser) | Task 1.7 (`mixed match arms`) + test 1.11 |
+| Ok/Err bound variables in Result-style match are int | Task 2.2 (sema) + test 2.3 |
+| return-coverage considers both arms of a Result | Task 2.2 (`ok_ret and err_ret`) + test 2.3 |
+| Internal representation returned as a 16-byte value | Task 3.1 (`RW_RESULT_INT_INT_TY = LiteralStructType([I64, I64])`) |
+| `Result[string, int]` and similar are parser errors | Task 1.5 + test 1.11 |
+| A missing arm is a parser error (both styles) | Task 1.7 + test 1.11 (mixed arms and a missing arm are distinct errors, both covered by the parser) |
+| `print(Result[int, int])` is a type error | `is_printable` unchanged + test 2.4 |
+| `Result == Result` is a type error | == whitelist unchanged + test 2.4 |
+| `Ok(string)` / `Err(string)` are type errors | Task 2.1 + test 2.4 |
+| match target that is not Result[int, int] is a type error | Task 2.2 + test 2.4 |
+| `Future[Result[int, int]]` disallowed | Automatically disallowed by not adding it to `_decl_spawn`/`_decl_await` (same decision as Option) |
+| Existing 115 tests green | Task 1.12, 2.6, 3.8, 4.5 |
+| No behavior regression in Option-style match | Preserve the `style == "option"` path in Task 1.7 + the post-`_emit_arm`-unification smoke test in Task 3.5 (Step 3.7) + Task 4.6 |
 
-すべての spec 要求にタスクがある。
+Every spec requirement has a task.
 
-### Placeholder スキャン
+### Placeholder scan
 
-「TBD」「TODO」「(要確認)」「fill in」「Add appropriate」「Similar to Task N」は plan 内 0 件。`raise "not yet implemented"` ガード (Task 1.9 / 1.10) は **意図的な中間状態** で、Task 2 / Task 3 で削除されることが明示されている。placeholder ではない。
+Zero occurrences of "TBD", "TODO", "(to be confirmed)", "fill in", "Add appropriate", or "Similar to Task N" in the plan. The `raise "not yet implemented"` guards (Task 1.9 / 1.10) are an **intentional intermediate state**, and it is explicitly stated that they are removed in Task 2 / Task 3. They are not placeholders.
 
 ### Type consistency
 
-- `T.RESULT_INT_INT` は Task 1.1 / 1.8 / 2.1 / 2.2 / 3.2 / 3.3 で完全一致
-- LLVM 表現 `RW_RESULT_INT_INT_TY = LiteralStructType([I64, I64])` は Task 3.1 / 3.2 / 3.3 で揃っている
-- 新規 AST ノード: `OkExpr` / `ErrExpr` を Task 1.3 (定義) / 1.6 (parser) / 2.1 (sema) / 3.3 (irgen) で揃って使用
-- `MatchStmt` の新フィールド: `style` / `ok_var` / `ok_block` / `err_var` / `err_block` を Task 1.4 (定義) / 1.7 (parser) / 1.9 + 2.2 (sema) / 3.5 (irgen) で揃って使用
-- Sema 型エラーメッセージ: `"Ok argument must be int"` / `"Err argument must be int"` / `"match target must be Result[int, int]"` を実装 (Task 2.1, 2.2) と negative テスト assert (Task 2.4) で完全一致
-- `_emit_arm` の引数順 `(var_name, block, payload, ctx, end_bb)` は Task 3.4 (定義) / 3.5 (呼び出し) で一致
-- 既存 Option-style の `some_var` / `some_block` / `none_block` フィールド名は Task 1.4 (AST 再定義) / 1.7 (parser) / 1.9 (sema) / 3.5 (irgen) で揃って維持
+- `T.RESULT_INT_INT` matches exactly across Task 1.1 / 1.8 / 2.1 / 2.2 / 3.2 / 3.3
+- The LLVM representation `RW_RESULT_INT_INT_TY = LiteralStructType([I64, I64])` is consistent across Task 3.1 / 3.2 / 3.3
+- New AST nodes: `OkExpr` / `ErrExpr` are used consistently in Task 1.3 (definition) / 1.6 (parser) / 2.1 (sema) / 3.3 (irgen)
+- New `MatchStmt` fields: `style` / `ok_var` / `ok_block` / `err_var` / `err_block` are used consistently in Task 1.4 (definition) / 1.7 (parser) / 1.9 + 2.2 (sema) / 3.5 (irgen)
+- Sema type-error messages: `"Ok argument must be int"` / `"Err argument must be int"` / `"match target must be Result[int, int]"` match exactly between the implementation (Task 2.1, 2.2) and the negative-test asserts (Task 2.4)
+- The argument order of `_emit_arm`, `(var_name, block, payload, ctx, end_bb)`, matches between Task 3.4 (definition) / 3.5 (call)
+- The existing Option-style field names `some_var` / `some_block` / `none_block` are consistently retained in Task 1.4 (AST redefinition) / 1.7 (parser) / 1.9 (sema) / 3.5 (irgen)

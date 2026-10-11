@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** rw 言語に最小の文字列操作 `len(s)` / `s == s` / `s + s` を追加し、後の netpoller 統合で echo server を書ける土台を作る。
+**Goal:** Add the minimal string operations `len(s)` / `s == s` / `s + s` to the rw language, laying the groundwork for writing an echo server once the netpoller is integrated later.
 
-**Architecture:** ランタイムに C ABI ヘルパ 3 本 (`rw_str_len` / `rw_str_eq` / `rw_str_concat`) を追加し、Sema で組込み関数テーブルと二項演算子の型ルールを拡張、irgen でこれらを呼び出す IR を出す。公開 ABI (`rw_spawn_*`, `rw_str`) は不変。
+**Architecture:** Add three C ABI helpers to the runtime (`rw_str_len` / `rw_str_eq` / `rw_str_concat`), extend Sema's builtin-function table and the binary-operator type rules, and emit IR from irgen that calls these helpers. The public ABI (`rw_spawn_*`, `rw_str`) is unchanged.
 
-**Tech Stack:** C11 (ランタイム)、Python 3.12 + llvmlite (コンパイラ)、pytest (テスト)。
+**Tech Stack:** C11 (runtime), Python 3.12 + llvmlite (compiler), pytest (tests).
 
 **Spec:** `docs/specs/07-string-builtins.md`
 
@@ -16,29 +16,29 @@
 
 | File | Responsibility | Action |
 |---|---|---|
-| `runtime/runtime.h` | ABI 宣言 | 3 行追加 |
-| `runtime/runtime.c` | 3 ヘルパ実装 | 関数 3 つ追加 |
-| `runtime/fiber/test_str_ops.c` | C レベル単体テスト | 新規 |
-| `runtime/Makefile` | (変更なし — `librw.a` は同じ OBJS) | — |
-| `rwc/sema.py` | 組込み関数 / 演算子型ルール | 3 ヶ所修正 |
-| `rwc/irgen.py` | ヘルパ呼び出し IR 生成 | 3 ヶ所修正 |
-| `tests/test_sema.py` | 型検査の positive/negative | テスト追加 |
-| `tests/test_e2e.py` | string_ops を parametrize に追加 | 1 行追加 |
-| `examples/string_ops.rw` | 機能を 1 つの main で示すサンプル | 新規 |
-| `examples/string_ops.rw.expected` | 期待出力 | 新規 |
-| `.gitignore` | C テストバイナリ無視 | 1 行追加 |
+| `runtime/runtime.h` | ABI declarations | Add 3 lines |
+| `runtime/runtime.c` | 3 helper implementations | Add 3 functions |
+| `runtime/fiber/test_str_ops.c` | C-level unit test | New |
+| `runtime/Makefile` | (unchanged — `librw.a` uses the same OBJS) | — |
+| `rwc/sema.py` | Builtin functions / operator type rules | 3 edits |
+| `rwc/irgen.py` | Emit IR that calls the helpers | 3 edits |
+| `tests/test_sema.py` | Positive/negative type-checking | Add tests |
+| `tests/test_e2e.py` | Add string_ops to the parametrize list | Add 1 line |
+| `examples/string_ops.rw` | Sample showing every feature in a single main | New |
+| `examples/string_ops.rw.expected` | Expected output | New |
+| `.gitignore` | Ignore the C test binary | Add 1 line |
 
 ---
 
-## Task 1: ランタイムヘルパ 3 関数
+## Task 1: Three runtime helper functions
 
 **Files:**
-- Modify: `runtime/runtime.h` (プロトタイプ追加)
-- Modify: `runtime/runtime.c` (実装追加)
+- Modify: `runtime/runtime.h` (add prototypes)
+- Modify: `runtime/runtime.c` (add implementations)
 
-- [ ] **Step 1.1: `runtime.h` に 3 プロトタイプを追加**
+- [ ] **Step 1.1: Add the three prototypes to `runtime.h`**
 
-`runtime/runtime.h` の `/* print */` ブロックの直下、`/* string helper */` セクションの末尾に追加:
+Add them at the end of the `/* string helper */` section, immediately below the `/* print */` block in `runtime/runtime.h`:
 
 ```c
 /* string ops (Commit added by string-builtins PR) */
@@ -47,9 +47,9 @@ int8_t  rw_str_eq    (rw_str a, rw_str b);
 rw_str  rw_str_concat(rw_str a, rw_str b);
 ```
 
-- [ ] **Step 1.2: `runtime.c` に実装を追加**
+- [ ] **Step 1.2: Add the implementations to `runtime.c`**
 
-`runtime/runtime.c` の `/* ---------- string helper ---------- */` セクションの直下、`/* ---------- lifecycle ---------- */` の上に追加:
+Add them immediately below the `/* ---------- string helper ---------- */` section and above `/* ---------- lifecycle ---------- */` in `runtime/runtime.c`:
 
 ```c
 /* ---------- string ops ---------- */
@@ -85,13 +85,13 @@ rw_str rw_str_concat(rw_str a, rw_str b) {
 }
 ```
 
-- [ ] **Step 1.3: 既存 C テストが緑のまま動くか確認**
+- [ ] **Step 1.3: Verify the existing C tests still pass**
 
 ```sh
 make -C runtime clean && make -C runtime
 ```
 
-Expected: `librw.a` がエラーなくビルドされる (新シンボル 3 つ追加、警告なし)。
+Expected: `librw.a` builds without errors (three new symbols added, no warnings).
 
 ```sh
 cd runtime
@@ -100,9 +100,9 @@ cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_sched.c fiber/fi
 
 Expected: `total = 333833500` / `expected = 333833500`。
 
-- [ ] **Step 1.4: C テスト `test_str_ops.c` を書く**
+- [ ] **Step 1.4: Write the C test `test_str_ops.c`**
 
-`runtime/fiber/test_str_ops.c` を新規作成:
+Create `runtime/fiber/test_str_ops.c`:
 
 ```c
 /*
@@ -171,29 +171,29 @@ int main(void) {
 }
 ```
 
-- [ ] **Step 1.5: `.gitignore` に test_str_ops を追加**
+- [ ] **Step 1.5: Add test_str_ops to `.gitignore`**
 
-`/Users/ryuichi/ghq/github.com/ryuichi1208/rw/.gitignore` の `runtime/fiber/test_shutdown` の下に行追加:
+Add a line below `runtime/fiber/test_shutdown` in `/Users/ryuichi/ghq/github.com/ryuichi1208/rw/.gitignore`:
 
 ```
 runtime/fiber/test_str_ops
 ```
 
-- [ ] **Step 1.6: ビルドして実行**
+- [ ] **Step 1.6: Build and run**
 
 ```sh
 cd runtime && cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE fiber/test_str_ops.c runtime.o -o fiber/test_str_ops && ./fiber/test_str_ops
 ```
 
-Expected: `all str_ops tests passed`。
+Expected: `all str_ops tests passed`.
 
-- [ ] **Step 1.7: 既存テスト一式が緑か確認**
+- [ ] **Step 1.7: Verify the full existing test suite is green**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q
 ```
 
-Expected: `66 passed`。
+Expected: `66 passed`.
 
 - [ ] **Step 1.8: Commit**
 
@@ -224,22 +224,22 @@ EOF
 
 ---
 
-## Task 2: コンパイラ (sema + irgen) を拡張
+## Task 2: Extend the compiler (sema + irgen)
 
 **Files:**
 - Modify: `rwc/sema.py` (lines around 290-345 = binop check, around 378 = call check)
 - Modify: `rwc/irgen.py` (lines around 68-71 = decls, 289-366 = binop, 368+ = call)
 - Modify: `tests/test_sema.py`
 
-### Sema 側
+### Sema side
 
-- [ ] **Step 2.1: Sema の現状を確認**
+- [ ] **Step 2.1: Review the current state of Sema**
 
-`rwc/sema.py:289-345` 付近に二項演算子の型チェックがある。`==` / `!=` の string 同士が `"string equality not supported in MVP"` で弾かれている (322 行付近)。`+` は int/float のみ許可。組込み関数は 378 行付近で `print` のみハードコード。
+There is a binary-operator type check around `rwc/sema.py:289-345`. `==` / `!=` between two strings is rejected with `"string equality not supported in MVP"` (around line 322). `+` is allowed only for int/float. Builtin functions are hardcoded around line 378 with `print` only.
 
-- [ ] **Step 2.2: Sema の `+` / `==` / `!=` を string にも許可する**
+- [ ] **Step 2.2: Allow `+` / `==` / `!=` on strings in Sema**
 
-`rwc/sema.py` で「string equality not supported in MVP」のエラーを返している分岐 (sema.py:322 付近) を:
+Take the branch in `rwc/sema.py` that returns the "string equality not supported in MVP" error (around sema.py:322):
 
 ```python
                     # We could allow string equality later; disallow for MVP simplicity.
@@ -249,7 +249,7 @@ EOF
                     ))
 ```
 
-これを **削除** し、両辺 string の `==`/`!=` を bool として通すように直す。具体的には `==`/`!=` のハンドラを次の形に書き換える (前後文脈は実装時に sema.py を Read で開いて当てる):
+**Delete** it and change the code so that `==`/`!=` between two strings passes as bool. Concretely, rewrite the `==`/`!=` handler into the following form (open sema.py with Read at implementation time to match the surrounding context):
 
 ```python
             # equality on int / float / bool / string
@@ -262,7 +262,7 @@ EOF
                 ))
 ```
 
-`+` のハンドラには新しい string 分岐を 1 つ追加:
+Add one new string branch to the `+` handler:
 
 ```python
             if op == "+":
@@ -278,9 +278,9 @@ EOF
                 ))
 ```
 
-- [ ] **Step 2.3: Sema に `len` 組込みを追加**
+- [ ] **Step 2.3: Add the `len` builtin to Sema**
 
-`rwc/sema.py:378` の `if call.callee == "print":` ブロックの **直下** に、同じ高さで `len` の特例を追加:
+Add a special case for `len` at the same level, immediately below the `if call.callee == "print":` block at `rwc/sema.py:378`:
 
 ```python
         if call.callee == "len":
@@ -298,7 +298,7 @@ EOF
             return T.INT
 ```
 
-`spawn` 経路で `spawn len(x)` を禁止する分岐 (`if call.callee == "print":` のところと同じ場所、sema.py:352 付近) にも `len` を加える:
+Also add `len` to the branch that forbids `spawn len(x)` in the `spawn` path (the same location as `if call.callee == "print":`, around sema.py:352):
 
 ```python
                 if call.callee == "print":
@@ -313,9 +313,9 @@ EOF
                     ))
 ```
 
-- [ ] **Step 2.4: Sema 単体テスト (positive)**
+- [ ] **Step 2.4: Sema unit tests (positive)**
 
-`tests/test_sema.py` に追加する関数。既存ヘルパ (`analyze_str` のような形) があればそれを使う。ヘルパが無ければ次のようなものを追加:
+Functions to add to `tests/test_sema.py`. Use an existing helper (something shaped like `analyze_str`) if one exists. If there is no helper, add something like this:
 
 ```python
 def _analyze(src: str) -> None:
@@ -327,7 +327,7 @@ def _analyze(src: str) -> None:
     analyze(ast, filename="<t>")
 ```
 
-その上で:
+Then, on top of that:
 
 ```python
 def test_string_len_returns_int():
@@ -372,9 +372,9 @@ def main() -> int:
 """)
 ```
 
-- [ ] **Step 2.5: Sema 単体テスト (negative)**
+- [ ] **Step 2.5: Sema unit tests (negative)**
 
-`tests/test_sema.py` に追加:
+Add to `tests/test_sema.py`:
 
 ```python
 import pytest
@@ -422,21 +422,21 @@ def main() -> int:
     assert "len takes exactly 1 argument" in str(excinfo.value)
 ```
 
-- [ ] **Step 2.6: Sema テストを走らせる**
+- [ ] **Step 2.6: Run the Sema tests**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest tests/test_sema.py -v 2>&1 | tail -20
 ```
 
-Expected: 既存テスト + 新規 8 つ全部 PASS。
+Expected: the existing tests plus all 8 new ones PASS.
 
-`CompileError` のフォーマットや既存 test_sema.py のスタイルが違ったら、それに合わせて補正する (`from rwc.diagnostics import CompileError` の import を追加する等)。`_analyze` ヘルパが既に test_sema.py にあれば再定義せずに使う。
+If the `CompileError` format or the style of the existing test_sema.py differs, adjust accordingly (e.g. add the `from rwc.diagnostics import CompileError` import). If the `_analyze` helper already exists in test_sema.py, use it rather than redefining it.
 
-### irgen 側
+### irgen side
 
-- [ ] **Step 2.7: irgen の外部関数宣言を 3 つ追加**
+- [ ] **Step 2.7: Add the three external function declarations to irgen**
 
-`rwc/irgen.py:68-71` の `self._rw_print_*` の宣言の **直下** に追加:
+Add them immediately below the `self._rw_print_*` declarations at `rwc/irgen.py:68-71`:
 
 ```python
         self._rw_str_len = ir.Function(
@@ -447,9 +447,9 @@ Expected: 既存テスト + 新規 8 つ全部 PASS。
             m, ir.FunctionType(RW_STR_TY, [RW_STR_TY, RW_STR_TY]), "rw_str_concat")
 ```
 
-- [ ] **Step 2.8: irgen の `_emit_call` で `len` を扱う**
+- [ ] **Step 2.8: Handle `len` in irgen's `_emit_call`**
 
-`rwc/irgen.py:368` 付近の `_emit_call` で、`print` を処理しているブロックの **直下** に同じスタイルで:
+In `_emit_call` around `rwc/irgen.py:368`, add the following in the same style immediately below the block that handles `print`:
 
 ```python
             if call.callee == "len":
@@ -457,9 +457,9 @@ Expected: 既存テスト + 新規 8 つ全部 PASS。
                 return ctx.builder.call(self._rw_str_len, [v])
 ```
 
-- [ ] **Step 2.9: irgen の `_emit_binop` で string ケースを扱う**
+- [ ] **Step 2.9: Handle the string cases in irgen's `_emit_binop`**
 
-`rwc/irgen.py:289` 付近の `_emit_binop` で、`+` / `==` / `!=` の処理に string 分岐を追加。`a.type == RW_STR_TY` または、Sema が付けた型情報を使って判別する (irgen.py を Read してどちらの方式が現状か確認してから当てる)。スケルトン:
+In `_emit_binop` around `rwc/irgen.py:289`, add string branches to the handling of `+` / `==` / `!=`. Discriminate using `a.type == RW_STR_TY` or the type information attached by Sema (Read irgen.py first to confirm which approach is currently used before applying). Skeleton:
 
 ```python
         if op == "+":
@@ -479,17 +479,17 @@ Expected: 既存テスト + 新規 8 つ全部 PASS。
             ...
 ```
 
-実際の API 名 (`b.icmp_unsigned` か `b.icmp_signed` か、`not_` の存在等) は llvmlite の慣例に従う。既存 irgen.py で int の `==` 生成にどう書かれているかを見て、それに揃える。
+Follow llvmlite conventions for the actual API names (whether `b.icmp_unsigned` or `b.icmp_signed`, whether `not_` exists, etc.). Look at how the existing irgen.py emits int `==` and match that style.
 
-- [ ] **Step 2.10: ビルドして既存 e2e が動くか確認**
+- [ ] **Step 2.10: Build and verify the existing e2e tests pass**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: 66 + 新規 sema 8 = 74 件全部 PASS。e2e は既存 7 件もそのまま緑。
+Expected: 66 + 8 new sema = 74 tests all PASS. The existing 7 e2e tests stay green as well.
 
-- [ ] **Step 2.11: 単独で IR 生成して目視確認**
+- [ ] **Step 2.11: Generate IR standalone and inspect it visually**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
@@ -507,9 +507,9 @@ EOF
 uv run rwc emit-ir /tmp/string_smoke.rw | grep -E "rw_str_(concat|eq|len)"
 ```
 
-Expected: 3 つの `call ... @rw_str_concat`, `@rw_str_eq`, `@rw_str_len` が出力に含まれる。
+Expected: the output contains the three calls `call ... @rw_str_concat`, `@rw_str_eq`, and `@rw_str_len`.
 
-- [ ] **Step 2.12: 単独でビルド + 実行**
+- [ ] **Step 2.12: Build and run standalone**
 
 ```sh
 uv run rwc run /tmp/string_smoke.rw
@@ -559,7 +559,7 @@ EOF
 - Create: `examples/string_ops.rw.expected`
 - Modify: `tests/test_e2e.py` (parametrize list)
 
-- [ ] **Step 3.1: `examples/string_ops.rw` を書く**
+- [ ] **Step 3.1: Write `examples/string_ops.rw`**
 
 ```rw
 def main() -> int:
@@ -576,7 +576,7 @@ def main() -> int:
     return 0
 ```
 
-- [ ] **Step 3.2: `examples/string_ops.rw.expected` を書く**
+- [ ] **Step 3.2: Write `examples/string_ops.rw.expected`**
 
 ```
 hello, world
@@ -585,9 +585,9 @@ eq ok
 neq ok
 ```
 
-(末尾改行ありで保存。`print` は自動改行を付けるので、行数と内容を一致させる。)
+(Save with a trailing newline. `print` appends a newline automatically, so match the line count and contents accordingly.)
 
-- [ ] **Step 3.3: 手元で実行して期待出力と一致するか確認**
+- [ ] **Step 3.3: Run locally and confirm it matches the expected output**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw
@@ -595,11 +595,11 @@ RW_WORKERS=1 uv run rwc run examples/string_ops.rw
 diff <(RW_WORKERS=1 uv run rwc run examples/string_ops.rw 2>&1) examples/string_ops.rw.expected
 ```
 
-Expected: `diff` の出力なし (バイト一致)。
+Expected: no `diff` output (byte-for-byte match).
 
-- [ ] **Step 3.4: `tests/test_e2e.py` の parametrize に `string_ops` を追加**
+- [ ] **Step 3.4: Add `string_ops` to the parametrize list in `tests/test_e2e.py`**
 
-`tests/test_e2e.py` の以下の行 (37-40 付近):
+Change the following lines in `tests/test_e2e.py` (around 37-40):
 
 ```python
 @pytest.mark.parametrize(
@@ -608,7 +608,7 @@ Expected: `diff` の出力なし (バイト一致)。
 )
 ```
 
-を:
+to:
 
 ```python
 @pytest.mark.parametrize(
@@ -617,17 +617,15 @@ Expected: `diff` の出力なし (バイト一致)。
 )
 ```
 
-に変更。
-
-- [ ] **Step 3.5: e2e テスト一式を走らせる**
+- [ ] **Step 3.5: Run the full e2e test suite**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw && uv run pytest -q 2>&1 | tail -5
 ```
 
-Expected: 全部緑 (66 + sema 新規 8 + e2e 新規 1 = 75 件)。
+Expected: all green (66 + 8 new sema + 1 new e2e = 75 tests).
 
-- [ ] **Step 3.6: ランタイム単体テストも緑か確認**
+- [ ] **Step 3.6: Verify the runtime unit tests are also green**
 
 ```sh
 cd /Users/ryuichi/ghq/github.com/ryuichi1208/rw/runtime
@@ -637,7 +635,7 @@ cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE -pthread fiber/test_sched.c fiber/fi
 cc -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE fiber/test_str_ops.c runtime.o -o fiber/test_str_ops && ./fiber/test_str_ops
 ```
 
-Expected: `total = 333833500` / `all str_ops tests passed`。
+Expected: `total = 333833500` / `all str_ops tests passed`.
 
 - [ ] **Step 3.7: Commit**
 
@@ -663,22 +661,22 @@ EOF
 
 ## Self-Review
 
-Spec カバレッジ確認:
+Spec coverage check:
 
-- `len(s) -> int` 組込み → Task 2.3 (sema) + 2.7-2.8 (irgen) + 2.4/2.5 (test) + Task 3 (e2e)
+- `len(s) -> int` builtin → Task 2.3 (sema) + 2.7-2.8 (irgen) + 2.4/2.5 (test) + Task 3 (e2e)
 - `==` / `!=` for string → Task 2.2 (sema) + 2.9 (irgen) + 2.4-2.5 (test) + Task 3 (e2e)
 - `+` for string → Task 2.2 (sema) + 2.9 (irgen) + 2.4-2.5 (test) + Task 3 (e2e)
-- ランタイムヘルパ 3 関数 → Task 1.1-1.2 + C unit test 1.4-1.6
-- 空文字列 / NULL ptr の扱い → Task 1.2 (concat の `len == 0` 分岐) + 1.4 (test_str_ops の empty ケース)
-- 既存 e2e が壊れない → Task 2.10 + Task 3.5 で全件回す
-- 公開 ABI 不変 → 新シンボル追加のみ、既存シンボル変更なし
+- Three runtime helper functions → Task 1.1-1.2 + C unit test 1.4-1.6
+- Handling of empty string / NULL ptr → Task 1.2 (concat's `len == 0` branch) + 1.4 (empty cases in test_str_ops)
+- Existing e2e tests don't break → run everything in Task 2.10 + Task 3.5
+- Public ABI unchanged → only new symbols added, no existing symbols modified
 
-placeholder スキャン: 「TBD」「TODO」「(要確認)」「fill in」は plan 内に 0 件。
+Placeholder scan: zero occurrences of "TBD", "TODO", "(TBC)", or "fill in" in the plan.
 
-type consistency:
-- `rw_str_len` 引数 = `rw_str`、戻り値 = `int64_t` (= LLVM `I64`) — task 1.1, 1.2, 2.7 で一貫
-- `rw_str_eq` 引数 = `rw_str, rw_str`、戻り値 = `int8_t` (= LLVM `I8`) — 同上
-- `rw_str_concat` 引数 = `rw_str, rw_str`、戻り値 = `rw_str` (= LLVM `RW_STR_TY`) — 同上
-- Sema 内部の型定数 `T.STRING` / `T.INT` / `T.BOOL` の表記は task 2 全体で揃っている
+Type consistency:
+- `rw_str_len` arg = `rw_str`, return = `int64_t` (= LLVM `I64`) — consistent across tasks 1.1, 1.2, 2.7
+- `rw_str_eq` args = `rw_str, rw_str`, return = `int8_t` (= LLVM `I8`) — same
+- `rw_str_concat` args = `rw_str, rw_str`, return = `rw_str` (= LLVM `RW_STR_TY`) — same
+- The notation for Sema's internal type constants `T.STRING` / `T.INT` / `T.BOOL` is consistent across task 2
 
-リスク: irgen.py の `_emit_binop` の現状コード形 (どう型を判別しているか) は今は読まずに plan に書いたので、実装時に必ず Read で当てる。`isinstance(l.type, ir.LiteralStructType) and l.type == RW_STR_TY` の比較が等価で動くかは llvmlite 依存だが、既存 `rw_print_str` の呼び出し箇所と同じパターンに揃える前提。
+Risk: the current shape of `_emit_binop` in irgen.py (how it discriminates types) was written into the plan without reading it, so be sure to Read and match it at implementation time. Whether the comparison `isinstance(l.type, ir.LiteralStructType) and l.type == RW_STR_TY` works as an equality check is llvmlite-dependent, but the assumption is to match the pattern used at the existing `rw_print_str` call site.

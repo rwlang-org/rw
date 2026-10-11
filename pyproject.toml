@@ -44,5 +44,5 @@ target-version = ["py311"]
 python_version = "3.11"
 strict = false
 ignore_missing_imports = true
-# strict は段階的に有効化する方針。
-# 個別モジュールへ override を追加して順次厳格化していく。
+# Policy: enable strict mode gradually.
+# Add per-module overrides to tighten checks incrementally.

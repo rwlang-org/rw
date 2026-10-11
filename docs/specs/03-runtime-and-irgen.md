@@ -1,8 +1,8 @@
-# rw ランタイム ABI と IR 生成方針
+# rw Runtime ABI and IR Generation Strategy
 
-## ランタイム ABI
+## Runtime ABI
 
-ヘッダ `runtime/runtime.h`:
+Header `runtime/runtime.h`:
 
 ```c
 #ifndef RW_RUNTIME_H
@@ -18,10 +18,10 @@ void rw_print_f64(double v);
 void rw_print_bool(int8_t v);
 void rw_print_str(rw_str s);
 
-/* 文字列ヘルパ */
+/* string helpers */
 rw_str rw_str_from_cstr(const char *cstr, int64_t len);
 
-/* spawn / await(戻り値型ごとに分離) */
+/* spawn / await (separated per return type) */
 rw_future_t *rw_spawn_i64 (int64_t (*fn)(void *), void *args);
 rw_future_t *rw_spawn_f64 (double  (*fn)(void *), void *args);
 rw_future_t *rw_spawn_bool(int8_t  (*fn)(void *), void *args);
@@ -34,35 +34,34 @@ int8_t  rw_await_bool(rw_future_t *f);
 rw_str  rw_await_str (rw_future_t *f);
 void    rw_await_void(rw_future_t *f);
 
-/* プロセス init / shutdown(main 冒頭・末尾で rwc が挿入) */
+/* process init / shutdown (rwc inserts these at the start/end of main) */
 void rw_init(void);
 void rw_shutdown(void);
 
 #endif
 ```
 
-実装方針(runtime.c):
-- `rw_spawn_*` は内部で `pthread_create` を呼び、`rw_future_t` に
-  スレッド ID と結果格納域を保持する
-- `rw_await_*` は `pthread_join` 後、結果を返して `rw_future_t` を `free` する
-- `rw_print_*` は単純に `printf` 系を呼ぶ
-- `rw_init` / `rw_shutdown` は MVP では空でよい(将来のスレッドプール用)
+Implementation strategy (runtime.c):
+- `rw_spawn_*` internally calls `pthread_create` and stores the thread ID and a result slot in the `rw_future_t`
+- `rw_await_*` calls `pthread_join`, then returns the result and `free`s the `rw_future_t`
+- `rw_print_*` simply calls the `printf` family
+- `rw_init` / `rw_shutdown` may be empty in the MVP (reserved for a future thread pool)
 
-## `spawn f(a, b)` の IR 展開
+## IR expansion of `spawn f(a, b)`
 
-rw コード:
+rw code:
 ```python
 fut: Future[int] = spawn add(3, 4)
 ```
 
-rwc が生成するもの:
+What rwc generates:
 
-1. **クロージャ構造体** を匿名で定義:
+1. **A closure struct** defined anonymously:
    ```llvm
    %closure_add_0 = type { i64, i64 }
    ```
 
-2. **トランポリン関数** を生成(呼び出しサイトごとにユニーク):
+2. **A trampoline function** (unique per call site):
    ```llvm
    define i64 @rw_trampoline_add_0(i8* %args) {
        %p  = bitcast i8* %args to %closure_add_0*
@@ -76,24 +75,24 @@ rwc が生成するもの:
    }
    ```
 
-3. **呼び出し側**(spawn 式の展開):
+3. **The call site** (expansion of the spawn expression):
    ```llvm
    %args = call i8* @malloc(i64 16)
-   ; %a, %b を struct にストア
+   ; store %a, %b into the struct
    %fut  = call %rw_future_t* @rw_spawn_i64(
        i64 (i8*)* @rw_trampoline_add_0, i8* %args)
    ```
 
-## `await fut` の IR 展開
+## IR expansion of `await fut`
 
-戻り値型は Sema で既知。対応する `rw_await_*` を直接呼ぶ:
+The return type is known from Sema. The corresponding `rw_await_*` is called directly:
 ```llvm
 %v = call i64 @rw_await_i64(%rw_future_t* %fut)
 ```
 
-## main 関数
+## The main function
 
-rwc は `def main() -> int:` を必須とし、生成 IR では:
+rwc requires `def main() -> int:`, and the generated IR is:
 
 ```llvm
 define i32 @main() {
@@ -105,42 +104,42 @@ define i32 @main() {
 }
 ```
 
-`@rw_user_main` はユーザー定義 `main` を改名したもの。
+`@rw_user_main` is the renamed form of the user-defined `main`.
 
-## メモリ管理(MVP)
+## Memory management (MVP)
 
-| 対象 | 方針 |
+| Subject | Strategy |
 |---|---|
-| 文字列リテラル | `.rodata` に置く。`rw_str` は長さ+ポインタ。解放しない |
-| クロージャ構造体 | `malloc` / トランポリン末尾で `free` |
-| Future | `rw_await_*` 内で `free` |
-| ユーザー定義型 | MVP では存在しない |
+| String literals | Placed in `.rodata`. `rw_str` is length + pointer. Never freed |
+| Closure structs | `malloc` / `free`d at the end of the trampoline |
+| Future | `free`d inside `rw_await_*` |
+| User-defined types | Do not exist in the MVP |
 
-GC は導入しない。文字列を動的生成しない限りリークは発生しない。
+No GC is introduced. As long as strings are not dynamically generated, no leaks occur.
 
-将来 `list[T]` や文字列連結など動的なヒープ確保を伴う機能を入れる際、
-メモリ管理方針(ARC / マーク&スイープ GC / 所有権)を選ぶ必要がある。
-**現時点では決定を保留する**。判断材料がそろうのは:
+When features that entail dynamic heap allocation — such as `list[T]` or string
+concatenation — are added later, a memory-management strategy (ARC / mark-and-sweep GC /
+ownership) will need to be chosen. **That decision is deferred for now.** The inputs
+needed to decide will only be clear once the following are settled:
 
-- ユーザーが何を書きたいか(Web サーバー? 数値計算? Python ライブラリ連携?)
-- 並行性能(fiber と GC の相性、ARC のアトミック retain/release のコスト)
-- 標準ライブラリの形(文字列・配列・dict が言語仕様にどう収まるか)
+- What users want to write (a web server? numerical computing? Python-library interop?)
+- Concurrency performance (how well fibers and GC interact, the cost of atomic retain/release in ARC)
+- The shape of the standard library (how strings, arrays, and dicts fit into the language spec)
 
-がはっきりしてからになる。`docs/specs/06-memory-tbd.md` をいずれ作成して
-論点を整理する予定。
+We plan to eventually create `docs/specs/06-memory-tbd.md` to organize these discussion points.
 
-## エラー処理(MVP)
+## Error handling (MVP)
 
-例外なし、Result 型なし。実行時に死ぬ条件:
-- 整数ゼロ除算 → LLVM `sdiv` の未定義動作に任せる
-- スレッド生成失敗 → `rw_spawn_*` 内で `perror` + `exit(1)`
-- malloc 失敗 → 同上
+No exceptions, no Result type. Conditions that cause the process to die at runtime:
+- Integer division by zero → left to LLVM `sdiv`'s undefined behavior
+- Thread creation failure → `perror` + `exit(1)` inside `rw_spawn_*`
+- malloc failure → same as above
 
-## 将来予約(MVP では未実装エラー)
+## Reserved for the future (not-yet-implemented error in the MVP)
 
 ```python
 extern "c" def name(arg: int) -> int
 ```
 
-この構文は Lexer/Parser では受理し、Sema で「未実装」エラーを出す。
-将来 Phase 2+ で実装するときの後方互換のため。
+This syntax is accepted by the Lexer/Parser but Sema emits a "not implemented" error.
+This is for backward compatibility when it is implemented in Phase 2+.

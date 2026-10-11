@@ -1,38 +1,42 @@
-# rw fiber ランタイム
+# rw fiber runtime
 
-このドキュメントは、当初の `OS スレッド + Future` 方式(`docs/specs/03-runtime-and-irgen.md`)を
-**緑色スレッド(stackful coroutine + 小さいスタック)** に置き換えた新ランタイムを
-説明する。コンパイラ側の ABI(`rw_spawn_*` / `rw_await_*` / `rw_future_t`)は
-完全に保たれているので、ユーザーが書く rw コードは何も変わらない。
+This document describes the new runtime that replaces the original
+**OS thread + Future** approach (`docs/specs/03-runtime-and-irgen.md`) with
+**green threads (stackful coroutines + small stacks)**. The compiler-side ABI
+(`rw_spawn_*` / `rw_await_*` / `rw_future_t`) is fully preserved, so the rw code
+that users write does not change at all.
 
-## モチベーション
+## Motivation
 
-`pthread_create` ベースの旧実装は **1 万 spawn を超えると破綻**する:
+The old `pthread_create`-based implementation **breaks down beyond 10,000 spawns**:
 
-- macOS のデフォルトスレッドスタックは 512KB、Linux は 8MB
-- カーネル側の `task_struct` / `kthread` も 1 本あたり数 KB
-- `ulimit -u` のデフォルトが数千〜1 万のホストでは `pthread_create` が EAGAIN を返す
-- コンテキストスイッチコストが OS スケジューラ経由で μs オーダー
+- The default thread stack is 512KB on macOS and 8MB on Linux
+- The kernel-side `task_struct` / `kthread` also costs several KB per thread
+- On hosts where the default `ulimit -u` is a few thousand to ten thousand,
+  `pthread_create` returns EAGAIN
+- Context-switch cost is on the order of microseconds because it goes through
+  the OS scheduler
 
-これは「Web サーバー(C10k)を rw で書きたい」「数千ワーカーを spawn したい」
-というユースケースに合わなかった。fiber 版では:
+This did not fit the use cases of "I want to write a web server (C10k) in rw"
+or "I want to spawn thousands of workers." With the fiber version:
 
-- **1 fiber あたり 64KB + ガード 2 ページ**(arm64 で 16K + 16K)
-- **コンテキストスイッチはアセンブリ 1 関数**で、コール 1 回 + ロード/ストア数十命令
-- **OS リソースを使わない**(`pthread_create` を呼ばない)
-- 実測: macOS arm64 で **10 万 fiber が 437ms** で完走
+- **64KB + 2 guard pages per fiber** (16K + 16K on arm64)
+- **A context switch is a single assembly function**: one call plus a few dozen
+  load/store instructions
+- **No OS resources are used** (it never calls `pthread_create`)
+- Measured: **100,000 fibers finish in 437ms** on macOS arm64
 
-## 用語
+## Terminology
 
-| 用語 | 意味 |
+| Term | Meaning |
 |---|---|
-| **fiber** | 軽量スレッド。1 本の OS スレッド上で多重化される実行コンテキスト |
-| **fiber context** | callee-saved レジスタの保存領域(`rw_fiber_ctx`) |
-| **scheduler** | READY キューを持ち、yield/完了時に次の fiber を選んで swap する小さなループ |
-| **trampoline** | 新規 fiber を初回起動するときに「`x0 = arg` を準備してから `entry` にジャンプ」する小さなアセンブリ関数 |
-| **ハンドル** | spawn された fiber を識別する不透明ポインタ(`rw_future_t` の正体) |
+| **fiber** | A lightweight thread. An execution context multiplexed on top of a single OS thread |
+| **fiber context** | The save area for callee-saved registers (`rw_fiber_ctx`) |
+| **scheduler** | A small loop that holds a READY queue and, on yield/completion, picks the next fiber and swaps to it |
+| **trampoline** | A small assembly function that, when starting a new fiber for the first time, "sets up `x0 = arg` and then jumps to `entry`" |
+| **handle** | An opaque pointer that identifies a spawned fiber (the actual form of `rw_future_t`) |
 
-## コンテキストスイッチ ABI
+## Context-switch ABI
 
 `runtime/fiber/fiber.h`:
 
@@ -46,30 +50,30 @@ typedef struct {
 void rw_fiber_swap(rw_fiber_ctx *old, rw_fiber_ctx *new);
 ```
 
-### arm64 のレジスタレイアウト
+### arm64 register layout
 
-| word index | 内容 |
+| word index | contents |
 |---|---|
-| 0..9 | x19..x28(integer callee-saved) |
-| 10 | x29(FP) |
-| 11 | x30(LR; 復帰先) |
+| 0..9 | x19..x28 (integer callee-saved) |
+| 10 | x29 (FP) |
+| 11 | x30 (LR; return target) |
 | 12 | sp |
-| 13..20 | d8..d15(FP callee-saved の下半分) |
+| 13..20 | d8..d15 (lower half of the FP callee-saved registers) |
 
-`stp` / `ldp` のペアロード/ストアを使うことで命令数を最小化している。
-詳細は `runtime/fiber/fiber_arm64.S` を参照。
+Using `stp` / `ldp` paired load/store instructions minimizes the instruction
+count. See `runtime/fiber/fiber_arm64.S` for details.
 
-### 新規 fiber の起動
+### Starting a new fiber
 
-`rw_fiber_swap` は「callee-saved を保存・復帰」しかしない。新規 fiber の
-引数 `arg` は ABI 上 `x0` に置く必要があるが、`x0` は callee-saved では
-ないので swap では保存されない。
+`rw_fiber_swap` only "saves and restores callee-saved registers." The new
+fiber's argument `arg` must be placed in `x0` per the ABI, but `x0` is not
+callee-saved and so is not saved by swap.
 
-解決:**`x19 = entry`, `x20 = arg`, `lr = trampoline` を仕込む**。
-`rw_fiber_swap` から最初にこの fiber に切り替わったとき、`ret` で
-`trampoline` に飛び、`trampoline` が `mov x0, x20; blr x19` を実行する。
+Solution: **set up `x19 = entry`, `x20 = arg`, `lr = trampoline`**. The first
+time `rw_fiber_swap` switches to this fiber, `ret` jumps to `trampoline`, and
+`trampoline` executes `mov x0, x20; blr x19`.
 
-## スケジューラ
+## Scheduler
 
 `runtime/fiber/sched.h`:
 
@@ -79,105 +83,113 @@ void rw_sched_shutdown(void);
 void rw_sched_yield(void);
 
 rw_fiber_handle *rw_sched_spawn_i64 (int64_t (*fn)(void *), void *arg);
-/* ... f64 / bool / str / void も同様 ... */
+/* ... f64 / bool / str / void are the same ... */
 
 int64_t rw_sched_join_i64 (rw_fiber_handle *h);
-/* ... f64 / bool / str / void も同様 ... */
+/* ... f64 / bool / str / void are the same ... */
 ```
 
-### 動作
+### Behavior
 
-- **スレッドは 1 本のまま**(マルチコアは将来の D-6 で対応)
-- ready キューは FIFO の単方向リスト
-- `rw_sched_yield()` は現在の fiber をキュー末尾に積み、次の fiber に
-  swap する。次が無ければ呼び出し元(main または別 fiber)に戻る
-- `rw_sched_join_*(h)` は対象 fiber が DONE になるまで yield を繰り返し、
-  DONE になったら結果を取り出してハンドルを `free` する
+- **There is still only one thread** (multicore support comes later in D-6)
+- The ready queue is a FIFO singly linked list
+- `rw_sched_yield()` pushes the current fiber onto the tail of the queue and
+  swaps to the next fiber. If there is no next one, it returns to the caller
+  (main or another fiber)
+- `rw_sched_join_*(h)` repeatedly yields until the target fiber becomes DONE,
+  then extracts the result and `free`s the handle
 
-### スタックレイアウト
+### Stack layout
 
-| ページ | 用途 |
+| page | purpose |
 |---|---|
-| `[base, base + page]` | low guard(PROT_NONE) |
-| `[base + page, base + page + 64K]` | usable stack(下から上に伸びる) |
-| `[base + page + 64K, base + 2page + 64K]` | high guard(PROT_NONE) |
+| `[base, base + page]` | low guard (PROT_NONE) |
+| `[base + page, base + page + 64K]` | usable stack (grows from low to high) |
+| `[base + page + 64K, base + 2page + 64K]` | high guard (PROT_NONE) |
 
-ガードページは `mmap` + `mprotect(PROT_NONE)` で確保。スタックオーバーフロー
-は SIGSEGV になるので silent corruption しない。
+The guard pages are reserved with `mmap` + `mprotect(PROT_NONE)`. A stack
+overflow becomes a SIGSEGV, so there is no silent corruption.
 
-ページサイズは `sysconf(_SC_PAGESIZE)` で実行時取得(macOS arm64 = 16K、
-Linux x86_64 = 4K)。
+The page size is obtained at runtime with `sysconf(_SC_PAGESIZE)`
+(macOS arm64 = 16K, Linux x86_64 = 4K).
 
-## ユーザー ABI(変更なし)
+## User ABI (unchanged)
 
-`runtime/runtime.h` の以下は **シグネチャ完全互換**:
+The following in `runtime/runtime.h` is **fully signature-compatible**:
 
 ```c
 rw_future_t *rw_spawn_i64 (int64_t (*fn)(void *), void *args);
 int64_t      rw_await_i64 (rw_future_t *f);
-/* ...他の型も同様... */
+/* ...other types are the same... */
 ```
 
-実装は `runtime/runtime.c` で fiber スケジューラに委譲するシムになっている。
-コンパイラ(`rwc`)が吐く LLVM IR は一切変える必要がない。
+The implementation is a shim in `runtime/runtime.c` that delegates to the fiber
+scheduler. The LLVM IR emitted by the compiler (`rwc`) does not need to change
+at all.
 
-## await のセマンティクス
+## await semantics
 
-旧 pthread 版では `rw_await_*` は `pthread_join` で**呼び出しスレッドを
-ブロック**していた。fiber 版では:
+In the old pthread version, `rw_await_*` used `pthread_join` to **block the
+calling thread**. In the fiber version:
 
-- 呼び出し fiber は **`rw_sched_yield()` を繰り返す**だけ
-- その間、他の READY な fiber が走り続ける
-- 対象 fiber が完了したら結果を取り出して戻る
+- The calling fiber simply **repeats `rw_sched_yield()`**
+- Meanwhile, other READY fibers keep running
+- Once the target fiber completes, it extracts the result and returns
 
-つまり「await はもう協調的な待ち」であり、await 中に他の spawn 済み fiber
-がブロックされない。
+In other words, "await is now a cooperative wait," and other already-spawned
+fibers are not blocked during an await.
 
-ただし**現状は完全に協調**で、長時間 CPU を握る fiber は他の fiber を
-飢えさせる。割り込みベースのプリエンプションは将来課題(D-6 で検討)。
+However, **the current model is fully cooperative**, so a fiber that holds the
+CPU for a long time starves the other fibers. Interrupt-based preemption is a
+future task (to be considered in D-6).
 
-## ターゲット別の実装
+## Per-target implementation
 
-| OS / arch | アセンブリファイル | 状況 |
+| OS / arch | assembly file | status |
 |---|---|---|
-| macOS arm64 | `fiber/fiber_arm64.S` | 動作確認済み |
-| Linux aarch64 | `fiber/fiber_arm64.S` | 同じファイル、シンボル名のアンダースコアプレフィックスのみ条件付き |
-| Linux x86_64 | `fiber/fiber_x86_64.S` | **動作確認済み(Docker linux/amd64 で全テスト緑)** |
-| Windows | - | 対象外 |
+| macOS arm64 | `fiber/fiber_arm64.S` | verified working |
+| Linux aarch64 | `fiber/fiber_arm64.S` | same file; only the underscore prefix on symbol names is conditional |
+| Linux x86_64 | `fiber/fiber_x86_64.S` | **verified working (all tests green on Docker linux/amd64)** |
+| Windows | - | out of scope |
 
-x86_64 の実装メモ(System V AMD64 ABI):
+Implementation notes for x86_64 (System V AMD64 ABI):
 
-- callee-saved 整数レジスタ: `rbx`, `rbp`, `r12`, `r13`, `r14`, `r15`, `rsp`
-- 浮動小数 callee-saved は無し(XMM は全て caller-saved)
-- リターンアドレスはスタック上。新規 fiber では `rw_fiber_ctx_init` が
-  スタックトップに `&rw_fiber_trampoline` を書き込む
-- トランポリン: `r12 = entry`, `r13 = arg` から `mov %r13, %rdi; call *%r12`
+- callee-saved integer registers: `rbx`, `rbp`, `r12`, `r13`, `r14`, `r15`, `rsp`
+- there are no callee-saved floating-point registers (all XMM are caller-saved)
+- the return address is on the stack. For a new fiber, `rw_fiber_ctx_init`
+  writes `&rw_fiber_trampoline` at the top of the stack
+- trampoline: from `r12 = entry`, `r13 = arg`, run `mov %r13, %rdi; call *%r12`
 
-## 検証
+## Verification
 
-- `runtime/fiber/test_pingpong.c`: 3 fiber の往復で swap 自体を検証
-- `runtime/fiber/test_sched.c`: 1000 fiber で sum of squares が正しいことを検証
-- `runtime/fiber/test_c10k.c`: 10 万 fiber で 1+2+…+N が正しいことを検証
+- `runtime/fiber/test_pingpong.c`: verifies the swap itself with a round trip
+  across 3 fibers
+- `runtime/fiber/test_sched.c`: verifies that sum of squares is correct with
+  1000 fibers
+- `runtime/fiber/test_c10k.c`: verifies that 1+2+…+N is correct with
+  100,000 fibers
 
-加えて `tests/test_e2e.py` の `spawn_basic` / `spawn_many` / `spawn_string`
-が fiber バックエンドでも緑のまま動く。
+In addition, `spawn_basic` / `spawn_many` / `spawn_string` in
+`tests/test_e2e.py` keep working green on the fiber backend as well.
 
-## 既知の制限
+## Known limitations
 
-1. **スレッドは 1 本だけ**:CPU バウンドの並列実行はまだ得られない。
-   work-stealing マルチコアスケジューラは別フェーズ。
-2. **プリエンプションなし**:無限ループや重い計算をする fiber は他をブロックする。
-3. **I/O 自動 yield なし**:`read`/`recv` 等の syscall が直接ブロックすると
-   スケジューラ全体が止まる。epoll/kqueue 連携は別フェーズ。
-4. **デバッガ表示**:lldb のスタックトレースは「現在の fiber 1 本分」しか
-   見えない。複数 fiber 同時の状態取得は別 fiber を `info threads` で
-   個別に検査できない。
+1. **Only one thread**: CPU-bound parallel execution is not yet available.
+   A work-stealing multicore scheduler is a separate phase.
+2. **No preemption**: a fiber that runs an infinite loop or a heavy computation
+   blocks the others.
+3. **No automatic I/O yield**: if a syscall such as `read`/`recv` blocks
+   directly, the entire scheduler stalls. epoll/kqueue integration is a
+   separate phase.
+4. **Debugger display**: an lldb stack trace can only see "the single current
+   fiber." Inspecting the state of multiple fibers at once is not possible;
+   you cannot examine other fibers individually via `info threads`.
 
-## 今後
+## Future work
 
-| ID | 内容 | 効果 |
+| ID | contents | effect |
 |---|---|---|
-| ~~D-4~~ | ~~Linux x86_64 アセンブリ追加~~ | **完了** |
-| D-5 | I/O 多重化(epoll/kqueue 連携) | C10k Web サーバーが書ける |
-| D-6 | work-stealing マルチコア | CPU バウンドでも真の並列 |
-| D-7 | プリエンプション(タイマー or 安全点) | 行儀の悪い fiber を強制切替 |
+| ~~D-4~~ | ~~Add Linux x86_64 assembly~~ | **done** |
+| D-5 | I/O multiplexing (epoll/kqueue integration) | can write a C10k web server |
+| D-6 | work-stealing multicore | true parallelism even for CPU-bound work |
+| D-7 | preemption (timer or safepoints) | forcibly switch away from ill-behaved fibers |
