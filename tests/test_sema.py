@@ -1583,3 +1583,111 @@ def test_string_search_builtins_reject_bad_args(call, msg):
     e = err(f"def main() -> int:\n    x: int = 0\n    {call}\n    return 0\n")
     assert msg in e.diagnostic.message
 
+
+
+# ----- records (spec 20) -----
+
+RECORDS_OK = (
+    "class Request:\n    method: string\n    path: string\n\n"
+    "class Response:\n    status: int\n    req: Request\n    body: string\n\n"
+    "def handle(r: Request) -> Response:\n"
+    '    return Response(200, r, "hi " + r.path)\n\n'
+    "def main() -> int:\n"
+    '    req: Request = Request("GET", "/x")\n'
+    "    res: Response = handle(req)\n"
+    '    res.body = res.body + "!"\n'
+    '    res.req.path = "/y"\n'
+    "    print(res.req.path)\n"
+    "    return res.status\n"
+)
+
+
+def test_records_ok():
+    res = check(RECORDS_OK)
+    assert (None, "handle") in res.functions
+
+
+def test_record_forward_reference_ok():
+    check(
+        "class A:\n    b: B\n\nclass B:\n    n: int\n\n"
+        "def main() -> int:\n    a: A = A(B(1))\n    return a.b.n\n"
+    )
+
+
+def _rec(body: str, extra: str = "") -> CompileError:
+    return err(
+        "class P:\n    x: int\n    s: string\n\n" + extra
+        + "def main() -> int:\n    p: P = P(1, \"a\")\n" + body + "    return 0\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ("    q: P = P(1)\n", "P takes 2 arguments"),
+        ('    q: P = P("1", "a")\n', "field 1 (`x`) of P must be int"),
+        ("    print(p.nope)\n", "P has no field `nope`"),
+        ("    p.nope = 1\n", "P has no field `nope`"),
+        ('    p.x = "a"\n', "cannot assign `string` to field `x`"),
+        ("    n: int = 3\n    print(n.x)\n", "`int` has no fields"),
+        ("    print(p == p)\n", "cannot compare `P`"),
+    ],
+)
+def test_record_errors(body, msg):
+    assert msg in _rec(body).diagnostic.message
+
+
+@pytest.mark.parametrize(
+    "src, msg",
+    [
+        ("class P:\n    x: int\n\nclass P:\n    y: int\n\n", "duplicate class: P"),
+        ("class P:\n    x: int\n    x: int\n\n", "duplicate field `x` in class P"),
+        ("class P:\n    x: void\n\n", "field `x` cannot be void"),
+        ("class P:\n    x: Nope\n\n", "unknown type: Nope"),
+        ("class P:\n    x: int\n\ntype P = int\n\n", "`P` is already a class"),
+        ("class P:\n    x: int\n\ndef P() -> int:\n    return 1\n\n", "`P` is already a class"),
+        ("class len:\n    x: int\n\n", "class name `len` collides with a builtin"),
+    ],
+)
+def test_record_declaration_errors(src, msg):
+    e = err(src + "def main() -> int:\n    return 0\n")
+    assert msg in e.diagnostic.message
+
+
+def test_spawn_returning_record_is_error():
+    e = err(
+        "class P:\n    x: int\n\ndef mk() -> P:\n    return P(1)\n\n"
+        "def main() -> int:\n    f: Future[P] = spawn mk()\n    return 0\n"
+    )
+    assert "cannot spawn a function returning a record" in e.diagnostic.message
+
+
+def test_record_not_visible_from_other_module(tmp_path):
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            "import lib\n\ndef main() -> int:\n    p: P = lib.mk()\n    return 0\n",
+            lib="class P:\n    x: int\n\ndef mk() -> P:\n    return P(1)\n",
+        )
+    assert "unknown type: P" in ei.value.diagnostic.message
+
+
+def test_same_class_name_in_two_modules_are_distinct(tmp_path):
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            "import lib\n\nclass P:\n    x: int\n\ndef take(p: P) -> int:\n    return p.x\n\n"
+            "def main() -> int:\n    return take(lib.mk())\n",
+            lib="class P:\n    x: int\n\ndef mk() -> P:\n    return P(1)\n",
+        )
+    assert "argument 1" in ei.value.diagnostic.message
+
+
+def test_from_import_collides_with_local_class(tmp_path):
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            "from lib import P\n\nclass P:\n    x: int\n\ndef main() -> int:\n    return 0\n",
+            lib="def P() -> int:\n    return 1\n",
+        )
+    assert "collides with a local function or class" in ei.value.diagnostic.message
