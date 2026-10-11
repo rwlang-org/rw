@@ -4,7 +4,7 @@
 - ci: bump actions/checkout from 4.2.2 to 7.0.1 by @dependabot[bot] in https://github.com/rwlang-org/rw/pull/140
 - ci: bump astral-sh/setup-uv from 6.1.0 to 10.1.0 by @dependabot[bot] in https://github.com/rwlang-org/rw/pull/143
 - docs: translate all Japanese docs to English by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/136
-- feat: 名前空間付き import (PR1: plain import + 修飾呼び出し) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/133
+- feat: namespaced import (PR1: plain import + qualified calls) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/133
 - feat: from import (PR2: from x import y [as w]) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/134
 - feat: import as (PR3: import x as m) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/135
 
