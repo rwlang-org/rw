@@ -1840,3 +1840,31 @@ def test_generic_list_ok():
 def test_generic_list_errors(body, msg):
     e = err("def main() -> int:\n" + body + "    return 0\n")
     assert msg in e.diagnostic.message
+
+
+# ----- conversions and string ordering (spec 26) -----
+
+def test_conversions_ok():
+    check(
+        "def main() -> int:\n"
+        "    f: float = float(3) + float(2.5)\n"
+        "    i: int = int(f) + int(true) + int(7)\n"
+        '    s: string = str(i) + str(f) + str(false) + str("x")\n'
+        '    b: bool = "a" < "b" and "b" >= "b" and s > "" and "z" <= "zz"\n'
+        "    return i\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "expr, msg",
+    [
+        ('int("1")', "int argument must be int, float or bool"),
+        ("float(true)", "float argument must be int or float"),
+        ("str(bytes_from_str(\"a\"))", "str argument must be int, float, bool or string"),
+        ("int(1, 2)", "int takes 1 argument"),
+        ('"a" < 1', "requires int or float on both sides, or two strings"),
+    ],
+)
+def test_conversion_errors(expr, msg):
+    e = err(f"def main() -> int:\n    print({expr})\n    return 0\n")
+    assert msg in e.diagnostic.message
