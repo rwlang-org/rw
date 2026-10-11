@@ -17,7 +17,7 @@ jobs:
           # tagpr needs full history to derive the next version from
           # the existing tags and the commits since the latest one.
           fetch-depth: 0
-      - uses: Songmu/tagpr@1ed622d3ec96f7f37e7c2b5b3a6c39ace31ee8eb # v1.6.1
+      - uses: Songmu/tagpr@812f0c28980cb9a1e5cf427b65c1ac6a1d2b4377 # v1.6.1
         env:
           # tagpr reads GITHUB_TOKEN from the environment, not from
           # `with:`. The default token granted to the workflow has
