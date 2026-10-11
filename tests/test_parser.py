@@ -464,3 +464,28 @@ def test_parse_qualified_type_name():
     fn = mod.functions[0]
     assert (fn.params[0].type_expr.module, fn.params[0].type_expr.name) == ("web", "Request")
     assert (fn.return_type.module, fn.return_type.name) == ("web", "Response")
+
+
+# ----- function values (spec 21) -----
+
+def test_parse_callable_type():
+    mod = parse_src("def f(h: Callable[[int, string], bool], g: Callable[[], void]) -> int:\n    return 0\n")
+    h, g = mod.functions[0].params
+    assert isinstance(h.type_expr, A.TypeCallable)
+    assert [p.name for p in h.type_expr.params] == ["int", "string"]
+    assert h.type_expr.ret.name == "bool"
+    assert g.type_expr.params == [] and g.type_expr.ret.name == "void"
+
+
+def test_parse_call_on_field_and_call_result():
+    mod = parse_src("def main() -> int:\n    a.b.c(1)\n    pick()(2)\n    return 0\n")
+    e0 = mod.functions[0].body[0].expr
+    e1 = mod.functions[0].body[1].expr
+    assert isinstance(e0, A.CallValue) and isinstance(e0.callee, A.FieldAccess)
+    assert isinstance(e1, A.CallValue) and isinstance(e1.callee, A.Call)
+
+
+def test_parse_name_dot_call_stays_qualified_call():
+    mod = parse_src("def main() -> int:\n    r.handler(1)\n    return 0\n")
+    e = mod.functions[0].body[0].expr
+    assert isinstance(e, A.Call) and e.module == "r" and e.callee == "handler"

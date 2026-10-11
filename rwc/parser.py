@@ -307,6 +307,22 @@ class Parser:
         # A bare identifier is a user-defined type name (a type alias or a
         # class); `mod.Name` names a class of an imported module (spec 20).
         # Both are resolved in Sema.
+        # `Callable[[P1, ...], R]` (spec 21). `Callable` is not a keyword; it is
+        # only special in type position.
+        if t.kind == TokenKind.IDENT and t.value == "Callable" and self.peek(1).kind == TokenKind.LBRACK:
+            self.i += 1
+            self.eat(TokenKind.LBRACK, "'[' after Callable")
+            self.eat(TokenKind.LBRACK, "'[' to start the parameter type list")
+            params: List[A.TypeExpr] = []
+            if self.cur.kind != TokenKind.RBRACK:
+                params.append(self.parse_type())
+                while self.match(TokenKind.COMMA):
+                    params.append(self.parse_type())
+            self.eat(TokenKind.RBRACK, "']' to close the parameter type list")
+            self.eat(TokenKind.COMMA, "',' before the return type")
+            ret = self.parse_type()
+            self.eat(TokenKind.RBRACK, "']' to close Callable[...]")
+            return A.TypeCallable(params, ret, t.line, t.col)
         if t.kind == TokenKind.IDENT:
             self.i += 1
             if self.cur.kind == TokenKind.DOT:
@@ -808,12 +824,19 @@ class Parser:
             self.i += 1  # consume '('
             args = self._parse_arglist()
             atom = A.Call(atom.name, args, atom.line, atom.col)
-        while self.cur.kind == TokenKind.DOT:
+        while self.cur.kind in (TokenKind.DOT, TokenKind.LPAREN):
+            if self.cur.kind == TokenKind.LPAREN:
+                # Call of a function value: `a.b.f(x)`, `pick()(x)` (spec 21).
+                self.i += 1  # consume '('
+                args = self._parse_arglist()
+                atom = A.CallValue(atom, args, atom.line, atom.col)
+                continue
             self.i += 1  # consume '.'
             name = self.eat(TokenKind.IDENT, "name after '.'")
             if isinstance(atom, A.Name) and self.cur.kind == TokenKind.LPAREN:
-                # Module-qualified call `module.func(...)` (spec 17). Records
-                # have no methods, so `name.ident(` is never a field access.
+                # `q.f(...)`: a module-qualified call (spec 17), or a call of
+                # a function-valued field when `q` is a local (spec 21; sema
+                # decides).
                 self.i += 1  # consume '('
                 args = self._parse_arglist()
                 atom = A.Call(name.value, args, atom.line, atom.col, module=atom.name)

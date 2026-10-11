@@ -29,7 +29,16 @@ class TypeFuture:
     col: int
 
 
-TypeExpr = Union[TypeName, TypeFuture]
+@dataclass
+class TypeCallable:
+    """`Callable[[P1, ..., Pn], R]` (spec 21)."""
+    params: List["TypeExpr"]
+    ret: "TypeExpr"
+    line: int
+    col: int
+
+
+TypeExpr = Union[TypeName, TypeFuture, TypeCallable]
 
 
 # ----- Expressions -----
@@ -149,6 +158,16 @@ class ErrExpr:
 
 
 @dataclass
+class CallValue:
+    """A call whose callee is an expression rather than a bare name, e.g.
+    `a.b.handler(x)` or `pick()(x)` (spec 21)."""
+    callee: "Expr"
+    args: List["Expr"]
+    line: int
+    col: int
+
+
+@dataclass
 class FieldAccess:
     """`obj.field` on a record (spec 20)."""
     obj: "Expr"
@@ -162,7 +181,7 @@ Expr = Union[
     UnaryOp, BinOp, IfExpr, Call, SpawnExpr, AwaitExpr,
     SomeExpr, NoneExpr,
     OkExpr, ErrExpr,
-    FieldAccess,
+    FieldAccess, CallValue,
 ]
 
 
