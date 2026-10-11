@@ -14,7 +14,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 RUNTIME = REPO / "runtime"
 
-C_TESTS = ["test_detach", "test_shutdown"]
+C_TESTS = ["test_detach", "test_shutdown", "test_preempt"]
 
 
 def _cc() -> str:

@@ -1,0 +1,21 @@
+# Runs on a single worker in the e2e suite (RW_WORKERS=1). `spin` never does
+# I/O, so without preemption `setter` would never run and this would hang.
+class Flag:
+    done: bool
+
+def spin(f: Flag) -> int:
+    n: int = 0
+    while not f.done:
+        n = n + 1
+    return 1
+
+def setter(f: Flag) -> int:
+    f.done = true
+    return 2
+
+def main() -> int:
+    f: Flag = Flag(false)
+    a: Future[int] = spawn spin(f)
+    b: Future[int] = spawn setter(f)
+    print(await a + await b)
+    return 0

@@ -49,6 +49,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 /* macOS exposes MAP_ANON, Linux glibc uses MAP_ANONYMOUS unless
@@ -172,6 +173,15 @@ typedef struct rw_M {
     /* xorshift64 PRNG state used to pick a random starting victim for
      * work-stealing. Seeded per-M at init. */
     uint64_t         rng_state;
+    /* Preemption (spec 23). `tick` counts fiber resumptions and `running`
+     * is 1 while a fiber is on this M; the monitor thread reads both to
+     * find a fiber that has outrun its slice and then sets `preempt`. */
+    _Atomic uint64_t tick;
+    _Atomic int      running;
+    _Atomic int      preempt;
+    /* Set by rw_safepoint right before it yields, so worker_main sends the
+     * preempted fiber to the back of globq rather than the local runq. */
+    int              preempted;
 } rw_M;
 
 #define RW_MAX_WORKERS 64
@@ -202,6 +212,16 @@ static _Atomic int g_shutdown = 0;
 /* Have workers been started? Used to keep rw_sched_shutdown
  * idempotent and to skip pthread_join when init was never called. */
 static int g_workers_started = 0;
+
+/* Number of pending preemption requests across all workers. Compiled code
+ * loads it at every safe point and calls rw_safepoint() when it is nonzero
+ * (spec 23). */
+_Atomic int32_t rw_preempt_flag = 0;
+
+/* Monitor thread (spec 23). g_preempt_ns == 0 means preemption is off. */
+static pthread_t g_monitor;
+static int       g_monitor_started = 0;
+static int64_t   g_preempt_ns = 0;
 
 /* Helpers exposed to runq.c so it can chain handles without depending
  * on the layout of rw_fiber_handle (which is private to this file). */
@@ -301,6 +321,16 @@ static rw_fiber_handle *find_runnable(rw_M *m) {
         if (atomic_load_explicit(&g_shutdown, memory_order_acquire)) {
             return NULL;
         }
+        /* Fairness: every 61st scheduling round, take from globq first.
+         * Otherwise a fiber that keeps yielding (e.g. when preempted,
+         * spec 23) is re-enqueued locally and picked again forever, and
+         * fibers spawned from the main thread into globq never run. The
+         * interval is Go's (schedule() checks the global queue every 61
+         * schedticks). */
+        if (atomic_load_explicit(&m->tick, memory_order_relaxed) % 61 == 0) {
+            rw_fiber_handle *gh = rw_globq_pop(&g_globq);
+            if (gh) return gh;
+        }
         rw_fiber_handle *h = rw_runq_get(m->p);
         if (h) return h;
         /* Refill from globq. */
@@ -352,6 +382,66 @@ void rw_sched_yield(void) {
     rw_fiber_swap(&me->ctx, &m->sched_ctx);
 }
 
+/* Called by compiled code at a safe point when rw_preempt_flag != 0
+ * (spec 23). Yields if this worker has been asked to preempt its fiber;
+ * otherwise (another worker's request, or the main thread) returns. */
+void rw_safepoint(void) {
+    rw_M *m = tls_m;
+    if (!m || !m->current) return;
+    if (atomic_exchange_explicit(&m->preempt, 0, memory_order_relaxed)) {
+        atomic_fetch_sub_explicit(&rw_preempt_flag, 1, memory_order_relaxed);
+        m->preempted = 1;
+        rw_sched_yield();
+    }
+}
+
+static int64_t monotonic_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+/* Every millisecond, look for a worker whose current fiber has been running
+ * for at least one slice (same `tick` since we first saw it) and ask it to
+ * yield at its next safe point. */
+static void *monitor_main(void *arg) {
+    (void)arg;
+    uint64_t last_tick[RW_MAX_WORKERS] = {0};
+    int64_t  since[RW_MAX_WORKERS] = {0};
+    const struct timespec period = {0, 1000000};
+    while (!atomic_load_explicit(&g_shutdown, memory_order_acquire)) {
+        nanosleep(&period, NULL);
+        int64_t now = monotonic_ns();
+        for (int i = 0; i < g_nworkers; i++) {
+            rw_M *m = &g_workers[i];
+            uint64_t t = atomic_load_explicit(&m->tick, memory_order_relaxed);
+            if (t != last_tick[i] || !atomic_load_explicit(&m->running, memory_order_relaxed)) {
+                last_tick[i] = t;
+                since[i] = now;
+                continue;
+            }
+            if (now - since[i] >= g_preempt_ns) {
+                if (!atomic_exchange_explicit(&m->preempt, 1, memory_order_relaxed)) {
+                    atomic_fetch_add_explicit(&rw_preempt_flag, 1, memory_order_relaxed);
+                }
+                since[i] = now;  /* re-arm: ask again after another slice */
+            }
+        }
+    }
+    return NULL;
+}
+
+static int64_t parse_preempt_ns(void) {
+    long ms = 10;
+    const char *env = getenv("RW_PREEMPT_MS");
+    if (env && *env) {
+        char *endp = NULL;
+        long v = strtol(env, &endp, 10);
+        if (endp && *endp == '\0' && v >= 0 && v <= 60000) ms = v;
+    }
+    return (int64_t)ms * 1000000;
+}
+
 /* Park the current fiber: mark it WAITING and swap to sched_ctx.
  * Unlike rw_sched_yield, the fiber is NOT re-enqueued — the caller
  * must arrange a wake-up via rw_sched_enqueue_ready(). Used by the
@@ -385,7 +475,15 @@ static void *worker_main(void *arg) {
         atomic_store_explicit(&g->state, RW_FIBER_RUNNING,
                               memory_order_relaxed);
         m->current = g;
+        atomic_fetch_add_explicit(&m->tick, 1, memory_order_relaxed);
+        atomic_store_explicit(&m->running, 1, memory_order_relaxed);
         rw_fiber_swap(&m->sched_ctx, &g->ctx);
+        atomic_store_explicit(&m->running, 0, memory_order_relaxed);
+        /* A request meant for g is void once g has left this M (it parked,
+         * finished, or yielded at a safe point that already cleared it). */
+        if (atomic_exchange_explicit(&m->preempt, 0, memory_order_relaxed)) {
+            atomic_fetch_sub_explicit(&rw_preempt_flag, 1, memory_order_relaxed);
+        }
         /* Control returns here once g either yielded (state still
          * RUNNING) or finished (state == DONE) or parked on a wait
          * list (state == WAITING). Only the RUNNING case puts g back
@@ -405,8 +503,19 @@ static void *worker_main(void *arg) {
             }
         } else if (atomic_load_explicit(&g->state, memory_order_relaxed)
                    == RW_FIBER_RUNNING) {
-            enqueue_ready(g);
+            if (m->preempted) {
+                /* Like Go, a preempted fiber goes to the back of the
+                 * global queue, so the fibers it held up run first. */
+                atomic_store_explicit(&g->state, RW_FIBER_READY, memory_order_relaxed);
+                rw_globq_push(&g_globq, g);
+                pthread_mutex_lock(&g_sched_mu);
+                pthread_cond_signal(&g_sched_cv);
+                pthread_mutex_unlock(&g_sched_mu);
+            } else {
+                enqueue_ready(g);
+            }
         }
+        m->preempted = 0;
     }
     tls_m = NULL;
     return NULL;
@@ -685,6 +794,15 @@ void rw_sched_init(void) {
         }
     }
     g_workers_started = 1;
+
+    g_preempt_ns = parse_preempt_ns();
+    atomic_store_explicit(&rw_preempt_flag, 0, memory_order_relaxed);
+    if (g_preempt_ns > 0) {
+        if (pthread_create(&g_monitor, NULL, monitor_main, NULL) != 0) {
+            rw_die("pthread_create monitor");
+        }
+        g_monitor_started = 1;
+    }
 }
 
 void rw_sched_shutdown(void) {
@@ -701,6 +819,10 @@ void rw_sched_shutdown(void) {
         pthread_join(g_workers[i].thread, NULL);
     }
     g_workers_started = 0;
+    if (g_monitor_started) {
+        pthread_join(g_monitor, NULL);
+        g_monitor_started = 0;
+    }
 
     /* Reclaim any unjoined fibers still on any queue. */
     rw_fiber_handle *h;

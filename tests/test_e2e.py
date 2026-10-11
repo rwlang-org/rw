@@ -36,13 +36,15 @@ def _build_and_run(rw_path: Path) -> tuple[int, str]:
         build = _run_rwc(["build", str(rw_path), "-o", str(out)])
         assert build.returncode == 0, f"rwc build failed:\n{build.stderr}"
         env = {**os.environ, "RW_WORKERS": "1"}
-        run = subprocess.run([str(out)], capture_output=True, text=True, env=env)
+        # A timeout turns a scheduling regression (e.g. a fiber that is never
+        # preempted) into a failure instead of a hung CI job.
+        run = subprocess.run([str(out)], capture_output=True, text=True, env=env, timeout=60)
         return run.returncode, run.stdout
 
 
 @pytest.mark.parametrize(
     "name",
-    ["hello", "arith", "fib", "while_count", "spawn_basic", "spawn_many", "spawn_string", "string_ops", "bytes_basic", "list_basic", "option_basic", "result_basic", "for_count", "ternary", "file_io", "file_par", "num_literals", "bitops", "break_continue", "assert_ok", "type_alias", "math_basic", "import_basic", "import_from", "import_as", "string_search", "records", "import_records", "func_values", "generic_list"],
+    ["hello", "arith", "fib", "while_count", "spawn_basic", "spawn_many", "spawn_string", "string_ops", "bytes_basic", "list_basic", "option_basic", "result_basic", "for_count", "ternary", "file_io", "file_par", "num_literals", "bitops", "break_continue", "assert_ok", "type_alias", "math_basic", "import_basic", "import_from", "import_as", "string_search", "records", "import_records", "func_values", "generic_list", "preempt_basic"],
 )
 def test_synchronous_example(name: str):
     rw_path = EXAMPLES / f"{name}.rw"

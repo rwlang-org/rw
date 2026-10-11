@@ -273,3 +273,18 @@ def test_generic_list_uses_size_generic_helpers():
         assert re.search(rf'call void @"{sym}"\(', ir_text), sym
     # List[int] keeps its specialised helpers.
     assert re.search(r'call void @"rw_list_int_push"\(', ir_text)
+
+
+def test_safepoints_at_function_entry_and_loop_head():
+    ir_text = ir_for(
+        "def spin(n: int) -> int:\n"
+        "    i: int = 0\n"
+        "    while i < n:\n"
+        "        i = i + 1\n"
+        "    return i\n\n"
+        "def main() -> int:\n    return spin(3)\n"
+    )
+    loads = re.findall(r'load atomic i32, i32\* @"rw_preempt_flag" monotonic', ir_text)
+    # spin: entry + loop head; main: entry.
+    assert len(loads) == 3
+    assert re.search(r'call void @"rw_safepoint"\(\)', ir_text)

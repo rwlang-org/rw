@@ -191,6 +191,10 @@ class IRGen:
         # spawn / await: declared lazily as needed
         self._spawn_funcs: Dict[str, ir.Function] = {}
         self._await_funcs: Dict[str, ir.Function] = {}
+        # Preemption at safe points (spec 23): a counter of pending requests
+        # owned by the runtime, and the slow path that yields.
+        self._rw_preempt_flag = ir.GlobalVariable(m, I32, "rw_preempt_flag")
+        self._rw_safepoint = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_safepoint")
         # Drop a Future without awaiting it (spec 19).
         self._rw_detach = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [I8P]), "rw_detach")
@@ -290,6 +294,7 @@ class IRGen:
 
         ctx = FunctionCtx(builder=b, function=fn, locals=locals_,
                           return_ty=sig.return_type, gen=self, func_key=key)
+        self._emit_safepoint(ctx)
         self._emit_block(ast_fn.body, ctx)
 
         # If the block didn't terminate, add a synthetic terminator (for void) or unreachable.
@@ -367,6 +372,8 @@ class IRGen:
             end_bb = ctx.function.append_basic_block("while.end")
             b.branch(cond_bb)
             b.position_at_end(cond_bb)
+            # Every iteration (including `continue`) passes the loop head.
+            self._emit_safepoint(ctx)
             cond_i8 = self._emit_expr(stmt.cond, ctx)
             cond_i1 = b.icmp_unsigned("!=", cond_i8, ir.Constant(I8, 0))
             b.cbranch(cond_i1, body_bb, end_bb)
@@ -466,6 +473,20 @@ class IRGen:
         for i, v in enumerate(values):
             b.store(v, b.gep(rec, [ir.Constant(I32, 0), ir.Constant(I32, i)]))
         return raw
+
+    def _emit_safepoint(self, ctx: "FunctionCtx") -> None:
+        """If any preemption request is pending, call rw_safepoint(), which
+        yields when the request is for this worker (spec 23). The fast path
+        is one relaxed atomic load and a branch."""
+        b = ctx.builder
+        pending = b.load_atomic(self._rw_preempt_flag, "monotonic", 4)
+        slow = ctx.function.append_basic_block("preempt")
+        cont = ctx.function.append_basic_block("preempt.cont")
+        b.cbranch(b.icmp_unsigned("!=", pending, ir.Constant(I32, 0)), slow, cont)
+        b.position_at_end(slow)
+        b.call(self._rw_safepoint, [])
+        b.branch(cont)
+        b.position_at_end(cont)
 
     def _sizeof(self, ty: ir.Type, b: ir.IRBuilder) -> ir.Value:
         """sizeof(ty) as an i64, via the GEP-on-null idiom."""
