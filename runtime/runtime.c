@@ -222,6 +222,49 @@ void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i) {
     out->payload = l->data[i];
 }
 
+/* ---------- List[T] (spec 22) ---------- */
+
+void rw_list_new(rw_list *out) {
+    out->len = 0;
+    out->cap = 0;
+    out->data = NULL;
+}
+
+void rw_list_push(rw_list *out, const rw_list *l, const void *elem, int64_t elem_size) {
+    /* Same growth policy and copy-on-push semantics as rw_list_int_push. */
+    int64_t new_cap;
+    if (l->cap == 0) {
+        new_cap = 4;
+    } else if (l->len + 1 <= l->cap) {
+        new_cap = l->cap;
+    } else {
+        new_cap = l->cap * 2;
+        while (new_cap < l->len + 1) new_cap *= 2;
+    }
+    char *new_data = (char *)malloc((size_t)(new_cap * elem_size));
+    if (!new_data) {
+        out->len = 0;
+        out->cap = 0;
+        out->data = NULL;
+        return;
+    }
+    if (l->len > 0) {
+        memcpy(new_data, l->data, (size_t)(l->len * elem_size));
+    }
+    memcpy(new_data + l->len * elem_size, elem, (size_t)elem_size);
+    out->len = l->len + 1;
+    out->cap = new_cap;
+    out->data = new_data;
+}
+
+void rw_list_at(void *elem_out, const rw_list *l, int64_t i, int64_t elem_size) {
+    if (i < 0 || i >= l->len) {
+        fputs("rw: list_at: index out of bounds\n", stderr);
+        abort();
+    }
+    memcpy(elem_out, l->data + i * elem_size, (size_t)elem_size);
+}
+
 /* ---------- lifecycle ---------- */
 
 void rw_init(void) {

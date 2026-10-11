@@ -108,6 +108,8 @@ class Sema:
         # Record types per module (spec 20); `class_map` is the current one.
         self._classes_by_module: Dict[Optional[str], Dict[str, T.ClassType]] = {}
         self.class_map: Dict[str, T.ClassType] = {}
+        # id(list_new Call) -> the list type it takes from context (spec 22).
+        self._list_new_hints: Dict[int, T.ListType] = {}
         # Import qualifier -> real module, per module; `_import_env` is the
         # current one. Built before any type is resolved so `mod.Class`
         # type names work in signatures and fields.
@@ -606,19 +608,30 @@ class Sema:
         expected: T.Type,
     ) -> T.Type:
         """Like _check_expr, but a bare `list_new()` takes the expected list
-        type (spec 22). Used wherever the context knows the type it wants."""
-        if (
-            isinstance(expected, T.ListType)
-            and isinstance(expr, A.Call)
-            and expr.module is None
-            and expr.callee == "list_new"
-            and not expr.args
-            and expr.callee not in locals_
-            and expr.callee not in self.class_map
-        ):
-            self.result.expr_types[id(expr)] = expected
-            return expected
+        type (spec 22), also through `list_push(list_new(), x)` chains. Used
+        wherever the context knows the type it wants."""
+        if isinstance(expected, T.ListType):
+            self._hint_list_new(expr, expected, locals_)
         return self._check_expr(fn, expr, locals_)
+
+    def _is_builtin_call(self, expr: A.Expr, name: str, locals_: Dict[str, T.Type]) -> bool:
+        return (
+            isinstance(expr, A.Call)
+            and expr.module is None
+            and expr.callee == name
+            and name not in locals_
+            and name not in self.class_map
+        )
+
+    def _hint_list_new(self, expr: A.Expr, expected: T.ListType, locals_: Dict[str, T.Type]) -> None:
+        """Record the list type a `list_new()` should take, following the list
+        argument of nested `list_push` calls."""
+        if self._is_builtin_call(expr, "list_new", locals_):
+            self._list_new_hints[id(expr)] = expected
+        elif self._is_builtin_call(expr, "list_push", locals_):
+            assert isinstance(expr, A.Call)
+            if expr.args:
+                self._hint_list_new(expr.args[0], expected, locals_)
 
     def _check_expr(
         self,
@@ -988,7 +1001,7 @@ class Sema:
                     self.filename, call.line, call.col, len(call.callee),
                     f"list_new takes no arguments, got {len(call.args)}",
                 ))
-            return T.LIST_INT
+            return self._list_new_hints.get(id(call), T.LIST_INT)
         # Builtin: list_push(List[T], T) -> List[T].
         if call.callee == "list_push":
             if len(call.args) != 2:

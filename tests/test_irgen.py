@@ -257,3 +257,19 @@ def test_function_value_indirect_call():
     assert re.search(r'define i64 @"rw_user_apply"\(i64 \(i64\)\* %"f", i64 %"x"\)', ir_text)
     assert re.search(r'call i64 %"f\.\d*"\(|call i64 %"\.\d+"\(', ir_text)
     assert re.search(r'call i64 @"rw_user_apply"\(i64 \(i64\)\* @"rw_user_inc"', ir_text)
+
+
+def test_generic_list_uses_size_generic_helpers():
+    ir_text = ir_for(
+        "def main() -> int:\n"
+        "    s: List[string] = list_new()\n"
+        '    s = list_push(s, "a")\n'
+        "    print(list_at(s, 0))\n"
+        "    i: List[int] = list_new()\n"
+        "    i = list_push(i, 1)\n"
+        "    return len(s) + list_at(i, 0)\n"
+    )
+    for sym in ("rw_list_new", "rw_list_push", "rw_list_at"):
+        assert re.search(rf'call void @"{sym}"\(', ir_text), sym
+    # List[int] keeps its specialised helpers.
+    assert re.search(r'call void @"rw_list_int_push"\(', ir_text)

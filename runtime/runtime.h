@@ -70,6 +70,19 @@ int64_t rw_list_int_len (const rw_list_int *l);
 /* Parse a decimal int ("-"? digit+); None on any other input or overflow. */
 void rw_str_to_int(rw_option_int *out, rw_str s);
 
+/* List[T] for element types other than int (spec 22). Same three-word
+ * layout as rw_list_int, with elements of `elem_size` bytes. Immutable:
+ * push returns a new list (copy-on-push), like rw_list_int_push. */
+typedef struct {
+    int64_t len;
+    int64_t cap;
+    char   *data;
+} rw_list;
+
+void    rw_list_new (rw_list *out);
+void    rw_list_push(rw_list *out, const rw_list *l, const void *elem, int64_t elem_size);
+void    rw_list_at  (void *elem_out, const rw_list *l, int64_t i, int64_t elem_size);
+
 /* List[int]: range-checked accessor returning Option[int]. */
 void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i);
 
