@@ -44,49 +44,14 @@ class Match:
     ok: bool
     params: List[Header]
 
-# ---------- string helpers ----------
-
-def lower(s: string) -> string:
-    uppers: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    lowers: string = "abcdefghijklmnopqrstuvwxyz"
-    out: string = ""
-    for i in range(0, len(s)):
-        c: string = str_slice(s, i, i + 1)
-        k: int = str_find(uppers, c)
-        out = out + (str_slice(lowers, k, k + 1) if k >= 0 else c)
-    return out
-
-def is_space(c: string) -> bool:
-    return c == " " or c == "\t"
-
-def trim(s: string) -> string:
-    start: int = 0
-    end: int = len(s)
-    while start < end and is_space(str_slice(s, start, start + 1)):
-        start = start + 1
-    while end > start and is_space(str_slice(s, end - 1, end)):
-        end = end - 1
-    return str_slice(s, start, end)
-
-# Split on a non-empty separator. "a,b,,c" -> ["a", "b", "", "c"].
-def split(s: string, sep: string) -> List[string]:
-    parts: List[string] = list_new()
-    rest: string = s
-    i: int = str_find(rest, sep)
-    while i >= 0:
-        parts = list_push(parts, str_slice(rest, 0, i))
-        rest = str_slice(rest, i + len(sep), len(rest))
-        i = str_find(rest, sep)
-    return list_push(parts, rest)
-
 # ---------- requests ----------
 
 # Case-insensitive lookup; "" when absent.
 def lookup(pairs: List[Header], name: string) -> string:
-    want: string = lower(name)
+    want: string = str_lower(name)
     for i in range(0, len(pairs)):
         h: Header = list_at(pairs, i)
-        if lower(h.name) == want:
+        if str_lower(h.name) == want:
             return h.value
     return ""
 
@@ -105,7 +70,7 @@ def param(req: Request, name: string) -> string:
 def query(req: Request, name: string) -> string:
     if len(req.query) == 0:
         return ""
-    pairs: List[string] = split(req.query, "&")
+    pairs: List[string] = str_split(req.query, "&")
     for i in range(0, len(pairs)):
         kv: string = list_at(pairs, i)
         eq: int = str_find(kv, "=")
@@ -198,8 +163,8 @@ def set_log(app: App, on: bool) -> App:
 # Match "/users/:id" against "/users/42": segments must be equal, and a
 # `:name` segment captures any non-empty segment.
 def match_path(pattern: string, path: string) -> Match:
-    ps: List[string] = split(pattern, "/")
-    xs: List[string] = split(path, "/")
+    ps: List[string] = str_split(pattern, "/")
+    xs: List[string] = str_split(path, "/")
     if len(ps) != len(xs):
         return Match(false, list_new())
     params: List[Header] = list_new()
@@ -253,8 +218,8 @@ def read_request(fd: int) -> Request:
         if len(buf) > max_header_bytes():
             return bad_request("too-large")
     head_end: int = str_find(buf, "\r\n\r\n")
-    lines: List[string] = split(str_slice(buf, 0, head_end), "\r\n")
-    parts: List[string] = split(list_at(lines, 0), " ")
+    lines: List[string] = str_split(str_slice(buf, 0, head_end), "\r\n")
+    parts: List[string] = str_split(list_at(lines, 0), " ")
     if len(parts) != 3:
         return bad_request("bad")
     target: string = list_at(parts, 1)
@@ -266,7 +231,7 @@ def read_request(fd: int) -> Request:
         line: string = list_at(lines, i)
         c: int = str_find(line, ":")
         if c > 0:
-            headers = list_push(headers, Header(trim(str_slice(line, 0, c)), trim(str_slice(line, c + 1, len(line)))))
+            headers = list_push(headers, Header(str_strip(str_slice(line, 0, c)), str_strip(str_slice(line, c + 1, len(line)))))
     body: string = str_slice(buf, head_end + 4, len(buf))
     match str_to_int(lookup(headers, "Content-Length")):
         case Some(n):

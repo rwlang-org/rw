@@ -87,6 +87,16 @@ void    rw_list_new (rw_list *out);
 void    rw_list_push(rw_list *out, const rw_list *l, const void *elem, int64_t elem_size);
 void    rw_list_at  (void *elem_out, const rw_list *l, int64_t i, int64_t elem_size);
 
+/* String builtins (spec 28). ASCII only; indices are bytes. */
+void    rw_str_split    (rw_list *out, rw_str s, rw_str sep);
+rw_str  rw_str_join     (const rw_list *parts, rw_str sep);
+rw_str  rw_str_strip    (rw_str s);
+rw_str  rw_str_replace  (rw_str s, rw_str old, rw_str new_);
+rw_str  rw_str_lower    (rw_str s);
+rw_str  rw_str_upper    (rw_str s);
+int8_t  rw_str_contains (rw_str s, rw_str sub);
+int8_t  rw_str_ends_with(rw_str s, rw_str suffix);
+
 /* List[int]: range-checked accessor returning Option[int]. */
 void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i);
 

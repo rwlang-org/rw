@@ -65,6 +65,8 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "sqrt", "floor", "ceil", "exp", "log", "sin", "cos", "fabs", "pow",
     "str_find", "str_slice", "str_starts_with", "str_from_int", "str_to_int",
     "int", "float", "str",
+    "str_split", "str_join", "str_strip", "str_replace", "str_lower", "str_upper",
+    "str_contains", "str_ends_with",
 })
 
 # Accepted argument types for the conversion builtins (spec 26).
@@ -82,6 +84,15 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
     "str_starts_with": ((T.STRING, T.STRING), T.BOOL),
     "str_from_int": ((T.INT,), T.STRING),
     "str_to_int": ((T.STRING,), T.OPTION_INT),
+    # spec 28
+    "str_split": ((T.STRING, T.STRING), T.list_of(T.STRING)),
+    "str_join": ((T.list_of(T.STRING), T.STRING), T.STRING),
+    "str_strip": ((T.STRING,), T.STRING),
+    "str_replace": ((T.STRING, T.STRING, T.STRING), T.STRING),
+    "str_lower": ((T.STRING,), T.STRING),
+    "str_upper": ((T.STRING,), T.STRING),
+    "str_contains": ((T.STRING, T.STRING), T.BOOL),
+    "str_ends_with": ((T.STRING, T.STRING), T.BOOL),
 }
 
 
@@ -1009,8 +1020,8 @@ class Sema:
                     f"{call.callee} takes {len(params)} {noun}, got {len(call.args)}",
                 ))
             for i, (arg, want) in enumerate(zip(call.args, params, strict=True), start=1):
-                at = self._check_expr(fn, arg, locals_)
-                if at is not want:
+                at = self._check_expr_expect(fn, arg, locals_, want)
+                if at != want:
                     raise CompileError(Diagnostic(
                         self.filename, call.line, call.col, len(call.callee),
                         f"{call.callee} argument {i} must be {want}, found `{at}`",

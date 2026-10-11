@@ -294,6 +294,125 @@ void rw_list_at(void *elem_out, const rw_list *l, int64_t i, int64_t elem_size) 
     memcpy(elem_out, l->data + i * elem_size, (size_t)elem_size);
 }
 
+/* ---------- string builtins (spec 28) ---------- */
+
+static rw_str str_alloc(int64_t len, char **buf) {
+    rw_str out;
+    out.len = 0;
+    out.ptr = NULL;
+    *buf = NULL;
+    if (len <= 0) return out;
+    char *p = (char *)malloc((size_t)len);
+    if (!p) return out;  /* OOM: degrade to "" like concat */
+    *buf = p;
+    out.len = len;
+    out.ptr = p;
+    return out;
+}
+
+void rw_str_split(rw_list *out, rw_str s, rw_str sep) {
+    out->len = 0;
+    out->cap = 0;
+    out->data = NULL;
+    int64_t n = 1;
+    if (sep.len > 0) {
+        for (int64_t i = 0; i + sep.len <= s.len;) {
+            if (memcmp(s.ptr + i, sep.ptr, (size_t)sep.len) == 0) { n++; i += sep.len; }
+            else i++;
+        }
+    }
+    rw_str *parts = (rw_str *)malloc((size_t)n * sizeof(rw_str));
+    if (!parts) return;
+    int64_t k = 0, start = 0;
+    if (sep.len > 0) {
+        for (int64_t i = 0; i + sep.len <= s.len;) {
+            if (memcmp(s.ptr + i, sep.ptr, (size_t)sep.len) == 0) {
+                parts[k++] = rw_str_slice(s, start, i);
+                i += sep.len;
+                start = i;
+            } else {
+                i++;
+            }
+        }
+    }
+    parts[k++] = rw_str_slice(s, start, s.len);
+    out->len = k;
+    out->cap = n;
+    out->data = (char *)parts;
+}
+
+rw_str rw_str_join(const rw_list *parts, rw_str sep) {
+    const rw_str *ps = (const rw_str *)parts->data;
+    int64_t total = 0;
+    for (int64_t i = 0; i < parts->len; i++) total += ps[i].len;
+    if (parts->len > 1) total += sep.len * (parts->len - 1);
+    char *p;
+    rw_str out = str_alloc(total, &p);
+    if (!p) return out;
+    for (int64_t i = 0; i < parts->len; i++) {
+        if (i > 0 && sep.len > 0) { memcpy(p, sep.ptr, (size_t)sep.len); p += sep.len; }
+        if (ps[i].len > 0) { memcpy(p, ps[i].ptr, (size_t)ps[i].len); p += ps[i].len; }
+    }
+    return out;
+}
+
+static int is_ascii_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+}
+
+rw_str rw_str_strip(rw_str s) {
+    int64_t a = 0, b = s.len;
+    while (a < b && is_ascii_space(s.ptr[a])) a++;
+    while (b > a && is_ascii_space(s.ptr[b - 1])) b--;
+    return rw_str_slice(s, a, b);
+}
+
+rw_str rw_str_replace(rw_str s, rw_str old, rw_str new_) {
+    if (old.len == 0) return s;
+    int64_t count = 0;
+    for (int64_t i = 0; i + old.len <= s.len;) {
+        if (memcmp(s.ptr + i, old.ptr, (size_t)old.len) == 0) { count++; i += old.len; }
+        else i++;
+    }
+    if (count == 0) return s;
+    char *p;
+    rw_str out = str_alloc(s.len + count * (new_.len - old.len), &p);
+    if (!p) return out;
+    for (int64_t i = 0; i < s.len;) {
+        if (i + old.len <= s.len && memcmp(s.ptr + i, old.ptr, (size_t)old.len) == 0) {
+            if (new_.len > 0) { memcpy(p, new_.ptr, (size_t)new_.len); p += new_.len; }
+            i += old.len;
+        } else {
+            *p++ = s.ptr[i++];
+        }
+    }
+    return out;
+}
+
+static rw_str map_ascii(rw_str s, char lo, char hi, int delta) {
+    char *p;
+    rw_str out = str_alloc(s.len, &p);
+    if (!p) return out;
+    for (int64_t i = 0; i < s.len; i++) {
+        char c = s.ptr[i];
+        p[i] = (c >= lo && c <= hi) ? (char)(c + delta) : c;
+    }
+    return out;
+}
+
+rw_str rw_str_lower(rw_str s) { return map_ascii(s, 'A', 'Z', 'a' - 'A'); }
+rw_str rw_str_upper(rw_str s) { return map_ascii(s, 'a', 'z', 'A' - 'a'); }
+
+int8_t rw_str_contains(rw_str s, rw_str sub) {
+    return rw_str_find(s, sub) >= 0 ? 1 : 0;
+}
+
+int8_t rw_str_ends_with(rw_str s, rw_str suffix) {
+    if (suffix.len > s.len) return 0;
+    if (suffix.len == 0) return 1;
+    return memcmp(s.ptr + s.len - suffix.len, suffix.ptr, (size_t)suffix.len) == 0 ? 1 : 0;
+}
+
 /* ---------- lifecycle ---------- */
 
 void rw_init(void) {
