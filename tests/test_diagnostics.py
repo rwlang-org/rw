@@ -42,3 +42,18 @@ def test_bad_source_produces_expected_diagnostic(rw_path: Path):
     assert expected_msg in err, f"missing expected message {expected_msg!r} in:\n{err}"
     # the rendered diagnostic includes `<file>:<line>:<col>`
     assert f":{expected_line}:" in err, f"diagnostic did not reference line {expected_line}: {err}"
+
+
+def test_imported_module_error_renders_imported_source(tmp_path):
+    (tmp_path / "lib.rw").write_text('def f() -> int:\n    return "oops"\n', encoding="utf-8")
+    entry = tmp_path / "main.rw"
+    entry.write_text("import lib\n\ndef main() -> int:\n    return lib.f()\n", encoding="utf-8")
+    res = subprocess.run(
+        [sys.executable, "-m", "rwc.cli", "build", str(entry), "-o", str(tmp_path / "out")],
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
+    assert res.returncode != 0
+    assert f"{tmp_path / 'lib.rw'}:2:" in res.stderr, res.stderr
+    assert 'return "oops"' in res.stderr, res.stderr

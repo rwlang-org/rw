@@ -1434,3 +1434,34 @@ def test_qualified_arg_type_mismatch_errors(tmp_path):
             lib="def add(a: int, b: int) -> int:\n    return a + b\n",
         )
     assert "argument 1" in ei.value.diagnostic.message
+
+
+def test_same_name_type_aliases_in_different_modules_coexist(tmp_path):
+    res = _check_program(
+        tmp_path,
+        "import lib\n\ntype Num = int\n\ndef main() -> Num:\n    return lib.f()\n",
+        lib="type Num = int\n\ndef f() -> Num:\n    return 1\n",
+    )
+    assert ("lib", "f") in res.functions
+
+
+def test_type_alias_is_not_visible_across_modules(tmp_path):
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            "import lib\n\ndef main() -> Num:\n    return lib.f()\n",
+            lib="type Num = int\n\ndef f() -> Num:\n    return 1\n",
+        )
+    assert "unknown type: Num" in ei.value.diagnostic.message
+
+
+def test_diagnostic_in_imported_module_names_that_file(tmp_path):
+    with pytest.raises(CompileError) as ei:
+        _check_program(
+            tmp_path,
+            "import lib\n\ndef main() -> int:\n    return lib.f()\n",
+            lib='def f() -> int:\n    return "x"\n',
+        )
+    diag = ei.value.diagnostic
+    assert diag.file == str(tmp_path / "lib.rw")
+    assert diag.line == 2
