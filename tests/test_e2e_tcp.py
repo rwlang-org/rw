@@ -8,8 +8,9 @@ import socket
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
+
+from ._net import wait_for_port
 
 REPO = Path(__file__).resolve().parent.parent
 EXAMPLES = REPO / "examples"
@@ -40,25 +41,20 @@ def _build_echo_server(port: int) -> Path:
     return out
 
 
-def _start_server(binary: Path) -> subprocess.Popen:
+def _start_server(binary: Path, port: int) -> subprocess.Popen:
     env = {**os.environ, "RW_WORKERS": "2"}
     proc = subprocess.Popen(
         [str(binary)], env=env,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
-    time.sleep(0.5)  # give the server time to bind+listen
-    # If the server already died, surface its stderr.
-    if proc.poll() is not None:
-        _, err = proc.communicate(timeout=1.0)
-        raise AssertionError(
-            f"server exited early (rc={proc.returncode}): {err!r}")
+    wait_for_port(port, proc)
     return proc
 
 
 def test_echo_single_connection():
     port = _free_port()
     binary = _build_echo_server(port)
-    proc = _start_server(binary)
+    proc = _start_server(binary, port)
     try:
         s = socket.create_connection(("127.0.0.1", port), timeout=2.0)
         s.sendall(b"hello\n")
@@ -73,7 +69,7 @@ def test_echo_single_connection():
 def test_echo_ten_concurrent_connections():
     port = _free_port()
     binary = _build_echo_server(port)
-    proc = _start_server(binary)
+    proc = _start_server(binary, port)
     try:
         socks = [socket.create_connection(("127.0.0.1", port), timeout=2.0)
                  for _ in range(10)]
