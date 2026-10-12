@@ -377,6 +377,27 @@ rw_str rw_str_strip(rw_str s) {
     return rw_str_slice(s, a, b);
 }
 
+/* spec 55 */
+rw_str rw_str_lstrip(rw_str s) {
+    int64_t a = 0;
+    while (a < s.len && is_ascii_space(s.ptr[a])) a++;
+    return rw_str_slice(s, a, s.len);
+}
+
+rw_str rw_str_rstrip(rw_str s) {
+    int64_t b = s.len;
+    while (b > 0 && is_ascii_space(s.ptr[b - 1])) b--;
+    return rw_str_slice(s, 0, b);
+}
+
+int64_t rw_str_rfind(rw_str s, rw_str sub) {
+    if (sub.len > s.len) return -1;
+    for (int64_t i = s.len - sub.len; i >= 0; i--) {
+        if (sub.len == 0 || memcmp(s.ptr + i, sub.ptr, (size_t)sub.len) == 0) return i;
+    }
+    return -1;
+}
+
 rw_str rw_str_replace(rw_str s, rw_str old, rw_str new_) {
     if (old.len == 0) return s;
     int64_t count = 0;

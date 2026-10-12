@@ -202,6 +202,9 @@ class IRGen:
         # string builtins (spec 28); split/join take the list by pointer.
         s2s = ir.FunctionType(RW_STR_TY, [RW_STR_TY])
         self._rw_str_strip = ir.Function(m, s2s, "rw_str_strip")
+        self._rw_str_lstrip = ir.Function(m, s2s, "rw_str_lstrip")
+        self._rw_str_rstrip = ir.Function(m, s2s, "rw_str_rstrip")
+        self._rw_str_rfind = ir.Function(m, ir.FunctionType(I64, [RW_STR_TY, RW_STR_TY]), "rw_str_rfind")
         self._rw_str_lower = ir.Function(m, s2s, "rw_str_lower")
         self._rw_str_upper = ir.Function(m, s2s, "rw_str_upper")
         self._rw_str_replace = ir.Function(
@@ -1379,6 +1382,9 @@ class IRGen:
             "str_starts_with": self._rw_str_starts_with,
             "str_from_int": self._rw_str_from_int,
             "str_strip": self._rw_str_strip,
+            "str_lstrip": self._rw_str_lstrip,
+            "str_rstrip": self._rw_str_rstrip,
+            "str_rfind": self._rw_str_rfind,
             "str_lower": self._rw_str_lower,
             "str_upper": self._rw_str_upper,
             "str_replace": self._rw_str_replace,

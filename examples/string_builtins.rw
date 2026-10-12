@@ -25,4 +25,10 @@ def main() -> int:
         print("contains ok")
     if str_ends_with("index.html", ".html") and not str_ends_with("a", "ab") and str_ends_with("x", ""):
         print("ends_with ok")
+    # spec 55
+    print("[" + str_lstrip("  pad  ") + "]")
+    print("[" + str_rstrip("  pad \r\n") + "]")
+    print(str_rfind("a/b/c", "/"))
+    print(str_rfind("a/b/c", "x"))
+    print(str_rfind("abc", ""))
     return 0
