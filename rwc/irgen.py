@@ -141,6 +141,11 @@ class IRGen:
         self._rw_sleep_ms = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_sleep_ms")
         self._rw_time_ms = ir.Function(m, ir.FunctionType(I64, []), "rw_time_ms")
         self._rw_mono_ns = ir.Function(m, ir.FunctionType(I64, []), "rw_mono_ns")
+        # random numbers (spec 43)
+        self._rw_rand_int = ir.Function(m, ir.FunctionType(I64, [I64, I64]), "rw_rand_int")
+        self._rw_rand_float = ir.Function(m, ir.FunctionType(F64, []), "rw_rand_float")
+        self._rw_rand_seed = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_rand_seed")
+        self._rw_rand_bytes = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_rand_bytes")
         # OS API (spec 40)
         self._rw_set_args = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [I32, I8P.as_pointer()]), "rw_set_args")
@@ -1186,6 +1191,10 @@ class IRGen:
             "sleep": self._rw_sleep_ms,
             "time_ms": self._rw_time_ms,
             "mono_ns": self._rw_mono_ns,
+            "rand_int": self._rw_rand_int,
+            "rand_float": self._rw_rand_float,
+            "rand_seed": self._rw_rand_seed,
+            "rand_bytes": self._rw_rand_bytes,
             "os_setenv": self._rw_os_setenv,
             "os_exit": self._rw_os_exit,
             "os_getcwd": self._rw_os_getcwd,

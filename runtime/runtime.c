@@ -715,6 +715,113 @@ int8_t rw_os_chdir(rw_str path) {
     return rc == 0 ? 1 : 0;
 }
 
+/* ---------- random numbers (spec 43) ----------
+ *
+ * xoshiro256** behind a mutex (fibers on several workers share one stream),
+ * seeded from the OS on first use unless rw_rand_seed was called. Bytes for
+ * secrets come straight from the OS CSPRNG. */
+
+#include <pthread.h>
+#if defined(__APPLE__)
+#  include <stdlib.h>   /* arc4random_buf */
+#else
+#  include <sys/random.h>
+#endif
+
+static pthread_mutex_t g_rand_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_rand_s[4];
+static int g_rand_ready = 0;
+
+static void os_random(void *buf, size_t n) {
+#if defined(__APPLE__)
+    arc4random_buf(buf, n);
+#else
+    char *p = (char *)buf;
+    while (n > 0) {
+        ssize_t got = getrandom(p, n, 0);
+        if (got < 0) { fputs("rw: getrandom failed\n", stderr); abort(); }
+        p += got;
+        n -= (size_t)got;
+    }
+#endif
+}
+
+static uint64_t splitmix64(uint64_t *x) {
+    uint64_t z = (*x += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return z ^ (z >> 31);
+}
+
+static void rand_seed_locked(uint64_t seed) {
+    for (int i = 0; i < 4; i++) g_rand_s[i] = splitmix64(&seed);
+    g_rand_ready = 1;
+}
+
+static uint64_t rotl(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
+
+/* Caller holds g_rand_mu. */
+static uint64_t rand_next_locked(void) {
+    if (!g_rand_ready) {
+        uint64_t seed;
+        os_random(&seed, sizeof seed);
+        rand_seed_locked(seed);
+    }
+    uint64_t *s = g_rand_s;
+    uint64_t result = rotl(s[1] * 5, 7) * 9;
+    uint64_t t = s[1] << 17;
+    s[2] ^= s[0];
+    s[3] ^= s[1];
+    s[1] ^= s[2];
+    s[0] ^= s[3];
+    s[2] ^= t;
+    s[3] = rotl(s[3], 45);
+    return result;
+}
+
+void rw_rand_seed(int64_t seed) {
+    pthread_mutex_lock(&g_rand_mu);
+    rand_seed_locked((uint64_t)seed);
+    pthread_mutex_unlock(&g_rand_mu);
+}
+
+int64_t rw_rand_int(int64_t lo, int64_t hi) {
+    if (lo > hi) {
+        fputs("rw: rand_int: lo is greater than hi\n", stderr);
+        abort();
+    }
+    uint64_t span = (uint64_t)hi - (uint64_t)lo + 1;  /* 0 means the full range */
+    pthread_mutex_lock(&g_rand_mu);
+    uint64_t r = rand_next_locked();
+    if (span != 0) {
+        /* Rejection sampling: drop the top partial bucket so every value in
+         * the range is equally likely. */
+        uint64_t limit = UINT64_MAX - UINT64_MAX % span;
+        while (r >= limit) r = rand_next_locked();
+        r %= span;
+    }
+    pthread_mutex_unlock(&g_rand_mu);
+    return (int64_t)((uint64_t)lo + r);
+}
+
+double rw_rand_float(void) {
+    pthread_mutex_lock(&g_rand_mu);
+    uint64_t r = rand_next_locked();
+    pthread_mutex_unlock(&g_rand_mu);
+    return (double)(r >> 11) * 0x1.0p-53;  /* 53 random bits -> [0, 1) */
+}
+
+rw_str rw_rand_bytes(int64_t n) {
+    if (n <= 0) return rw_str_from_cstr("", 0);
+    char *p = (char *)malloc((size_t)n);
+    if (!p) { fputs("rw: out of memory\n", stderr); abort(); }
+    os_random(p, (size_t)n);
+    rw_str out;
+    out.len = n;
+    out.ptr = p;
+    return out;
+}
+
 /* ---------- lifecycle ---------- */
 
 void rw_init(void) {
