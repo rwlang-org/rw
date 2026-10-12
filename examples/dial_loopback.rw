@@ -1,0 +1,38 @@
+# dial / listen / accept / open (spec 50): one handle API for every kind.
+
+def echo_once(ln: int) -> int:
+    c = accept(ln)
+    b = read(c, 100)
+    write(c, b)
+    close(c)
+    return len(b)
+
+def main() -> int:
+    # Port 0 picks a free port; local_addr reports it in dial-able form.
+    ln = listen("tcp://127.0.0.1:0")
+    addr = local_addr(ln)
+    print(str_starts_with(addr, "tcp://127.0.0.1:"))
+
+    served = spawn echo_once(ln)
+    c = dial(addr)
+    print(str_starts_with(peer_addr(c), "tcp://127.0.0.1:"))
+    write(c, bytes_from_str("ping"))
+    print(str_from_bytes(read(c, 100)))
+    close(c)
+    print(await served)
+
+    # Nothing listens on a closed port: dial fails with -1.
+    close(ln)
+    print(dial(addr))
+    # Malformed addresses fail too.
+    print(dial("tcp://127.0.0.1"))
+    print(dial("example.com:80"))
+
+    # Files use the same read / write / close.
+    w = open("file:///tmp/rw_dial_loopback.txt", "w")
+    write(w, bytes_from_str("via open\n"))
+    close(w)
+    r = open("/tmp/rw_dial_loopback.txt", "r")
+    print(str_from_bytes(read(r, 100)))
+    close(r)
+    return 0

@@ -20,9 +20,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <poll.h>
 #include <sys/stat.h>
 
 #include "aio.h"
+
+/* Off-fiber (main thread) callers cannot park; wait in the kernel until the
+ * nonblocking socket is ready instead of reporting EAGAIN as EOF. */
+static void wait_fd(int64_t fd, short events) {
+    struct pollfd p = { (int)fd, events, 0 };
+    while (poll(&p, 1, -1) < 0 && errno == EINTR) {}
+}
 
 /* True for fds whose read/write may block in the kernel: anything that is
  * not a socket. Sockets accepted by rw are nonblocking (tcp.c). */
@@ -50,9 +58,10 @@ void rw_read(rw_str *out, int64_t fd, int64_t max) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             if (rw_sched_current_fiber()) {
                 rw_net_park_read((int)fd);
-                continue;
+            } else {
+                wait_fd(fd, POLLIN);
             }
-            free(buf); out->len = 0; out->ptr = NULL; return;
+            continue;
         }
         free(buf); out->len = 0; out->ptr = NULL; return;
     }
@@ -71,9 +80,10 @@ int64_t rw_write(int64_t fd, rw_str b) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             if (rw_sched_current_fiber()) {
                 rw_net_park_write((int)fd);
-                continue;
+            } else {
+                wait_fd(fd, POLLOUT);
             }
-            return -1;
+            continue;
         }
         return -1;
     }

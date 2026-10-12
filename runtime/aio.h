@@ -21,6 +21,10 @@ void rw_aio_shutdown(void);
 void    rw_aio_read (rw_str *out, int64_t fd, int64_t max);
 int64_t rw_aio_write(int64_t fd, rw_str b);
 
+/* Run fn(arg) on a pool thread while the calling fiber parks (spec 50:
+ * getaddrinfo). Off-fiber callers run it inline. */
+void rw_aio_call(void (*fn)(void *), void *arg);
+
 #ifdef __cplusplus
 }
 #endif

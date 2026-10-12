@@ -31,7 +31,7 @@ endif
 
 OBJS := runtime.o io.o aio.o timer.o chan.o \
         fiber/fiber.o fiber/sched.o fiber/runq.o fiber/park.o \
-        net/netpoller.o net/tcp.o $(NET_PLATFORM_O) \
+        net/netpoller.o net/tcp.o net/addr.o $(NET_PLATFORM_O) \
         $(FIBER_ASM)
 
 .PHONY: all clean

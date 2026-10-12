@@ -24,7 +24,8 @@ void rw_print_str(rw_str s);
 void rw_panic(rw_str msg);
 
 /* string helper */
-rw_str rw_str_from_cstr(const char *cstr, int64_t len);
+rw_str rw_str_from_cstr(const char *cstr, int64_t len);  /* wraps, no copy */
+rw_str rw_str_copy_cstr(const char *cstr);              /* heap copy */
 
 /* string ops */
 int64_t rw_str_len   (rw_str s);
@@ -150,6 +151,14 @@ void    rw_read     (rw_str *out, int64_t fd, int64_t max);
 int64_t rw_write    (int64_t fd, rw_str b);
 int64_t rw_close    (int64_t fd);
 int64_t rw_file_open(rw_str path, rw_str mode);
+
+/* Address-based entry points (runtime/net/addr.c, spec 50). */
+int64_t rw_dial      (rw_str addr);
+int64_t rw_listen    (rw_str addr);
+int64_t rw_accept    (int64_t listen_fd);
+int64_t rw_open      (rw_str addr, rw_str mode);
+rw_str  rw_local_addr(int64_t fd);
+rw_str  rw_peer_addr (int64_t fd);
 
 /* spawn (one per return type) */
 rw_future_t *rw_spawn_i64 (int64_t (*fn)(void *), void *args);

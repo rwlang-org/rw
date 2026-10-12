@@ -1,0 +1,16 @@
+# TCP client for examples/tcp_echo.rw (spec 50).
+#   uv run rwc run examples/tcp_echo.rw &
+#   uv run rwc run examples/tcp_client.rw            # or pass an address
+def main() -> int:
+    args = os_args()
+    addr = "tcp://localhost:8080"
+    if len(args) > 1:
+        addr = args[1]
+    c = dial(addr)
+    if c < 0:
+        print(f"cannot connect to {addr}")
+        return 1
+    write(c, bytes_from_str("hello from rw\n"))
+    print(str_from_bytes(read(c, 4096)))
+    close(c)
+    return 0
