@@ -12,7 +12,9 @@
 #
 # See docs/web-framework.md for the full API.
 import bufio
+import fs
 import log
+import path
 import url
 
 class Header:
@@ -37,9 +39,19 @@ class Route:
     pattern: string
     handler: Callable[[Request], Response]
 
+# A directory served under a URL prefix (spec 63).
+class Mount:
+    prefix: string
+    root: string
+
 class App:
     routes: List[Route]
     not_found: Callable[[Request], Response]
+    # Middleware (spec 63): `before` hooks run in order ahead of routing and
+    # may answer instead (Some); `after` hooks rewrite every response.
+    befores: List[Callable[[Request], Option[Response]]]
+    afters: List[Callable[[Request, Response], Response]]
+    mounts: List[Mount]
     log: bool
     # Access log and server messages (spec 60); stdout by default.
     logger: log.Logger
@@ -173,7 +185,7 @@ def default_not_found(req: Request) -> Response:
 def new_app() -> App:
     lg: log.Logger = log.new(1)
     lg.prefix = "web"
-    return App(list_new(), default_not_found, true, lg, 10000)
+    return App(list_new(), default_not_found, [], [], [], true, lg, 10000)
 
 def route(app: App, method: string, pattern: string, handler: Callable[[Request], Response]) -> App:
     app.routes = list_push(app.routes, Route(method, pattern, handler))
@@ -192,6 +204,110 @@ def set_not_found(app: App, handler: Callable[[Request], Response]) -> App:
 def set_log(app: App, on: bool) -> App:
     app.log = on
     return app
+
+def before(app: App, hook: Callable[[Request], Option[Response]]) -> App:
+    app.befores = list_push(app.befores, hook)
+    return app
+
+def after(app: App, hook: Callable[[Request, Response], Response]) -> App:
+    app.afters = list_push(app.afters, hook)
+    return app
+
+# Serve the files under directory `root` at URL `prefix` ("/static" maps
+# "/static/css/a.css" to "<root>/css/a.css"). Only GET and HEAD.
+def static(app: App, prefix: string, root: string) -> App:
+    p: string = prefix
+    while str_ends_with(p, "/"):
+        p = str_slice(p, 0, len(p) - 1)
+    app.mounts = list_push(app.mounts, Mount(p, root))
+    return app
+
+# ---------- static files ----------
+
+def content_type_for(file: string) -> string:
+    e: string = str_lower(path.ext(file))
+    if e == ".html" or e == ".htm":
+        return "text/html; charset=utf-8"
+    if e == ".css":
+        return "text/css; charset=utf-8"
+    if e == ".js" or e == ".mjs":
+        return "text/javascript; charset=utf-8"
+    if e == ".json":
+        return "application/json"
+    if e == ".txt" or e == ".md":
+        return "text/plain; charset=utf-8"
+    if e == ".svg":
+        return "image/svg+xml"
+    if e == ".png":
+        return "image/png"
+    if e == ".jpg" or e == ".jpeg":
+        return "image/jpeg"
+    if e == ".gif":
+        return "image/gif"
+    if e == ".webp":
+        return "image/webp"
+    if e == ".ico":
+        return "image/x-icon"
+    if e == ".wasm":
+        return "application/wasm"
+    if e == ".pdf":
+        return "application/pdf"
+    return "application/octet-stream"
+
+def pad2(n: int) -> string:
+    return str(n) if n >= 10 else "0" + str(n)
+
+# Unix time in ms as an HTTP date: "Tue, 13 Oct 2026 01:02:03 GMT".
+def http_date(ms: int) -> string:
+    secs: int = ms / 1000
+    days: int = secs / 86400
+    rem: int = secs % 86400
+    wd: List[string] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"]
+    months: List[string] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    z: int = days + 719468
+    era: int = z / 146097
+    doe: int = z - era * 146097
+    yoe: int = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    doy: int = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    mp: int = (5 * doy + 2) / 153
+    d: int = doy - (153 * mp + 2) / 5 + 1
+    m: int = mp + 3 if mp < 10 else mp - 9
+    y: int = yoe + era * 400 + (1 if m <= 2 else 0)
+    return wd[days % 7] + ", " + pad2(d) + " " + months[m - 1] + " " + str(y) + " " + pad2(rem / 3600) + ":" + pad2(rem / 60 % 60) + ":" + pad2(rem % 60) + " GMT"
+
+# The response for a mounted file, or None if no mount covers the path.
+# Paths that would leave the root (".." or an absolute part) and missing
+# files are 404s; a directory serves its index.html. Last-Modified is sent,
+# and a matching If-Modified-Since gets 304.
+def serve_static(app: App, req: Request) -> Option[Response]:
+    if req.method != "GET" and req.method != "HEAD":
+        return None
+    for m in app.mounts:
+        if req.path == m.prefix or str_starts_with(req.path, m.prefix + "/"):
+            rel: string = url.unescape(str_slice(req.path, len(m.prefix), len(req.path)), false)
+            while str_starts_with(rel, "/"):
+                rel = str_slice(rel, 1, len(rel))
+            match path.join_under(m.root, rel):
+                case Some(file):
+                    target: string = path.join(file, "index.html") if fs.is_dir(file) else file
+                    match fs.stat(target):
+                        case Some(st):
+                            if st.kind != "file":
+                                return Some(app.not_found(req))
+                            modified: string = http_date(st.mtime_ms)
+                            if header(req, "If-Modified-Since") == modified:
+                                return Some(set_header(Response(304, [], ""), "Last-Modified", modified))
+                            match fs.read_file(target):
+                                case Some(body):
+                                    res: Response = response(200, content_type_for(target), body)
+                                    return Some(set_header(res, "Last-Modified", modified))
+                                case None:
+                                    return Some(text(500, "cannot read file\n"))
+                        case None:
+                            return Some(app.not_found(req))
+                case None:
+                    return Some(app.not_found(req))
+    return None
 
 # Match "/users/:id" against "/users/42": segments must be equal, and a
 # `:name` segment captures any non-empty segment. Path segments are
@@ -288,16 +404,19 @@ def read_request(fd: int) -> Request:
             body = ""
     return Request(list_at(parts, 0), path, query_s, headers, list_new(), body)
 
-def serialize(res: Response) -> string:
+# The response as bytes on the wire. A HEAD response carries the headers of
+# the GET response (Content-Length included) but no body.
+def serialize(res: Response, head_only: bool = false) -> string:
     out: string = "HTTP/1.1 " + str_from_int(res.status) + " " + reason(res.status) + "\r\n"
     for i in range(0, len(res.headers)):
         h: Header = list_at(res.headers, i)
         out = out + h.name + ": " + h.value + "\r\n"
     out = out + "Content-Length: " + str_from_int(len(res.body)) + "\r\n"
     out = out + "Connection: close\r\n\r\n"
+    if head_only:
+        return out
     return out + res.body
 
-# write() may write only part of the buffer; keep going until all is sent.
 # Close after a response without resetting the connection. If the client sent
 # more than was read (a refused body, say), closing at once makes the kernel
 # answer with RST, which can destroy the response before the client reads it.
@@ -313,6 +432,35 @@ def linger_close(fd: int) -> int:
         drained += len(b)
     return close(fd)
 
+# Middleware, static files, then routes (spec 63). HEAD is routed as GET.
+def respond(app: App, req: Request) -> Response:
+    res: Response = text(500, "no response\n")
+    answered: bool = false
+    for hook in app.befores:
+        if not answered:
+            match hook(req):
+                case Some(r):
+                    res = r
+                    answered = true
+                case None:
+                    answered = false
+    if not answered:
+        match serve_static(app, req):
+            case Some(r):
+                res = r
+                answered = true
+            case None:
+                answered = false
+    if not answered:
+        method: string = req.method
+        if method == "HEAD":
+            req.method = "GET"
+        res = dispatch(app, req)
+        req.method = method
+    for hook in app.afters:
+        res = hook(req, res)
+    return res
+
 def handle_conn(app: App, fd: int) -> int:
     set_read_timeout(fd, app.timeout_ms)
     set_write_timeout(fd, app.timeout_ms)
@@ -325,8 +473,8 @@ def handle_conn(app: App, fd: int) -> int:
     elif req.method == "" and req.path == "timeout":
         res = text(408, "request timeout\n")
     elif req.method != "":
-        res = dispatch(app, req)
-    write_all(fd, bytes_from_str(serialize(res)))
+        res = respond(app, req)
+    write_all(fd, bytes_from_str(serialize(res, req.method == "HEAD")))
     if app.log:
         app.logger.info(req.method + " " + req.path + " " + str_from_int(res.status))
     return linger_close(fd)

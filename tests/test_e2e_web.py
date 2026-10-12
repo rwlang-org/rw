@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -38,7 +39,15 @@ def server():
         cwd=REPO,
     )
     assert build.returncode == 0, f"rwc build failed:\n{build.stderr}"
-    proc, port = start_announced([str(out)], env={**os.environ, "RW_WORKERS": "2"})
+    # Files for the /static mount, with a secret next to (not inside) the root.
+    public = td / "public"
+    (public / "css").mkdir(parents=True)
+    (public / "sub").mkdir()
+    (public / "index.html").write_text("<h1>home</h1>\n")
+    (public / "css" / "a.css").write_text("h1{}\n")
+    (public / "sub" / "index.html").write_text("sub index\n")
+    (td / "secret.txt").write_text("do not serve\n")
+    proc, port = start_announced([str(out)], env={**os.environ, "RW_WORKERS": "2", "WEB_PUBLIC": str(public)})
     try:
         yield port
     finally:
@@ -144,6 +153,51 @@ def test_form_post_sets_cookie_and_cookie_is_read_back(server):
 def test_form_ignores_other_content_types(server):
     status, _, body = _call(server, "POST", "/login", b"user=x", "Content-Type: text/plain\r\n")
     assert (status, body) == (400, b"user required\n")
+
+
+def test_static_files(server):
+    status, headers, body = _call(server, "GET", "/static/index.html")
+    assert (status, body) == (200, b"<h1>home</h1>\n")
+    assert headers["content-type"] == "text/html; charset=utf-8"
+    assert headers["x-powered-by"] == "rw"  # after hooks see static responses too
+    assert re.fullmatch(r"\w{3}, \d\d \w{3} \d{4} \d\d:\d\d:\d\d GMT", headers["last-modified"])
+    status, headers, body = _call(server, "GET", "/static/css/a.css")
+    assert (status, headers["content-type"], body) == (200, "text/css; charset=utf-8", b"h1{}\n")
+    assert _call(server, "GET", "/static/")[2] == b"<h1>home</h1>\n"
+    assert _call(server, "GET", "/static/sub")[2] == b"sub index\n"
+
+
+def test_static_not_modified(server):
+    _, headers, _ = _call(server, "GET", "/static/css/a.css")
+    status, headers2, body = _call(server, "GET", "/static/css/a.css",
+                                   extra=f"If-Modified-Since: {headers['last-modified']}\r\n")
+    assert (status, body) == (304, b"")
+    assert headers2["last-modified"] == headers["last-modified"]
+
+
+@pytest.mark.parametrize("target", [
+    "/static/../secret.txt", "/static/%2e%2e/secret.txt", "/static/..%2Fsecret.txt",
+    "/static/sub/../../secret.txt", "/static//etc/passwd", "/static/missing.txt",
+])
+def test_static_never_leaves_root(server, target):
+    status, _, body = _call(server, "GET", target)
+    assert status == 404
+    assert b"do not serve" not in body
+
+
+def test_head_has_headers_but_no_body(server):
+    resp = _request(server, b"HEAD /static/index.html HTTP/1.1\r\nHost: x\r\n\r\n")
+    status, headers, body = _parse(resp)
+    assert (status, body) == (200, b"")
+    assert headers["content-length"] == str(len(b"<h1>home</h1>\n"))
+    status, headers, body = _parse(_request(server, b"HEAD /hello/x HTTP/1.1\r\nHost: x\r\n\r\n"))
+    assert (status, body, headers["content-length"]) == (200, b"", str(len(b"hello, x\n")))
+
+
+def test_before_hook_can_answer(server):
+    assert _call(server, "GET", "/admin")[:3:2] == (403, b"forbidden\n")
+    status, headers, body = _call(server, "GET", "/admin", extra="X-Token: secret\r\n")
+    assert (status, body, headers["x-powered-by"]) == (200, b"admin area\n", "rw")
 
 
 def test_redirect(server):

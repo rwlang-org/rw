@@ -48,6 +48,9 @@ A handler is any function of type `Callable[[Request], Response]`.
 | `route(app, method, pattern, handler) -> App` | Register a route for any method |
 | `set_not_found(app, handler) -> App` | Replace the 404 handler |
 | `set_log(app, on) -> App` | Turn the one-line-per-request access log on or off |
+| `before(app, hook) -> App` | Middleware run before routing: `hook(req) -> Option[Response]`; `Some(res)` answers the request and skips the rest |
+| `after(app, hook) -> App` | Middleware run on every response, in order: `hook(req, res) -> Response` |
+| `static(app, prefix, root) -> App` | Serve the files under directory `root` at URL `prefix` (GET and HEAD) |
 | `serve(app, port) -> int` | Listen and serve forever; returns `1` if the port cannot be opened |
 
 `App` is a record, so the registration functions update the app in place; the
@@ -60,6 +63,19 @@ a new segment.
 Routes are tried in registration order and the first match wins. A path that
 matches a route only under another method gets `405 Method Not Allowed`;
 anything else goes to the not-found handler.
+
+A request goes through the `before` hooks, then the static mounts, then the
+routes. The `after` hooks see every response, including 404s and static
+files. `HEAD` is routed like `GET`, and the response keeps its headers
+(including `Content-Length`) but drops the body.
+
+Static files: the rest of the path after the prefix is percent-decoded and
+resolved with `path.join_under`, so `..` (raw or encoded) and absolute
+paths can never reach outside `root`; they get the not-found handler, as do
+missing files. A directory serves its `index.html`. The content type comes
+from the extension. `Last-Modified` is sent, and a request whose
+`If-Modified-Since` repeats it gets `304 Not Modified`. Files are read
+whole into memory.
 
 ## Reading requests
 
