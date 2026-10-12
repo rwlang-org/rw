@@ -45,22 +45,11 @@ static int64_t tcp_listen_impl(int64_t port) {
     return (int64_t)fd;
 }
 
+/* Nonblocking accept; on EAGAIN a fiber parks on the netpoller and the main
+ * thread polls (rw_net_block). Either wait ends early with EBADF when
+ * another fiber closes the listener (spec 57), which is how an accept loop
+ * is stopped. */
 static int64_t tcp_accept_impl(int64_t listen_fd) {
-    rw_fiber_handle *me = rw_sched_current_fiber();
-    if (me == NULL) {
-        /* main thread: blocking accept (kernel sleeps the main thread;
-         * worker M / netpoller are separate threads and keep running). */
-        int64_t deadline = rw_net_deadline((int)listen_fd, RW_NET_READ);
-        if (deadline > 0 && rw_net_block((int)listen_fd, RW_NET_READ, deadline)) {
-            rw_errno = ETIMEDOUT;
-            return -1;
-        }
-        int c = accept((int)listen_fd, NULL, NULL);
-        if (c < 0) return -1;
-        rw_set_nonblocking(c);
-        return (int64_t)c;
-    }
-    /* fiber thread: nonblocking accept + netpoller park */
     rw_set_nonblocking((int)listen_fd);
     int64_t deadline = -1;
     for (;;) {
@@ -69,10 +58,12 @@ static int64_t tcp_accept_impl(int64_t listen_fd) {
             rw_set_nonblocking(c);
             return (int64_t)c;
         }
+        if (rw_errno == EINTR) continue;
         if (rw_errno == EAGAIN || rw_errno == EWOULDBLOCK) {
             if (deadline < 0) deadline = rw_net_deadline((int)listen_fd, RW_NET_READ);
-            if (rw_net_wait((int)listen_fd, RW_NET_READ, deadline)) {
-                rw_errno = ETIMEDOUT;
+            int r = rw_net_block((int)listen_fd, RW_NET_READ, deadline);
+            if (r) {
+                rw_errno = RW_NET_ERRNO(r);
                 return -1;
             }
             continue;
@@ -80,7 +71,6 @@ static int64_t tcp_accept_impl(int64_t listen_fd) {
         return -1;
     }
 }
-
 
 /* Record the outcome for last_error() (spec 51). */
 int64_t rw_tcp_listen(int64_t port) {

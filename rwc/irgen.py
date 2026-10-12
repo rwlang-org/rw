@@ -199,6 +199,9 @@ class IRGen:
         self._rw_set_nodelay = ir.Function(m, ir.FunctionType(I64, [I64, I8]), "rw_set_nodelay")
         self._rw_set_keepalive = ir.Function(m, ir.FunctionType(I64, [I64, I8]), "rw_set_keepalive")
         self._rw_set_backlog = ir.Function(m, ir.FunctionType(I64, [I64, I64]), "rw_set_backlog")
+        # signals (spec 57)
+        self._rw_signal_wait = ir.Function(
+            m, ir.FunctionType(RW_STR_TY, [RW_LIST_INT_TY.as_pointer()]), "rw_signal_wait")
         # I/O errors (spec 51)
         self._rw_last_error = ir.Function(m, ir.FunctionType(I64, []), "rw_last_error")
         self._rw_error_name = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_error_name")
@@ -1375,6 +1378,10 @@ class IRGen:
             out_slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.call(self._rw_str_split, [out_slot, sv, sep])
             return ctx.builder.load(out_slot)
+        if call.callee == "signal_wait":
+            slot = ctx.alloca(RW_LIST_INT_TY)
+            ctx.builder.store(self._emit_expr(call.args[0], ctx), slot)
+            return ctx.builder.call(self._rw_signal_wait, [slot])
         if call.callee == "str_join":
             lv = self._emit_expr(call.args[0], ctx)
             sep = self._emit_expr(call.args[1], ctx)

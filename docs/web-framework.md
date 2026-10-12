@@ -100,6 +100,8 @@ The framework adds `Content-Length` and `Connection: close` to every response.
   status instead of a connection reset (spec 56)
 - Each connection runs in its own fiber, which is freed when the connection
   is done (spec 19)
+- SIGINT / SIGTERM shut the server down gracefully: it stops accepting,
+  finishes the requests in progress, and `serve` returns 0 (spec 57)
 - The access log goes to stdout through `print`; when stdout is a pipe it is
   block-buffered, so lines appear late or are lost if the process is killed
 

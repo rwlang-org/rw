@@ -190,6 +190,9 @@ int64_t rw_set_nodelay  (int64_t fd, int8_t on);
 int64_t rw_set_keepalive(int64_t fd, int8_t on);
 int64_t rw_set_backlog  (int64_t fd, int64_t n);
 
+/* Signals (spec 57): wait for one of the named signals ("SIGTERM", ...). */
+rw_str  rw_signal_wait(const rw_list *names);
+
 /* spawn (one per return type) */
 rw_future_t *rw_spawn_i64 (int64_t (*fn)(void *), void *args);
 rw_future_t *rw_spawn_f64 (double  (*fn)(void *), void *args);

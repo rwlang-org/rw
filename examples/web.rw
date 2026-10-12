@@ -300,14 +300,52 @@ def handle_conn(app: App, fd: int) -> int:
         print(req.method + " " + req.path + " " + str_from_int(res.status))
     return linger_close(fd)
 
-# Listen on `port` and handle each connection in its own fiber. Only returns
-# if the port cannot be opened.
+# Connections being served, so shutdown can wait for them (spec 57).
+class Inflight:
+    count: int
+    mu: Mutex
+
+def inflight_add(f: Inflight, d: int) -> int:
+    mutex_lock(f.mu)
+    f.count += d
+    n: int = f.count
+    mutex_unlock(f.mu)
+    return n
+
+def serve_conn(app: App, fd: int, f: Inflight) -> int:
+    handle_conn(app, fd)
+    inflight_add(f, -1)
+    return 0
+
+# On SIGINT / SIGTERM, close the listener: the accept loop in serve() then
+# gets EBADF and stops taking new connections.
+def stop_on_signal(app: App, listen_fd: int) -> int:
+    sig: string = signal_wait(["SIGINT", "SIGTERM"])
+    if app.log:
+        print("web: " + sig + ", shutting down")
+    close(listen_fd)
+    return 0
+
+# Listen on `port` and handle each connection in its own fiber. Returns 1 if
+# the port cannot be opened, and 0 after a graceful shutdown: on SIGINT or
+# SIGTERM it stops accepting, lets the requests in progress finish, then
+# returns.
 def serve(app: App, port: int) -> int:
     listen_fd: int = tcp_listen(port)
     if listen_fd < 0:
         print("web: cannot listen on port " + str_from_int(port))
         return 1
+    f: Inflight = Inflight(0, mutex_new())
+    spawn stop_on_signal(app, listen_fd)
     while true:
         client: int = tcp_accept(listen_fd)
-        spawn handle_conn(app, client)
+        if client < 0:
+            if error_name(last_error()) == "EBADF":
+                break
+            sleep(10)  # e.g. EMFILE: back off instead of spinning
+            continue
+        inflight_add(f, 1)
+        spawn serve_conn(app, client, f)
+    while inflight_add(f, 0) > 0:
+        sleep(10)
     return 0
