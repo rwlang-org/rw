@@ -104,6 +104,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "proc_start", "proc_wait", "proc_kill",
     "gc_collect", "gc_heap_size",
     "assert_eq",
+    "recv_from", "send_to",
 })
 
 _DICT_BUILTINS = frozenset({
@@ -200,6 +201,9 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
     "proc_start": ((T.list_of(T.STRING),), T.list_of(T.INT)),
     "proc_wait": ((T.INT,), T.INT),
     "proc_kill": ((T.INT, T.STRING), T.INT),
+    # spec 69
+    "recv_from": ((T.INT, T.INT), T.TupleType([T.BYTES, T.STRING])),
+    "send_to": ((T.INT, T.BYTES, T.STRING), T.INT),
     # spec 67
     "gc_collect": ((), T.VOID),
     "gc_heap_size": ((), T.INT),

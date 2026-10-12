@@ -23,6 +23,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <poll.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 
 #include "aio.h"
@@ -77,7 +78,15 @@ static void read_impl(rw_str *out, int64_t fd, int64_t max) {
 /* *deadline < 0 means "not computed yet"; write_all shares one deadline
  * across its chunks. */
 static int64_t write_impl(int64_t fd, rw_str b, int64_t *deadline) {
-    if (b.len <= 0) return 0;
+    if (b.len <= 0) {
+        /* On a datagram socket an empty write is an empty datagram (spec 69). */
+        int type = 0;
+        socklen_t tl = sizeof type;
+        if (getsockopt((int)fd, SOL_SOCKET, SO_TYPE, &type, &tl) == 0 && type == SOCK_DGRAM) {
+            return send((int)fd, "", 0, 0) < 0 ? -1 : 0;
+        }
+        return 0;
+    }
 
     if (needs_offload(fd)) {
         return rw_aio_write(fd, b);
