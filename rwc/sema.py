@@ -85,6 +85,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "str_contains", "str_ends_with",
     "dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values",
     "sleep", "time_ms", "mono_ns",
+    "os_args", "os_getenv", "os_setenv", "os_exit", "os_getcwd", "os_chdir",
 })
 
 _DICT_BUILTINS = frozenset({
@@ -119,6 +120,13 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
     "sleep": ((T.INT,), T.VOID),
     "time_ms": ((), T.INT),
     "mono_ns": ((), T.INT),
+    # spec 40
+    "os_args": ((), T.list_of(T.STRING)),
+    "os_getenv": ((T.STRING,), T.option_of(T.STRING)),
+    "os_setenv": ((T.STRING, T.STRING), T.BOOL),
+    "os_exit": ((T.INT,), T.VOID),
+    "os_getcwd": ((), T.STRING),
+    "os_chdir": ((T.STRING,), T.BOOL),
 }
 
 

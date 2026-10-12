@@ -1,0 +1,27 @@
+# Run with arguments and environment, e.g.
+#   NAME=rw ./os_api a b
+def main() -> int:
+    args = os_args()
+    print(f"{len(args) - 1} args")
+    for a in args[1:]:
+        print(f"arg: {a}")
+    match os_getenv("NAME"):
+        case Some(n):
+            print(f"hello, {n}")
+        case None:
+            print("NAME is not set")
+    os_setenv("RW_EXAMPLE", "set by rw")
+    match os_getenv("RW_EXAMPLE"):
+        case Some(v):
+            print(v)
+        case None:
+            print("setenv failed")
+    start = os_getcwd()
+    if os_chdir("/"):
+        print(os_getcwd())
+    os_chdir(start)
+    if not os_chdir("/definitely/not/a/dir"):
+        print("chdir failed as expected")
+    if len(args) > 2:
+        os_exit(3)
+    return 0
