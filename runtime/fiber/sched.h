@@ -93,6 +93,10 @@ void rw_safepoint(void);
  * blocking). Spec 45. */
 int8_t rw_sched_is_done(rw_fiber_handle *h);
 
+/* Completion order of a finished fiber (smaller finished earlier). Only
+ * meaningful after rw_sched_is_done(h) returned true. */
+uint64_t rw_sched_finish_seq(rw_fiber_handle *h);
+
 /* Number of fiber handles spawned but not yet freed. For tests. */
 int64_t rw_sched_live_fibers(void);
 

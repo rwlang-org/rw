@@ -25,7 +25,10 @@ no way to take whichever finished first (#27).
 `await_all` is lowered to a loop that awaits each element and pushes the
 result. `await_any` calls `rw_await_any`, which checks each future's state
 (`rw_sched_is_done`) and, if none has finished, sleeps 1 ms (parking the
-fiber) before checking again; it then awaits the winner. Polling is a
+fiber) before checking again; it then awaits the winner. Several futures may
+finish between two checks, so each fiber records its position in a global
+completion order when it finishes, and `await_any` picks the finished future
+that came first — not the one with the lowest index. Polling is a
 deliberate first step: a fiber is linked into at most one wait list today
 (the `next` pointer doubles as the run-queue link), so registering one fiber
 on several targets would schedule it more than once. A multi-wait primitive
