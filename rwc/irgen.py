@@ -379,6 +379,9 @@ class IRGen:
         if isinstance(stmt, A.ForEach):
             self._emit_foreach(stmt, ctx)
             return
+        if isinstance(stmt, A.ValueMatch):
+            self._emit_value_match(stmt, ctx)
+            return
         if isinstance(stmt, A.TupleAssign):
             v = self._emit_expr(stmt.value, ctx)
             for i, name in enumerate(stmt.names):
@@ -512,6 +515,47 @@ class IRGen:
             b.position_at_end(end_bb)
             return
         raise RuntimeError(f"unsupported stmt: {type(stmt).__name__}")
+
+    def _emit_value_match(self, stmt: A.ValueMatch, ctx: "FunctionCtx") -> None:
+        """Test arms in order; the first whose pattern equals the value runs
+        (spec 38). A catch-all arm always matches."""
+        b = ctx.builder
+        tt = self.sema.expr_types[id(stmt.target)]
+        v = self._emit_expr(stmt.target, ctx)
+        end_bb = ctx.function.append_basic_block("vmatch.end")
+        for arm in stmt.arms:
+            body_bb = ctx.function.append_basic_block("vmatch.arm")
+            next_bb = ctx.function.append_basic_block("vmatch.next")
+            if arm.patterns:
+                hit = None
+                for p in arm.patterns:
+                    pv = self._emit_expr(p, ctx)
+                    if tt is T.STRING:
+                        eq = b.icmp_unsigned("!=", b.call(self._rw_str_eq, [v, pv]), ir.Constant(I8, 0))
+                    else:
+                        eq = b.icmp_signed("==", v, pv)
+                    hit = eq if hit is None else b.or_(hit, eq)
+                b.cbranch(hit, body_bb, next_bb)
+            else:
+                b.branch(body_bb)
+            b.position_at_end(body_bb)
+            saved = None
+            if arm.bind is not None:
+                slot = ctx.alloca(llvm_type_of(tt), name=arm.bind)
+                b.store(v, slot)
+                saved = ctx.locals.get(arm.bind)
+                ctx.locals[arm.bind] = slot
+            self._emit_block(arm.body, ctx)
+            if arm.bind is not None:
+                if saved is None:
+                    ctx.locals.pop(arm.bind, None)
+                else:
+                    ctx.locals[arm.bind] = saved
+            if not b.block.is_terminated:
+                b.branch(end_bb)
+            b.position_at_end(next_bb)
+        b.branch(end_bb)  # no arm matched
+        b.position_at_end(end_bb)
 
     def _emit_arm(self, var_name, block, payload, payload_ty, ctx, end_bb):
         """Emit one match arm. var_name=None means no payload binding."""

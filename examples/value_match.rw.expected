@@ -1,0 +1,13 @@
+read
+write
+delete
+unknown: TRACE
+read
+99
+ok
+redirect
+not found
+status 500
+negative
+off
+done
