@@ -1,0 +1,6 @@
+seeded sequences equal: true
+all faces roughly uniform: true
+floats in [0, 1): true, mean near 0.5: true
+16
+5
+-3

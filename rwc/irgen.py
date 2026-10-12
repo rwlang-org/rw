@@ -78,9 +78,12 @@ def record_struct_type(cls: T.ClassType) -> ir.LiteralStructType:
 # ---------- IR generator ----------
 
 class IRGen:
-    def __init__(self, program: "LoadedProgram", sema: SemaResult) -> None:
+    def __init__(self, program: "LoadedProgram", sema: SemaResult, checked: bool = True) -> None:
         self.program = program
         self.sema = sema
+        # Run-time checks for integer division (spec 42); `--unchecked` turns
+        # them off.
+        self.checked = checked
         self.mod = ir.Module(name=sema.filename)
         # Use a generic target triple; the driver picks the host triple at codegen.
         self.mod.triple = ""
@@ -141,6 +144,11 @@ class IRGen:
         self._rw_sleep_ms = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_sleep_ms")
         self._rw_time_ms = ir.Function(m, ir.FunctionType(I64, []), "rw_time_ms")
         self._rw_mono_ns = ir.Function(m, ir.FunctionType(I64, []), "rw_mono_ns")
+        # random numbers (spec 43)
+        self._rw_rand_int = ir.Function(m, ir.FunctionType(I64, [I64, I64]), "rw_rand_int")
+        self._rw_rand_float = ir.Function(m, ir.FunctionType(F64, []), "rw_rand_float")
+        self._rw_rand_seed = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_rand_seed")
+        self._rw_rand_bytes = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_rand_bytes")
         # OS API (spec 40)
         self._rw_set_args = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [I32, I8P.as_pointer()]), "rw_set_args")
@@ -1004,6 +1012,8 @@ class IRGen:
         is_str = lty is T.STRING
         is_strlike = lty is T.STRING or lty is T.BYTES
 
+        if op in ("/", "%") and is_int and self.checked:
+            return self._checked_int_div(op, l, r, expr, ctx)
         if op in ("+", "-", "*", "/", "%"):
             if is_int:
                 table = {
@@ -1186,6 +1196,10 @@ class IRGen:
             "sleep": self._rw_sleep_ms,
             "time_ms": self._rw_time_ms,
             "mono_ns": self._rw_mono_ns,
+            "rand_int": self._rw_rand_int,
+            "rand_float": self._rw_rand_float,
+            "rand_seed": self._rw_rand_seed,
+            "rand_bytes": self._rw_rand_bytes,
             "os_setenv": self._rw_os_setenv,
             "os_exit": self._rw_os_exit,
             "os_getcwd": self._rw_os_getcwd,
@@ -1359,6 +1373,35 @@ class IRGen:
         return fn
 
     # ---------- literals ----------
+    def _panic_if(self, cond: ir.Value, message: str, ctx: "FunctionCtx") -> None:
+        """Branch to a block that calls rw_panic(message) when cond holds."""
+        b = ctx.builder
+        fail = ctx.function.append_basic_block("check.fail")
+        ok = ctx.function.append_basic_block("check.ok")
+        b.cbranch(cond, fail, ok)
+        b.position_at_end(fail)
+        b.call(self._rw_panic, [self._emit_string_literal(message, b)])
+        b.unreachable()
+        b.position_at_end(ok)
+
+    def _checked_int_div(self, op: str, l: ir.Value, r: ir.Value, expr: A.BinOp,
+                         ctx: "FunctionCtx") -> ir.Value:
+        """Integer `/` and `%` without LLVM undefined behaviour (spec 42):
+        dividing by zero panics, INT64_MIN / -1 panics (the quotient does not
+        fit), and INT64_MIN % -1 is 0."""
+        b = ctx.builder
+        where = f"in {ctx.func_key[1]} (line {expr.line})"
+        self._panic_if(b.icmp_signed("==", r, ir.Constant(I64, 0)),
+                       f"division by zero {where}", ctx)
+        minus_one = b.icmp_signed("==", r, ir.Constant(I64, -1))
+        if op == "/":
+            overflow = b.and_(b.icmp_signed("==", l, ir.Constant(I64, -(2 ** 63))), minus_one)
+            self._panic_if(overflow, f"integer overflow in division {where}", ctx)
+            return b.sdiv(l, r)
+        # x % -1 == 0 for every x; avoid srem's INT64_MIN % -1 trap.
+        safe_r = b.select(minus_one, ir.Constant(I64, 1), r)
+        return b.select(minus_one, ir.Constant(I64, 0), b.srem(l, safe_r))
+
     def _emit_string_literal(self, s: str, b: ir.IRBuilder) -> ir.Value:
         data = s.encode("utf-8")
         arr_ty = ir.ArrayType(I8, len(data))
@@ -1410,5 +1453,5 @@ class FunctionCtx:
         return ab.alloca(ty, name=name)
 
 
-def generate(program: LoadedProgram, sema: SemaResult) -> ir.Module:
-    return IRGen(program, sema).generate()
+def generate(program: LoadedProgram, sema: SemaResult, checked: bool = True) -> ir.Module:
+    return IRGen(program, sema, checked).generate()

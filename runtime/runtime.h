@@ -132,6 +132,12 @@ void    rw_os_exit  (int64_t code);
 rw_str  rw_os_getcwd(void);
 int8_t  rw_os_chdir (rw_str path);
 
+/* Random numbers (spec 43). */
+int64_t rw_rand_int  (int64_t lo, int64_t hi);   /* uniform in [lo, hi] */
+double  rw_rand_float(void);                     /* uniform in [0, 1) */
+void    rw_rand_seed (int64_t seed);
+rw_str  rw_rand_bytes(int64_t n);                /* OS CSPRNG */
+
 /* List[int]: range-checked accessor returning Option[int]. */
 void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i);
 
