@@ -81,6 +81,8 @@ class TokenKind(Enum):
     # Punctuation / operators
     LPAREN = auto()
     RPAREN = auto()
+    LBRACE = auto()  # { (dict literals, spec 36)
+    RBRACE = auto()  # }
     LBRACK = auto()
     RBRACK = auto()
     COMMA = auto()
@@ -562,6 +564,8 @@ class Lexer:
             "(": TokenKind.LPAREN,
             ")": TokenKind.RPAREN,
             "[": TokenKind.LBRACK,
+            "{": TokenKind.LBRACE,
+            "}": TokenKind.RBRACE,
             "]": TokenKind.RBRACK,
             ",": TokenKind.COMMA,
             ":": TokenKind.COLON,

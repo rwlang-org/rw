@@ -782,6 +782,17 @@ class IRGen:
             return self._emit_string_literal(expr.value, b)
         if isinstance(expr, A.ListLit):
             return self._emit_list_lit(expr, ctx)
+        if isinstance(expr, A.DictLit):
+            # rw_dict_new, then one rw_dict_set per entry (spec 36).
+            dt = self.sema.expr_types[id(expr)]
+            assert isinstance(dt, T.DictType)
+            kind = ir.Constant(I64, 0 if dt.key is T.INT else 1)
+            d = b.call(self._rw_dict_new, [kind, self._sizeof(llvm_type_of(dt.value), b)])
+            for k, v in zip(expr.keys, expr.values):
+                key = self._spill(ctx, self._emit_expr(k, ctx), dt.key)
+                val = self._spill(ctx, self._emit_expr(v, ctx), dt.value)
+                b.call(self._rw_dict_set, [d, key, val])
+            return d
         if isinstance(expr, A.Index):
             return self._emit_index(expr, ctx)
         if isinstance(expr, A.Slice):

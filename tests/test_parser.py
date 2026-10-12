@@ -640,3 +640,12 @@ def test_parse_constant_must_be_literal(src):
     with pytest.raises(ParserError) as ei:
         parse_src(src)
     assert "must be initialised with a literal" in str(ei.value)
+
+
+# ----- dict literals (spec 36) -----
+
+def test_parse_dict_literal():
+    mod = parse_src('def main() -> int:\n    d = {"a": 1, "b": 2}\n    e: Dict[string, int] = {}\n    return 0\n')
+    d, e = mod.functions[0].body[0].value, mod.functions[0].body[1].value
+    assert isinstance(d, A.DictLit) and len(d.keys) == 2
+    assert isinstance(e, A.DictLit) and e.keys == []
