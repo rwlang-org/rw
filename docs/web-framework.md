@@ -103,11 +103,16 @@ or encodes anything else.
 | `set_cookie(res, name, value, attrs = "Path=/; HttpOnly; SameSite=Lax")` | Add a `Set-Cookie` header; escape the value yourself (`url.escape`) if it may contain `;`, `,`, or spaces |
 | `set_header(res, name, value) -> Response` | Add a response header |
 
-The framework adds `Content-Length` and `Connection: close` to every response.
+The framework adds `Content-Length` and `Connection` (`keep-alive` or `close`) to every response.
 
 ## Protocol behavior and limits
 
-- One request per connection (`Connection: close`); no keep-alive or pipelining
+- Persistent connections (spec 64): HTTP/1.1 connections stay open unless the
+  client sends `Connection: close`; HTTP/1.0 only with
+  `Connection: keep-alive`. Pipelined requests are answered in order. An idle
+  connection is closed after `app.keepalive_ms` (default 5000; 0 means one
+  request per connection), after 1000 requests, after any error response, and
+  when the request has a `Transfer-Encoding` body
 - Requests are read with the stdlib buffered reader (`bufio`, spec 54)
 - The request head may be up to 64 KiB (`413` above that); the body is read
   according to `Content-Length`, up to 1 MiB (`413` above that). Chunked
@@ -125,11 +130,11 @@ The framework adds `Content-Length` and `Connection: close` to every response.
   is done (spec 19)
 - SIGINT / SIGTERM shut the server down gracefully: it stops accepting,
   finishes the requests in progress, and `serve` returns 0 (spec 57)
-- The access log goes to stdout through `print`; when stdout is a pipe it is
-  block-buffered, so lines appear late or are lost if the process is killed
+- The access log goes to stdout through `log.Logger` (spec 60): one
+  unbuffered line per request
 
 ## Not supported yet
 
-TLS, keep-alive, chunked transfer encoding, percent-decoding, cookies,
-middleware, static files, and templates. Strings and lists allocated while
-handling a request are not freed (memory management, #67).
+TLS, chunked transfer encoding, compression, and templates. Strings and
+lists allocated while handling a request are not freed (memory management,
+#67).

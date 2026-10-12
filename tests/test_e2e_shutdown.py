@@ -120,7 +120,8 @@ def test_sigterm_finishes_inflight_request_then_exits(web_server):
         while True:
             try:
                 socket.create_connection(("127.0.0.1", port), timeout=1).close()
-            except ConnectionRefusedError:
+            except (ConnectionRefusedError, ConnectionResetError):
+                # Linux resets a probe that raced the listener's close.
                 break
             assert time.monotonic() < deadline, "listener still open after SIGTERM"
             time.sleep(0.05)
@@ -138,6 +139,21 @@ def test_sigterm_finishes_inflight_request_then_exits(web_server):
     out = b"".join(proc.rest_of_stdout).decode()
     assert re.search(r"Z INFO web: SIGTERM, shutting down\n", out), out
     assert re.search(r"Z INFO web: GET /hello/inflight 200\n", out), out
+
+
+def test_sigterm_closes_idle_keep_alive_connections(web_server):
+    proc, port = web_server
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        s.sendall(b"GET /hello/ka HTTP/1.1\r\nHost: x\r\n\r\n")
+        f = s.makefile("rb")
+        while f.readline() not in (b"\r\n", b""):
+            pass
+        f.read(len(b"hello, ka\n"))
+        t0 = time.monotonic()
+        proc.send_signal(signal.SIGTERM)
+        assert f.read() == b""   # the idle connection is closed promptly
+        assert time.monotonic() - t0 < 2
+    assert proc.wait(timeout=10) == 0
 
 
 def test_sigint_idle_server_exits_cleanly(web_server):
