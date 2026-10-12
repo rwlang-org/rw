@@ -103,6 +103,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "fs_kind", "fs_size", "fs_mtime_ms", "fs_read_dir", "fs_rename", "fs_remove", "fs_mkdir",
     "proc_start", "proc_wait", "proc_kill",
     "gc_collect", "gc_heap_size",
+    "assert_eq",
 })
 
 _DICT_BUILTINS = frozenset({
@@ -1491,6 +1492,27 @@ class Sema:
                 ))
             return T.VOID
         # Builtin: len(string|Bytes|List[int]) -> int.
+        # Builtin: assert_eq(a, b) for int / float / bool / string (spec 68).
+        if call.callee == "assert_eq":
+            if len(call.args) != 2:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"assert_eq takes 2 arguments, got {len(call.args)}",
+                ))
+            lt = self._check_expr(fn, call.args[0], locals_)
+            rt = self._check_expr_expect(fn, call.args[1], locals_, lt)
+            if lt not in (T.INT, T.FLOAT, T.BOOL, T.STRING):
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"assert_eq compares int, float, bool or string values, found `{lt}`",
+                ))
+            if rt != lt:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"assert_eq arguments differ in type: `{lt}` and `{rt}`",
+                    help=conversion_hint(lt, rt),
+                ))
+            return T.VOID
         if call.callee == "len":
             if len(call.args) != 1:
                 raise CompileError(Diagnostic(

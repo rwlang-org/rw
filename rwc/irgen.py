@@ -225,6 +225,15 @@ class IRGen:
             "rw_proc_start")
         self._rw_proc_wait = ir.Function(m, ir.FunctionType(I64, [I64]), "rw_proc_wait")
         self._rw_proc_kill = ir.Function(m, ir.FunctionType(I64, [I64, RW_STR_TY]), "rw_proc_kill")
+        # assert_eq failures (spec 68)
+        self._rw_assert_eq_fail_i64 = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [I64, I64, RW_STR_TY]), "rw_assert_eq_fail_i64")
+        self._rw_assert_eq_fail_f64 = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [F64, F64, RW_STR_TY]), "rw_assert_eq_fail_f64")
+        self._rw_assert_eq_fail_bool = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [I8, I8, RW_STR_TY]), "rw_assert_eq_fail_bool")
+        self._rw_assert_eq_fail_str = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [RW_STR_TY, RW_STR_TY, RW_STR_TY]), "rw_assert_eq_fail_str")
         # garbage collector (spec 67)
         self._rw_gc_collect = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_gc_collect")
         self._rw_gc_heap_size = ir.Function(m, ir.FunctionType(I64, []), "rw_gc_heap_size")
@@ -1366,6 +1375,8 @@ class IRGen:
             # `print` is void; produce a poison-ish placeholder is unsafe; print is only
             # used as a statement expression; return a zero i64 sentinel never used.
             return ir.Constant(I64, 0)
+        if call.callee == "assert_eq":
+            return self._emit_assert_eq(call, ctx)
         if call.callee == "len":
             arg_ast = call.args[0]
             v = self._emit_expr(arg_ast, ctx)
@@ -1684,6 +1695,35 @@ class IRGen:
         # x % -1 == 0 for every x; avoid srem's INT64_MIN % -1 trap.
         safe_r = b.select(minus_one, ir.Constant(I64, 1), r)
         return b.select(minus_one, ir.Constant(I64, 0), b.srem(l, safe_r))
+
+    def _emit_assert_eq(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
+        """assert_eq(a, b) (spec 68): on inequality, print both values (a
+        line diff for strings) with the location and exit(1)."""
+        b = ctx.builder
+        ty = self.sema.expr_types[id(call.args[0])]
+        l = self._emit_expr(call.args[0], ctx)
+        r = self._emit_expr(call.args[1], ctx)
+        if ty is T.FLOAT:
+            eq = b.fcmp_ordered("==", l, r)
+            fail_fn = self._rw_assert_eq_fail_f64
+        elif ty is T.STRING:
+            eq = b.icmp_unsigned("!=", b.call(self._rw_str_eq, [l, r]), ir.Constant(I8, 0))
+            fail_fn = self._rw_assert_eq_fail_str
+        elif ty is T.BOOL:
+            eq = b.icmp_unsigned("==", l, r)
+            fail_fn = self._rw_assert_eq_fail_bool
+        else:
+            eq = b.icmp_signed("==", l, r)
+            fail_fn = self._rw_assert_eq_fail_i64
+        fail = ctx.function.append_basic_block("assert_eq.fail")
+        ok = ctx.function.append_basic_block("assert_eq.ok")
+        b.cbranch(eq, ok, fail)
+        b.position_at_end(fail)
+        where = self._emit_string_literal(f"in {ctx.func_key[1]} (line {call.line})", b)
+        b.call(fail_fn, [l, r, where])
+        b.unreachable()
+        b.position_at_end(ok)
+        return ir.Constant(I64, 0)
 
     def _emit_string_literal(self, s: str, b: ir.IRBuilder) -> ir.Value:
         data = s.encode("utf-8")

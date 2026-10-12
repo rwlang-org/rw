@@ -24,6 +24,7 @@ uv sync --extra dev
 make -C runtime
 uv run rwc run examples/hello.rw
 uv run rwc check examples/hello.rw   # type-check only, no codegen
+uv run rwc test tests/              # run test_* functions in test_*.rw files
 ```
 
 For installation prerequisites and detailed setup, see [INSTALL.md](INSTALL.md).

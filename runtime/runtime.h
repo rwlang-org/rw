@@ -23,6 +23,12 @@ void rw_print_str(rw_str s);
 /* assertion failure: print message to stderr and exit(1) */
 void rw_panic(rw_str msg);
 
+/* assert_eq failures (spec 68): print both values and exit(1). */
+void rw_assert_eq_fail_i64 (int64_t a, int64_t b, rw_str where);
+void rw_assert_eq_fail_f64 (double a, double b, rw_str where);
+void rw_assert_eq_fail_bool(int8_t a, int8_t b, rw_str where);
+void rw_assert_eq_fail_str (rw_str a, rw_str b, rw_str where);
+
 /* string helper */
 rw_str rw_str_from_cstr(const char *cstr, int64_t len);  /* wraps, no copy */
 rw_str rw_str_copy_cstr(const char *cstr);              /* heap copy */

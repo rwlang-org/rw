@@ -100,6 +100,13 @@ def cmd_check(args: argparse.Namespace) -> int:
     return status
 
 
+def cmd_test(args: argparse.Namespace) -> int:
+    """Find and run rw tests (spec 68)."""
+    from .testrunner import run
+
+    return run(args.paths, pattern=args.k, timeout=args.timeout, verbose=args.verbose, report_error=_report)
+
+
 def cmd_emit_ast(args: argparse.Namespace) -> int:
     src_path = Path(args.input)
     source = _read_source(src_path)
@@ -163,6 +170,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_check.add_argument("inputs", nargs="+")
     p_check.add_argument("-q", "--quiet", action="store_true", help="print nothing for files that pass")
     p_check.set_defaults(func=cmd_check)
+
+    p_test = sub.add_parser("test", help="run test_* functions in test_*.rw / *_test.rw files")
+    p_test.add_argument("paths", nargs="*", help="files or directories (default: .)")
+    p_test.add_argument("-k", metavar="SUBSTRING", help="only tests whose name contains SUBSTRING")
+    p_test.add_argument("--timeout", type=float, default=60.0, help="seconds per test (default 60)")
+    p_test.add_argument("-v", "--verbose", action="store_true", help="show output of passing tests too")
+    p_test.set_defaults(func=cmd_test)
 
     p_ast = sub.add_parser("emit-ast", help="print parsed AST")
     p_ast.add_argument("input")
