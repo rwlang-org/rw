@@ -759,6 +759,10 @@ class IRGen:
 
     def _emit_expr(self, expr: A.Expr, ctx: "FunctionCtx") -> ir.Value:
         b = ctx.builder
+        cdef = self.sema.const_refs.get(id(expr))
+        if cdef is not None:
+            # A module constant: emit its literal in place (spec 35).
+            return self._emit_expr(cdef.value, ctx)
         ref = self.sema.func_refs.get(id(expr))
         if ref is not None:
             # A function used as a value (a Name or `mod.f`): the function

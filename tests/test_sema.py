@@ -2104,3 +2104,18 @@ def test_method_on_imported_class(tmp_path):
         "def main() -> int:\n    c = Counter(1)\n    d = lib.Counter(2)\n    return c.inc(1) + d.inc(2)\n",
         lib="class Counter:\n    n: int\n\n    def inc(self, by: int) -> int:\n        self.n += by\n        return self.n\n",
     )
+
+
+# ----- module constants (spec 35) -----
+
+@pytest.mark.parametrize(
+    "src, msg",
+    [
+        ('X: int = "a"\n\ndef main() -> int:\n    return 0\n', "type mismatch: declared `int`, value has type `string`"),
+        ("X: int = 1\n\ndef main() -> int:\n    X = 2\n    return 0\n", "cannot assign to constant `X`"),
+        ("X: int = 1\nX: int = 2\n\ndef main() -> int:\n    return 0\n", "`X` is already defined"),
+        ("X: int = 1\n\ndef X() -> int:\n    return 1\n\ndef main() -> int:\n    return 0\n", "`X` is already defined"),
+    ],
+)
+def test_constant_errors(src, msg):
+    assert msg in err(src).diagnostic.message

@@ -132,9 +132,9 @@ class Parser:
         self.skip_newlines()
         while self.cur.kind != TokenKind.EOF:
             if self.cur.kind in (TokenKind.KW_IMPORT, TokenKind.KW_FROM):
-                if mod.functions or mod.type_aliases or mod.classes:
+                if mod.functions or mod.type_aliases or mod.classes or mod.constants:
                     raise ParserError(
-                        "import must appear before any 'def', 'type', or 'class'",
+                        "import must appear before any 'def', 'type', 'class', or constant",
                         self.cur.line,
                         self.cur.col,
                         max(1, len(self.cur.value)),
@@ -148,9 +148,11 @@ class Parser:
                 cdef = self.parse_class_def()
                 mod.classes.append(cdef)
                 mod.functions.extend(cdef.method_defs)
+            elif self.cur.kind == TokenKind.IDENT and self.peek(1).kind == TokenKind.COLON:
+                mod.constants.append(self.parse_const_def())
             else:
                 raise ParserError(
-                    "expected 'import', 'def', 'type', or 'class' at module level",
+                    "expected 'import', 'def', 'type', 'class', or a constant at module level",
                     self.cur.line,
                     self.cur.col,
                     max(1, len(self.cur.value)),
@@ -198,6 +200,24 @@ class Parser:
         target = self.parse_type()
         self.eat(TokenKind.NEWLINE)
         return A.TypeAlias(name_tok.value, target, kw.line, kw.col)
+
+    # ------- module constants (spec 35) -------
+    def parse_const_def(self) -> A.ConstDef:
+        name_tok = self.eat(TokenKind.IDENT)
+        self.eat(TokenKind.COLON)
+        ty = self.parse_type()
+        self.eat(TokenKind.ASSIGN, "'=' in constant definition")
+        value = self.parse_expr()
+        self.eat(TokenKind.NEWLINE)
+        lit = value.operand if isinstance(value, A.UnaryOp) and value.op == "-" else value
+        if not isinstance(lit, (A.IntLit, A.FloatLit, A.StringLit, A.BoolLit)) or (
+            value is not lit and not isinstance(lit, (A.IntLit, A.FloatLit))
+        ):
+            raise ParserError(
+                "a constant must be initialised with a literal",
+                name_tok.line, name_tok.col, len(name_tok.value),
+            )
+        return A.ConstDef(name_tok.value, ty, value, name_tok.line, name_tok.col)
 
     # ------- records (spec 20) -------
     def parse_class_def(self) -> A.ClassDef:

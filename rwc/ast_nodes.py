@@ -447,8 +447,19 @@ class ClassDef:
 
 
 @dataclass
+class ConstDef:
+    """Module-level `NAME: T = literal` (spec 35)."""
+    name: str
+    type_expr: TypeExpr
+    value: Expr
+    line: int
+    col: int
+
+
+@dataclass
 class Module:
     functions: List[FuncDef] = field(default_factory=list)
     type_aliases: List[TypeAlias] = field(default_factory=list)
     imports: List[Import] = field(default_factory=list)
     classes: List[ClassDef] = field(default_factory=list)
+    constants: List[ConstDef] = field(default_factory=list)
