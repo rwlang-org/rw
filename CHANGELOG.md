@@ -1,5 +1,19 @@
 # Changelog
 
+## [v0.0.12](https://github.com/rwlang-org/rw/compare/v0.0.11...v0.0.12) - 2026-10-12
+
+- ci: bump astral-sh/setup-uv from 10.1.0 to 10.2.0 by @dependabot[bot] in https://github.com/rwlang-org/rw/pull/179
+- ci: bump Songmu/tagpr from 1.6.1 to 1.21.2 by @dependabot[bot] in https://github.com/rwlang-org/rw/pull/180
+- feat: json stdlib module, byte_at / chr / str_to_float by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/215
+- feat: path and fs stdlib modules by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/216
+- feat: log stdlib module; web.rw logs through it by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/217
+- feat: process stdlib module (spawn, pipes, wait, kill) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/218
+- feat: url module; decoded paths/queries, forms, and cookies in web.rw by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/219
+- feat: static files, before/after middleware, and HEAD in web.rw by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/220
+- feat: keep-alive and pipelining in web.rw by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/221
+- feat: chunked request bodies in web.rw by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/222
+- feat: template stdlib module (Mustache subset over json.Value) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/223
+
 ## [v0.0.11](https://github.com/rwlang-org/rw/compare/v0.0.10...v0.0.11) - 2026-10-12
 - feat: local type inference (x = expr declares x) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/182
 - feat: methods on records by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/184
