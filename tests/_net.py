@@ -26,7 +26,8 @@ def listen_on_port_zero(src: str) -> str:
     return new + _ANNOUNCE
 
 
-def start_announced(argv: list[str], env: dict | None = None, timeout: float = 10.0) -> tuple[subprocess.Popen, int]:
+def start_announced(argv: list[str], env: dict | None = None, timeout: float = 10.0,
+                    cwd: str | None = None) -> tuple[subprocess.Popen, int]:
     """Start a server built from `listen_on_port_zero` source and return
     (proc, port) once it has announced its address. The rest of its stdout
     is drained in the background so a chatty server never blocks on a full
@@ -34,7 +35,7 @@ def start_announced(argv: list[str], env: dict | None = None, timeout: float = 1
     import selectors
     import threading
 
-    proc = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(argv, env=env, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
     line = b""

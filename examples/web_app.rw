@@ -39,6 +39,18 @@ def whoami(req: Request) -> Response:
         return text(401, "not logged in\n")
     return text(200, "you are " + user + "\n")
 
+# Middleware (spec 63): /admin needs a token; every response says who served it.
+def require_token(req: Request) -> Option[Response]:
+    if str_starts_with(req.path, "/admin") and web.header(req, "X-Token") != "secret":
+        return Some(text(403, "forbidden\n"))
+    return None
+
+def powered_by(req: Request, res: Response) -> Response:
+    return set_header(res, "X-Powered-By", "rw")
+
+def admin(req: Request) -> Response:
+    return text(200, "admin area\n")
+
 def old(req: Request) -> Response:
     return web.redirect("/")
 
@@ -56,5 +68,16 @@ def main() -> int:
     web.post(app, "/login", login)
     web.get(app, "/whoami", whoami)
     web.get(app, "/old", old)
+    web.get(app, "/admin", admin)
+    web.before(app, require_token)
+    web.after(app, powered_by)
+    # Static files: examples/public by default (run from the repository root).
+    public: string = "examples/public"
+    match os_getenv("WEB_PUBLIC"):
+        case Some(dir):
+            public = dir
+        case None:
+            public = public
+    web.static(app, "/static", public)
     web.set_not_found(app, missing)
     return web.serve(app, 8080)
