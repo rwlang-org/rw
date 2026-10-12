@@ -61,6 +61,8 @@ def llvm_type_of(t: T.Type) -> ir.Type:
         return I8P  # pointer to a heap record (spec 20)
     if isinstance(t, T.DictType):
         return I8P  # pointer to a heap hash table (spec 31)
+    if isinstance(t, T.ChannelType):
+        return I8P  # pointer to a runtime channel (spec 44)
     if isinstance(t, T.TupleType):
         return ir.LiteralStructType([llvm_type_of(e) for e in t.elems])  # by value (spec 37)
     if isinstance(t, T.FunctionType):
@@ -144,6 +146,12 @@ class IRGen:
         self._rw_sleep_ms = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_sleep_ms")
         self._rw_time_ms = ir.Function(m, ir.FunctionType(I64, []), "rw_time_ms")
         self._rw_mono_ns = ir.Function(m, ir.FunctionType(I64, []), "rw_mono_ns")
+        # channels (spec 44)
+        self._rw_chan_new = ir.Function(m, ir.FunctionType(I8P, [I64, I64]), "rw_chan_new")
+        self._rw_chan_send = ir.Function(m, ir.FunctionType(ir.VoidType(), [I8P, I8P]), "rw_chan_send")
+        self._rw_chan_recv = ir.Function(m, ir.FunctionType(I8, [I8P, I8P]), "rw_chan_recv")
+        self._rw_chan_close = ir.Function(m, ir.FunctionType(ir.VoidType(), [I8P]), "rw_chan_close")
+        self._rw_chan_len = ir.Function(m, ir.FunctionType(I64, [I8P]), "rw_chan_len")
         # random numbers (spec 43)
         self._rw_rand_int = ir.Function(m, ir.FunctionType(I64, [I64, I64]), "rw_rand_int")
         self._rw_rand_float = ir.Function(m, ir.FunctionType(F64, []), "rw_rand_float")
@@ -696,6 +704,34 @@ class IRGen:
         ctx.builder.store(value, slot)
         return ctx.builder.bitcast(slot, I8P)
 
+    def _chan_recv(self, ctx: "FunctionCtx", ch: ir.Value, ct: T.ChannelType) -> ir.Value:
+        """Receive into an Option[T] value: tag = got a value (spec 44)."""
+        b = ctx.builder
+        val_llvm = llvm_type_of(ct.elem)
+        slot = ctx.alloca(val_llvm)
+        b.store(ir.Constant(val_llvm, None), slot)
+        ok = b.call(self._rw_chan_recv, [ch, b.bitcast(slot, I8P)])
+        opt = ir.Constant(llvm_type_of(T.option_of(ct.elem)), None)
+        opt = b.insert_value(opt, b.zext(ok, I64), 0)
+        return b.insert_value(opt, b.load(slot), 1)
+
+    def _emit_chan_builtin(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
+        b = ctx.builder
+        if call.callee == "chan_new":
+            ct = self.sema.expr_types[id(call)]
+            assert isinstance(ct, T.ChannelType)
+            cap = self._emit_expr(call.args[0], ctx)
+            return b.call(self._rw_chan_new, [cap, self._sizeof(llvm_type_of(ct.elem), b)])
+        ch = self._emit_expr(call.args[0], ctx)
+        ct = self.sema.expr_types[id(call.args[0])]
+        assert isinstance(ct, T.ChannelType)
+        if call.callee == "chan_send":
+            v = self._spill(ctx, self._emit_expr(call.args[1], ctx), ct.elem)
+            return b.call(self._rw_chan_send, [ch, v])
+        if call.callee == "chan_recv":
+            return self._chan_recv(ctx, ch, ct)
+        return b.call(self._rw_chan_close, [ch])
+
     def _dict_keys_list(self, ctx: "FunctionCtx", d: ir.Value) -> ir.Value:
         out = ctx.alloca(RW_LIST_INT_TY)
         ctx.builder.call(self._rw_dict_keys, [out, d])
@@ -773,6 +809,9 @@ class IRGen:
         it_ty = self.sema.expr_types[id(stmt.iterable)]
         elem_ty = self.sema.foreach_types[id(stmt)]
         it_val = self._emit_expr(stmt.iterable, ctx)
+        if isinstance(it_ty, T.ChannelType):
+            self._emit_chan_foreach(stmt, ctx, it_val, it_ty)
+            return
         if isinstance(it_ty, T.DictType):
             # Iterate over a snapshot of the keys (spec 31).
             it_val = self._dict_keys_list(ctx, it_val)
@@ -819,6 +858,34 @@ class IRGen:
         b.position_at_end(update_bb)
         b.store(b.add(b.load(idx_slot), ir.Constant(I64, 1)), idx_slot)
         b.branch(cond_bb)
+        b.position_at_end(end_bb)
+
+    def _emit_chan_foreach(self, stmt: A.ForEach, ctx: "FunctionCtx", ch: ir.Value,
+                           ct: T.ChannelType) -> None:
+        """for v in ch: receive until the channel is closed and drained."""
+        b = ctx.builder
+        val_llvm = llvm_type_of(ct.elem)
+        var_slot = ctx.alloca(val_llvm, name=stmt.var)
+        cond_bb = ctx.function.append_basic_block("chan.recv")
+        body_bb = ctx.function.append_basic_block("chan.body")
+        end_bb = ctx.function.append_basic_block("chan.end")
+        b.branch(cond_bb)
+        b.position_at_end(cond_bb)
+        self._emit_safepoint(ctx)
+        ok = b.call(self._rw_chan_recv, [ch, b.bitcast(var_slot, I8P)])
+        b.cbranch(b.icmp_unsigned("!=", ok, ir.Constant(I8, 0)), body_bb, end_bb)
+        b.position_at_end(body_bb)
+        saved = ctx.locals.get(stmt.var)
+        ctx.locals[stmt.var] = var_slot
+        ctx.loop_stack.append((cond_bb, end_bb))
+        self._emit_block(stmt.body, ctx)
+        ctx.loop_stack.pop()
+        if saved is None:
+            del ctx.locals[stmt.var]
+        else:
+            ctx.locals[stmt.var] = saved
+        if not b.block.is_terminated:
+            b.branch(cond_bb)
         b.position_at_end(end_bb)
 
     def _emit_generic_list_op(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
@@ -1150,6 +1217,8 @@ class IRGen:
             aty = self.sema.expr_types[id(arg_ast)]
             if isinstance(aty, T.DictType):
                 return ctx.builder.call(self._rw_dict_len, [v])
+            if isinstance(aty, T.ChannelType):
+                return ctx.builder.call(self._rw_chan_len, [v])
             if isinstance(aty, T.ListType):
                 # rw_list_int_len takes a pointer to a stack copy; it only
                 # reads `len`, so it serves every List[T].
@@ -1161,6 +1230,8 @@ class IRGen:
             # Both are noops at the IR level: the value carries the
             # same {len, ptr} layout, only the sema type changes.
             return self._emit_expr(call.args[0], ctx)
+        if call.callee in ("chan_new", "chan_send", "chan_recv", "chan_close"):
+            return self._emit_chan_builtin(call, ctx)
         if call.callee in ("dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values"):
             return self._emit_dict_builtin(call, ctx)
         if call.callee == "os_args":

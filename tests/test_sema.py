@@ -2269,3 +2269,17 @@ def test_range_for_variable_can_be_reused():
 def test_range_for_over_variable_of_another_type_is_error():
     e = err('def main() -> int:\n    i = "s"\n    for i in range(0, 3):\n        print(i)\n    return 0\n')
     assert "loop variable `i` is already declared as `string`, not int" in e.diagnostic.message
+
+
+# ----- channels (spec 44) -----
+
+@pytest.mark.parametrize("body, msg", [
+    ("    c = chan_new(1)\n", "cannot infer the type of chan_new()"),
+    ('    c: Channel[int] = chan_new(1)\n    chan_send(c, "a")\n', "chan_send argument 2 must be int"),
+    ("    c: Channel[int] = chan_new(1)\n    n: int = chan_recv(c)\n", "type mismatch"),
+    ("    chan_close(3)\n", "chan_close argument 1 must be a Channel"),
+    ('    c: Channel[int] = chan_new("x")\n', "chan_new capacity must be int"),
+])
+def test_channel_errors(body, msg):
+    e = err("def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message
