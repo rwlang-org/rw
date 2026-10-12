@@ -60,30 +60,29 @@ void rw_netpoller_platform_run(void) {
                 (void)r;
                 continue;
             }
-            rw_sched_enqueue_ready((rw_fiber_handle *)p);
+            uint32_t ev = events[i].events;
+            int mask = 0;
+            if (ev & (EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP)) mask |= 1 << RW_NET_READ;
+            if (ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) mask |= 1 << RW_NET_WRITE;
+            rw_netpoller_ready((rw_pollfd *)p, mask);
         }
     }
     if (g_wake_fd >= 0) { close(g_wake_fd); g_wake_fd = -1; }
     if (g_ep >= 0)      { close(g_ep);      g_ep = -1; }
 }
 
-static int register_oneshot(int fd, rw_fiber_handle *h, uint32_t events) {
-    struct epoll_event ev = {
-        .events = events | EPOLLONESHOT,
-        .data.ptr = h,
-    };
+/* epoll has one registration per fd, so `events` must name every
+ * direction that still has waiters (rw_netpoller_ready re-arms the rest
+ * after a one-shot event). */
+int rw_netpoller_register(int fd, rw_pollfd *pd, int events) {
+    uint32_t mask = EPOLLONESHOT | EPOLLRDHUP;
+    if (events & (1 << RW_NET_READ))  mask |= EPOLLIN;
+    if (events & (1 << RW_NET_WRITE)) mask |= EPOLLOUT;
+    struct epoll_event ev = { .events = mask, .data.ptr = pd };
     /* Try MOD first (already registered), fall back to ADD. */
     if (epoll_ctl(g_ep, EPOLL_CTL_MOD, fd, &ev) == 0) return 0;
     if (errno != ENOENT) return -1;
     return epoll_ctl(g_ep, EPOLL_CTL_ADD, fd, &ev);
-}
-
-int rw_netpoller_register_read(int fd, rw_fiber_handle *h) {
-    return register_oneshot(fd, h, EPOLLIN);
-}
-
-int rw_netpoller_register_write(int fd, rw_fiber_handle *h) {
-    return register_oneshot(fd, h, EPOLLOUT);
 }
 
 #endif /* __linux__ */

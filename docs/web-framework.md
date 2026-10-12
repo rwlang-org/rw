@@ -89,6 +89,9 @@ The framework adds `Content-Length` and `Connection: close` to every response.
   according to `Content-Length`, up to 1 MiB (`413` above that). Chunked
   request bodies are not supported
 - A malformed request line gets `400 Bad Request`
+- Each connection has a read and write timeout (`app.timeout_ms`, default
+  10000; 0 disables it). A client that sends part of a request and then
+  stalls gets `408 Request Timeout`; one that sends nothing is closed (spec 53)
 - Responses are written completely even when `write` accepts only part of
   the buffer
 - Each connection runs in its own fiber, which is freed when the connection

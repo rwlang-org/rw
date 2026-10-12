@@ -50,6 +50,11 @@ static int64_t tcp_accept_impl(int64_t listen_fd) {
     if (me == NULL) {
         /* main thread: blocking accept (kernel sleeps the main thread;
          * worker M / netpoller are separate threads and keep running). */
+        int64_t deadline = rw_net_deadline((int)listen_fd, RW_NET_READ);
+        if (deadline > 0 && rw_net_block((int)listen_fd, RW_NET_READ, deadline)) {
+            rw_errno = ETIMEDOUT;
+            return -1;
+        }
         int c = accept((int)listen_fd, NULL, NULL);
         if (c < 0) return -1;
         rw_set_nonblocking(c);
@@ -57,6 +62,7 @@ static int64_t tcp_accept_impl(int64_t listen_fd) {
     }
     /* fiber thread: nonblocking accept + netpoller park */
     rw_set_nonblocking((int)listen_fd);
+    int64_t deadline = -1;
     for (;;) {
         int c = accept((int)listen_fd, NULL, NULL);
         if (c >= 0) {
@@ -64,7 +70,11 @@ static int64_t tcp_accept_impl(int64_t listen_fd) {
             return (int64_t)c;
         }
         if (rw_errno == EAGAIN || rw_errno == EWOULDBLOCK) {
-            rw_net_park_read((int)listen_fd);
+            if (deadline < 0) deadline = rw_net_deadline((int)listen_fd, RW_NET_READ);
+            if (rw_net_wait((int)listen_fd, RW_NET_READ, deadline)) {
+                rw_errno = ETIMEDOUT;
+                return -1;
+            }
             continue;
         }
         return -1;
@@ -76,6 +86,7 @@ static int64_t tcp_accept_impl(int64_t listen_fd) {
 int64_t rw_tcp_listen(int64_t port) {
     rw_errno = 0;
     int64_t fd = tcp_listen_impl(port);
+    if (fd >= 0) rw_net_reset_fd((int)fd);
     rw_set_last_error(fd >= 0 ? 0 : (rw_errno ? rw_errno : EINVAL));
     return fd;
 }
@@ -83,6 +94,7 @@ int64_t rw_tcp_listen(int64_t port) {
 int64_t rw_tcp_accept(int64_t listen_fd) {
     rw_errno = 0;
     int64_t c = tcp_accept_impl(listen_fd);
+    if (c >= 0) rw_net_reset_fd((int)c);
     rw_set_last_error(c >= 0 ? 0 : (rw_errno ? rw_errno : EINVAL));
     return c;
 }

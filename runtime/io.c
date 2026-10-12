@@ -26,13 +26,6 @@
 
 #include "aio.h"
 
-/* Off-fiber (main thread) callers cannot park; wait in the kernel until the
- * nonblocking socket is ready instead of reporting EAGAIN as EOF. */
-static void wait_fd(int64_t fd, short events) {
-    struct pollfd p = { (int)fd, events, 0 };
-    while (poll(&p, 1, -1) < 0 && rw_errno == EINTR) {}
-}
-
 /* True for fds whose read/write may block in the kernel: anything that is
  * not a socket. Sockets accepted by rw are nonblocking (tcp.c). */
 static int needs_offload(int64_t fd) {
@@ -52,15 +45,17 @@ static void read_impl(rw_str *out, int64_t fd, int64_t max) {
 
     char *buf = (char *)malloc((size_t)max);
     if (!buf)     { out->len = 0; out->ptr = NULL; return; }
+    int64_t deadline = -1;   /* computed on the first EAGAIN */
     for (;;) {
         ssize_t n = read((int)fd, buf, (size_t)max);
         if (n > 0)  { out->len = n; out->ptr = buf; return; }
         if (n == 0) { free(buf); out->len = 0; out->ptr = NULL; rw_errno = 0; return; }
         if (rw_errno == EAGAIN || rw_errno == EWOULDBLOCK) {
-            if (rw_sched_current_fiber()) {
-                rw_net_park_read((int)fd);
-            } else {
-                wait_fd(fd, POLLIN);
+            /* Fibers park on the netpoller; the main thread polls. The read
+             * timeout (spec 53) bounds the whole call. */
+            if (deadline < 0) deadline = rw_net_deadline((int)fd, RW_NET_READ);
+            if (rw_net_block((int)fd, RW_NET_READ, deadline)) {
+                free(buf); out->len = 0; out->ptr = NULL; rw_errno = ETIMEDOUT; return;
             }
             continue;
         }
@@ -68,7 +63,9 @@ static void read_impl(rw_str *out, int64_t fd, int64_t max) {
     }
 }
 
-static int64_t write_impl(int64_t fd, rw_str b) {
+/* *deadline < 0 means "not computed yet"; write_all shares one deadline
+ * across its chunks. */
+static int64_t write_impl(int64_t fd, rw_str b, int64_t *deadline) {
     if (b.len <= 0) return 0;
 
     if (needs_offload(fd)) {
@@ -79,10 +76,10 @@ static int64_t write_impl(int64_t fd, rw_str b) {
         ssize_t n = write((int)fd, b.ptr, (size_t)b.len);
         if (n >= 0) return (int64_t)n;
         if (rw_errno == EAGAIN || rw_errno == EWOULDBLOCK) {
-            if (rw_sched_current_fiber()) {
-                rw_net_park_write((int)fd);
-            } else {
-                wait_fd(fd, POLLOUT);
+            if (*deadline < 0) *deadline = rw_net_deadline((int)fd, RW_NET_WRITE);
+            if (rw_net_block((int)fd, RW_NET_WRITE, *deadline)) {
+                rw_errno = ETIMEDOUT;
+                return -1;
             }
             continue;
         }
@@ -100,7 +97,8 @@ void rw_read(rw_str *out, int64_t fd, int64_t max) {
 
 int64_t rw_write(int64_t fd, rw_str b) {
     rw_errno = 0;
-    int64_t n = write_impl(fd, b);
+    int64_t deadline = -1;
+    int64_t n = write_impl(fd, b, &deadline);
     rw_set_last_error(n >= 0 ? 0 : (rw_errno ? rw_errno : EIO));
     return n;
 }
@@ -109,10 +107,11 @@ int64_t rw_write(int64_t fd, rw_str b) {
  * with last_error set if any write fails. */
 int64_t rw_write_all(int64_t fd, rw_str b) {
     int64_t off = 0;
+    int64_t deadline = -1;
     while (off < b.len) {
         rw_errno = 0;
         rw_str rest = { b.len - off, b.ptr + off };
-        int64_t n = write_impl(fd, rest);
+        int64_t n = write_impl(fd, rest, &deadline);
         if (n <= 0) {
             rw_set_last_error(n < 0 && rw_errno ? rw_errno : EIO);
             return -1;
@@ -124,6 +123,7 @@ int64_t rw_write_all(int64_t fd, rw_str b) {
 }
 
 int64_t rw_close(int64_t fd) {
+    rw_net_reset_fd((int)fd);
     int rc = close((int)fd);
     rw_set_last_error(rc < 0 ? rw_errno : 0);
     return (int64_t)rc;
@@ -158,6 +158,7 @@ static int64_t file_open_impl(rw_str path, rw_str mode) {
 int64_t rw_file_open(rw_str path, rw_str mode) {
     rw_errno = 0;
     int64_t fd = file_open_impl(path, mode);
+    if (fd >= 0) rw_net_reset_fd((int)fd);
     rw_set_last_error(fd >= 0 ? 0 : (rw_errno ? rw_errno : EINVAL));
     return fd;
 }
@@ -193,3 +194,7 @@ rw_str rw_error_message(int64_t err) {
     if (err == RW_ENOHOST) return rw_str_copy_cstr("host not found");
     return rw_str_copy_cstr(strerror((int)err));
 }
+
+/* Per-handle timeouts (spec 53). */
+void rw_set_read_timeout(int64_t fd, int64_t ms)  { rw_net_set_timeout((int)fd, RW_NET_READ, ms); }
+void rw_set_write_timeout(int64_t fd, int64_t ms) { rw_net_set_timeout((int)fd, RW_NET_WRITE, ms); }

@@ -17,7 +17,10 @@
 typedef struct {
     int64_t          deadline_ns;
     uint64_t         seq;     /* FIFO among equal deadlines */
-    rw_fiber_handle *fiber;
+    rw_fiber_handle *fiber;   /* sleep: wake this fiber */
+    void           (*fn)(void *, uint64_t);   /* otherwise: call fn */
+    void            *arg;
+    uint64_t         tag;
 } rw_timer_entry;
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -89,9 +92,10 @@ static void *timer_main(void *arg) {
         }
         int64_t now = rw_mono_ns();
         if (g_heap[0].deadline_ns <= now) {
-            rw_fiber_handle *f = heap_pop().fiber;
+            rw_timer_entry e = heap_pop();
             pthread_mutex_unlock(&g_mu);
-            rw_sched_enqueue_ready(f);
+            if (e.fiber) rw_sched_enqueue_ready(e.fiber);
+            else e.fn(e.arg, e.tag);
             pthread_mutex_lock(&g_mu);
             continue;
         }
@@ -145,6 +149,9 @@ static void commit_sleep(rw_fiber_handle *self, void *arg) {
     rw_timer_entry e;
     e.deadline_ns = *(int64_t *)arg;
     e.fiber = self;
+    e.fn = NULL;
+    e.arg = NULL;
+    e.tag = 0;
     pthread_mutex_lock(&g_mu);
     e.seq = g_seq++;
     heap_push(e);
@@ -161,4 +168,18 @@ void rw_sleep_ms(int64_t ms) {
     }
     int64_t deadline = rw_mono_ns() + ms * 1000000;  /* on this fiber's stack */
     rw_sched_park_commit(commit_sleep, &deadline);
+}
+
+void rw_timer_call_at(int64_t deadline_ns, void (*fn)(void *, uint64_t), void *arg, uint64_t tag) {
+    rw_timer_entry e;
+    e.deadline_ns = deadline_ns;
+    e.fiber = NULL;
+    e.fn = fn;
+    e.arg = arg;
+    e.tag = tag;
+    pthread_mutex_lock(&g_mu);
+    e.seq = g_seq++;
+    heap_push(e);
+    pthread_cond_signal(&g_cv);
+    pthread_mutex_unlock(&g_mu);
 }

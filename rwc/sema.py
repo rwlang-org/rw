@@ -95,6 +95,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "dial", "listen", "accept", "open", "local_addr", "peer_addr",
     "last_error", "error_name", "error_message",
     "write_all",
+    "dial_timeout", "set_read_timeout", "set_write_timeout",
 })
 
 _DICT_BUILTINS = frozenset({
@@ -159,6 +160,10 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
     "error_message": ((T.INT,), T.STRING),
     # spec 52
     "write_all": ((T.INT, T.BYTES), T.INT),
+    # spec 53
+    "dial_timeout": ((T.STRING, T.INT), T.INT),
+    "set_read_timeout": ((T.INT, T.INT), T.VOID),
+    "set_write_timeout": ((T.INT, T.INT), T.VOID),
 }
 
 

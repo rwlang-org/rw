@@ -38,6 +38,8 @@ class App:
     routes: List[Route]
     not_found: Callable[[Request], Response]
     log: bool
+    # Per-connection read/write timeout in ms (spec 53); 0 disables it.
+    timeout_ms: int
 
 # Result of matching a route pattern against a path.
 class Match:
@@ -140,7 +142,7 @@ def default_not_found(req: Request) -> Response:
     return text(404, "not found: " + req.path + "\n")
 
 def new_app() -> App:
-    return App(list_new(), default_not_found, true)
+    return App(list_new(), default_not_found, true, 10000)
 
 def route(app: App, method: string, pattern: string, handler: Callable[[Request], Response]) -> App:
     app.routes = list_push(app.routes, Route(method, pattern, handler))
@@ -213,6 +215,8 @@ def read_request(fd: int) -> Request:
     while str_find(buf, "\r\n\r\n") < 0:
         b: Bytes = read(fd, 4096)
         if len(b) == 0:
+            if len(buf) > 0 and error_name(last_error()) == "ETIMEDOUT":
+                return bad_request("timeout")
             return bad_request("eof" if len(buf) == 0 else "bad")
         buf = buf + str_from_bytes(b)
         if len(buf) > max_header_bytes():
@@ -258,12 +262,16 @@ def serialize(res: Response) -> string:
 
 # write() may write only part of the buffer; keep going until all is sent.
 def handle_conn(app: App, fd: int) -> int:
+    set_read_timeout(fd, app.timeout_ms)
+    set_write_timeout(fd, app.timeout_ms)
     req: Request = read_request(fd)
     if req.method == "" and req.path == "eof":
         return close(fd)
     res: Response = text(400, "bad request\n")
     if req.method == "" and req.path == "too-large":
         res = text(413, "request too large\n")
+    elif req.method == "" and req.path == "timeout":
+        res = text(408, "request timeout\n")
     elif req.method != "":
         res = dispatch(app, req)
     write_all(fd, bytes_from_str(serialize(res)))
