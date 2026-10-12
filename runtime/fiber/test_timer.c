@@ -37,7 +37,10 @@ static int64_t many(void *arg) {
 }
 
 int main(void) {
-    setenv("RW_WORKERS", "2", 1);
+    /* One worker: woken fibers then run in the order the timer fires them,
+     * so the ordering check below does not depend on how promptly a busy CI
+     * machine schedules a second worker thread. */
+    setenv("RW_WORKERS", "1", 1);
     rw_sched_init();
     rw_timer_init();
     rw_fiber_handle *h[3];
