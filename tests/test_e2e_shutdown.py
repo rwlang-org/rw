@@ -120,7 +120,8 @@ def test_sigterm_finishes_inflight_request_then_exits(web_server):
         while True:
             try:
                 socket.create_connection(("127.0.0.1", port), timeout=1).close()
-            except ConnectionRefusedError:
+            except (ConnectionRefusedError, ConnectionResetError):
+                # Linux resets a probe that raced the listener's close.
                 break
             assert time.monotonic() < deadline, "listener still open after SIGTERM"
             time.sleep(0.05)
