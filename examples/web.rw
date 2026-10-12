@@ -13,6 +13,7 @@
 # See docs/web-framework.md for the full API.
 import bufio
 import log
+import url
 
 class Header:
     name: string
@@ -72,17 +73,33 @@ def param(req: Request, name: string) -> string:
             return p.value
     return ""
 
-# A query-string value (`?a=1&b=2`); "" when absent. No percent-decoding.
+# The first value of a query-string parameter (`?a=1&b=x+y`), decoded
+# (spec 62); "" when absent.
 def query(req: Request, name: string) -> string:
-    if len(req.query) == 0:
+    match url.get(url.parse_query(req.query), name):
+        case Some(v):
+            return v
+        case None:
+            return ""
+
+# A field of an `application/x-www-form-urlencoded` body (an HTML form
+# POST), decoded; "" when absent or when the body is another type.
+def form(req: Request, name: string) -> string:
+    if not str_starts_with(str_lower(header(req, "Content-Type")), "application/x-www-form-urlencoded"):
         return ""
-    pairs: List[string] = str_split(req.query, "&")
-    for i in range(0, len(pairs)):
-        kv: string = list_at(pairs, i)
+    match url.get(url.parse_query(req.body), name):
+        case Some(v):
+            return v
+        case None:
+            return ""
+
+# A cookie sent by the client (`Cookie: a=1; b=2`); "" when absent.
+def cookie(req: Request, name: string) -> string:
+    for part in str_split(header(req, "Cookie"), ";"):
+        kv: string = str_strip(part)
         eq: int = str_find(kv, "=")
-        key: string = kv if eq < 0 else str_slice(kv, 0, eq)
-        if key == name:
-            return "" if eq < 0 else str_slice(kv, eq + 1, len(kv))
+        if eq > 0 and str_slice(kv, 0, eq) == name:
+            return str_slice(kv, eq + 1, len(kv))
     return ""
 
 # ---------- responses ----------
@@ -108,6 +125,14 @@ def redirect(location: string) -> Response:
 def set_header(res: Response, name: string, value: string) -> Response:
     res.headers = list_push(res.headers, Header(name, value))
     return res
+
+# Add a Set-Cookie header. `attrs` follows the value verbatim; the default
+# keeps the cookie away from scripts and cross-site requests.
+def set_cookie(res: Response, name: string, value: string, attrs: string = "Path=/; HttpOnly; SameSite=Lax") -> Response:
+    v: string = name + "=" + value
+    if attrs != "":
+        v = v + "; " + attrs
+    return set_header(res, "Set-Cookie", v)
 
 def reason(status: int) -> string:
     if status == 200:
@@ -169,7 +194,8 @@ def set_log(app: App, on: bool) -> App:
     return app
 
 # Match "/users/:id" against "/users/42": segments must be equal, and a
-# `:name` segment captures any non-empty segment.
+# `:name` segment captures any non-empty segment. Path segments are
+# percent-decoded after splitting (spec 62), so "%2F" stays inside one.
 def match_path(pattern: string, path: string) -> Match:
     ps: List[string] = str_split(pattern, "/")
     xs: List[string] = str_split(path, "/")
@@ -178,7 +204,7 @@ def match_path(pattern: string, path: string) -> Match:
     params: List[Header] = list_new()
     for i in range(0, len(ps)):
         p: string = list_at(ps, i)
-        x: string = list_at(xs, i)
+        x: string = url.unescape(list_at(xs, i), false)
         if str_starts_with(p, ":"):
             if len(x) == 0:
                 return Match(false, list_new())

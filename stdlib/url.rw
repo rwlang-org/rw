@@ -1,0 +1,79 @@
+# Percent-encoding and query strings (spec 62).
+#
+#   import url
+#   url.unescape("caf%C3%A9+au+lait")       # "café au lait"
+#   url.escape("a b&c")                     # "a%20b%26c"
+#   for p in url.parse_query("q=rw&tag=a&tag=b"):
+#       print(p.key + "=" + p.value)
+
+class Param:
+    key: string
+    value: string
+
+def hex_value(c: int) -> int:
+    if c >= 48 and c <= 57:
+        return c - 48
+    if c >= 97 and c <= 102:
+        return c - 87
+    if c >= 65 and c <= 70:
+        return c - 55
+    return -1
+
+# Decode %XX escapes; with `plus` (the form / query convention) "+" also
+# means a space. A "%" not followed by two hex digits is kept as is.
+def unescape(s: string, plus: bool = true) -> string:
+    if str_find(s, "%") < 0 and (not plus or str_find(s, "+") < 0):
+        return s
+    out = ""
+    start = 0
+    n = 0
+    while n < len(s):
+        c = byte_at(s, n)
+        if c == 37 and n + 2 < len(s) and hex_value(byte_at(s, n + 1)) >= 0 and hex_value(byte_at(s, n + 2)) >= 0:
+            # One raw byte: multi-byte UTF-8 is rebuilt byte by byte.
+            out = out + str_slice(s, start, n) + str_from_byte(hex_value(byte_at(s, n + 1)) * 16 + hex_value(byte_at(s, n + 2)))
+            n += 3
+            start = n
+        elif c == 43 and plus:
+            out = out + str_slice(s, start, n) + " "
+            n += 1
+            start = n
+        else:
+            n += 1
+    return out + str_slice(s, start, len(s))
+
+# Escape everything but the unreserved set A-Z a-z 0-9 - . _ ~ (RFC 3986).
+def escape(s: string) -> string:
+    digits = "0123456789ABCDEF"
+    out = ""
+    start = 0
+    for n in range(0, len(s)):
+        c = byte_at(s, n)
+        keep = (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45 or c == 46 or c == 95 or c == 126
+        if not keep:
+            out = out + str_slice(s, start, n) + "%" + str_slice(digits, c / 16, c / 16 + 1) + str_slice(digits, c % 16, c % 16 + 1)
+            start = n + 1
+    return out + str_slice(s, start, len(s))
+
+# "a=1&b=x+y&flag" -> [a=1, b="x y", flag=""], decoded, in order. Empty
+# pieces ("a=1&&b=2") are skipped.
+def parse_query(q: string) -> List[Param]:
+    out: List[Param] = []
+    if q == "":
+        return out
+    for piece in str_split(q, "&"):
+        if piece == "":
+            continue
+        eq = str_find(piece, "=")
+        if eq < 0:
+            out = list_push(out, Param(unescape(piece), ""))
+        else:
+            out = list_push(out, Param(unescape(str_slice(piece, 0, eq)), unescape(str_slice(piece, eq + 1, len(piece)))))
+    return out
+
+# The first value for `key` in a parsed query, or None.
+def get(params: List[Param], key: string) -> Option[string]:
+    for p in params:
+        if p.key == key:
+            return Some(p.value)
+    return None

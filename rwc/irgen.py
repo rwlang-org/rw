@@ -205,6 +205,7 @@ class IRGen:
         # bytes and code points (spec 58)
         self._rw_byte_at = ir.Function(m, ir.FunctionType(I64, [RW_STR_TY, I64]), "rw_byte_at")
         self._rw_chr = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_chr")
+        self._rw_str_from_byte = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_str_from_byte")
         self._opt_float_ty = llvm_type_of(T.option_of(T.FLOAT))
         self._rw_str_to_float = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [self._opt_float_ty.as_pointer(), RW_STR_TY]), "rw_str_to_float")
@@ -1470,6 +1471,7 @@ class IRGen:
             "set_backlog": self._rw_set_backlog,
             "byte_at": self._rw_byte_at,
             "chr": self._rw_chr,
+            "str_from_byte": self._rw_str_from_byte,
             "fs_kind": self._rw_fs_kind,
             "fs_size": self._rw_fs_size,
             "fs_mtime_ms": self._rw_fs_mtime_ms,
