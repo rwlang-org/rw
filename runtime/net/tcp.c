@@ -24,7 +24,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-int64_t rw_tcp_listen(int64_t port) {
+static int64_t tcp_listen_impl(int64_t port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     int one = 1;
@@ -45,7 +45,7 @@ int64_t rw_tcp_listen(int64_t port) {
     return (int64_t)fd;
 }
 
-int64_t rw_tcp_accept(int64_t listen_fd) {
+static int64_t tcp_accept_impl(int64_t listen_fd) {
     rw_fiber_handle *me = rw_sched_current_fiber();
     if (me == NULL) {
         /* main thread: blocking accept (kernel sleeps the main thread;
@@ -63,7 +63,7 @@ int64_t rw_tcp_accept(int64_t listen_fd) {
             rw_set_nonblocking(c);
             return (int64_t)c;
         }
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        if (rw_errno == EAGAIN || rw_errno == EWOULDBLOCK) {
             rw_net_park_read((int)listen_fd);
             continue;
         }
@@ -71,3 +71,18 @@ int64_t rw_tcp_accept(int64_t listen_fd) {
     }
 }
 
+
+/* Record the outcome for last_error() (spec 51). */
+int64_t rw_tcp_listen(int64_t port) {
+    rw_errno = 0;
+    int64_t fd = tcp_listen_impl(port);
+    rw_set_last_error(fd >= 0 ? 0 : (rw_errno ? rw_errno : EINVAL));
+    return fd;
+}
+
+int64_t rw_tcp_accept(int64_t listen_fd) {
+    rw_errno = 0;
+    int64_t c = tcp_accept_impl(listen_fd);
+    rw_set_last_error(c >= 0 ? 0 : (rw_errno ? rw_errno : EINVAL));
+    return c;
+}

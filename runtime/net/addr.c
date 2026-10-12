@@ -125,10 +125,18 @@ static void do_resolve(void *arg) {
 static struct addrinfo *resolve(const char *host, const char *port, int passive) {
     resolve_req r = { host, port, passive, NULL, 0 };
     rw_aio_call(do_resolve, &r);
-    return r.rc == 0 ? r.res : NULL;
+    if (r.rc != 0) { rw_errno = RW_ENOHOST; return NULL; }
+    return r.res;
 }
 
 /* ---- dial ---- */
+
+/* close() on a failure path must not hide the rw_errno being reported. */
+static void close_keep_errno(int fd) {
+    int saved = rw_errno;
+    close(fd);
+    rw_errno = saved;
+}
 
 /* Connect `fd` to `sa`. On a fiber the socket is nonblocking and the fiber
  * parks until the connect resolves; on the main thread connect blocks. */
@@ -137,13 +145,13 @@ static int connect_fd(int fd, const struct sockaddr *sa, socklen_t len) {
     if (on_fiber) rw_set_nonblocking(fd);
     for (;;) {
         if (connect(fd, sa, len) == 0) break;
-        if (errno == EINTR) continue;
-        if (errno != EINPROGRESS || !on_fiber) return -1;
+        if (rw_errno == EINTR) continue;
+        if (rw_errno != EINPROGRESS || !on_fiber) return -1;
         rw_net_park_write(fd);
         int err = 0;
         socklen_t elen = sizeof err;
         if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) != 0) return -1;
-        if (err != 0) { errno = err; return -1; }
+        if (err != 0) { rw_errno = err; return -1; }
         break;
     }
     rw_set_nonblocking(fd);
@@ -159,7 +167,7 @@ static void no_sigpipe(int fd) {
 #endif
 }
 
-int64_t rw_dial(rw_str addr) {
+static int64_t dial_impl(rw_str addr) {
     parsed_addr pa;
     parse_addr(addr, 0, &pa);
     if (pa.kind == ADDR_TCP) {
@@ -171,10 +179,10 @@ int64_t rw_dial(rw_str addr) {
             fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
             if (fd < 0) continue;
             if (connect_fd(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
-            close(fd);
+            close_keep_errno(fd);
             fd = -1;
         }
-        freeaddrinfo(res);
+        { int saved = rw_errno; freeaddrinfo(res); rw_errno = saved; }
         if (fd >= 0) no_sigpipe(fd);
         return fd;
     }
@@ -185,7 +193,7 @@ int64_t rw_dial(rw_str addr) {
         strcpy(sun.sun_path, pa.path);
         int fd = socket(AF_UNIX, SOCK_STREAM, 0);
         if (fd < 0) return -1;
-        if (connect_fd(fd, (struct sockaddr *)&sun, sizeof sun) != 0) { close(fd); return -1; }
+        if (connect_fd(fd, (struct sockaddr *)&sun, sizeof sun) != 0) { close_keep_errno(fd); return -1; }
         no_sigpipe(fd);
         return fd;
     }
@@ -199,7 +207,7 @@ static int bind_listen(int fd, const struct sockaddr *sa, socklen_t len) {
     return 0;
 }
 
-int64_t rw_listen(rw_str addr) {
+static int64_t listen_impl(rw_str addr) {
     parsed_addr pa;
     parse_addr(addr, 0, &pa);
     if (pa.kind == ADDR_TCP) {
@@ -214,7 +222,7 @@ int64_t rw_listen(rw_str addr) {
             int fd = socket(AF_INET, SOCK_STREAM, 0);
             if (fd < 0) return -1;
             setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-            if (bind_listen(fd, (struct sockaddr *)&sin, sizeof sin) != 0) { close(fd); return -1; }
+            if (bind_listen(fd, (struct sockaddr *)&sin, sizeof sin) != 0) { close_keep_errno(fd); return -1; }
             return fd;
         }
         struct addrinfo *res = resolve(pa.host, pa.port, 1);
@@ -225,10 +233,10 @@ int64_t rw_listen(rw_str addr) {
             if (fd < 0) continue;
             setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
             if (bind_listen(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
-            close(fd);
+            close_keep_errno(fd);
             fd = -1;
         }
-        freeaddrinfo(res);
+        { int saved = rw_errno; freeaddrinfo(res); rw_errno = saved; }
         return fd;
     }
     if (pa.kind == ADDR_UNIX) {
@@ -238,16 +246,32 @@ int64_t rw_listen(rw_str addr) {
         strcpy(sun.sun_path, pa.path);
         int fd = socket(AF_UNIX, SOCK_STREAM, 0);
         if (fd < 0) return -1;
-        if (bind_listen(fd, (struct sockaddr *)&sun, sizeof sun) != 0) { close(fd); return -1; }
+        if (bind_listen(fd, (struct sockaddr *)&sun, sizeof sun) != 0) { close_keep_errno(fd); return -1; }
         return fd;
     }
     return -1;
 }
 
 int64_t rw_accept(int64_t listen_fd) {
-    int64_t c = rw_tcp_accept(listen_fd);
+    int64_t c = rw_tcp_accept(listen_fd);   /* records last_error */
     if (c >= 0) no_sigpipe((int)c);
     return c;
+}
+
+/* Record the outcome for last_error() (spec 51). A malformed address is
+ * EINVAL. */
+int64_t rw_dial(rw_str addr) {
+    rw_errno = EINVAL;
+    int64_t fd = dial_impl(addr);
+    rw_set_last_error(fd >= 0 ? 0 : rw_errno);
+    return fd;
+}
+
+int64_t rw_listen(rw_str addr) {
+    rw_errno = EINVAL;
+    int64_t fd = listen_impl(addr);
+    rw_set_last_error(fd >= 0 ? 0 : rw_errno);
+    return fd;
 }
 
 /* ---- open ---- */
@@ -255,7 +279,7 @@ int64_t rw_accept(int64_t listen_fd) {
 int64_t rw_open(rw_str addr, rw_str mode) {
     parsed_addr pa;
     parse_addr(addr, 1, &pa);
-    if (pa.kind != ADDR_FILE) return -1;
+    if (pa.kind != ADDR_FILE) { rw_set_last_error(EINVAL); return -1; }
     rw_str path = { (int64_t)strlen(pa.path), pa.path };
     return rw_file_open(path, mode);
 }

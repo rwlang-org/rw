@@ -4,6 +4,7 @@
 #include "fiber/sched.h"
 #include "net/netpoller.h"
 
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -833,6 +834,9 @@ rw_str rw_rand_bytes(int64_t n) {
 /* ---------- lifecycle ---------- */
 
 void rw_init(void) {
+    /* A write to a peer that hung up must fail with EPIPE (spec 51), not
+     * kill the process. */
+    signal(SIGPIPE, SIG_IGN);
     rw_sched_init();
     rw_netpoller_init();
     rw_aio_init();

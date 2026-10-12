@@ -138,6 +138,9 @@ struct rw_fiber_handle {
     /* Position in the global completion order, set just before DONE is
      * published (spec 45: await_any returns the first future to finish). */
     uint64_t         finish_seq;
+    /* errno of the last I/O builtin this fiber ran (spec 51). Kept on the
+     * fiber, not the thread, because a fiber migrates between Ms. */
+    int              last_error;
 };
 
 static _Atomic uint64_t g_finish_seq = 0;
@@ -286,6 +289,23 @@ void rw_sched_enqueue_ready(rw_fiber_handle *h) {
 rw_fiber_handle *rw_sched_current_fiber(void) {
     rw_M *m = tls_m;
     return m ? m->current : NULL;
+}
+
+int *rw_errno_ptr(void) {
+    return &errno;
+}
+
+/* Off-fiber callers (the main thread) keep their own slot. */
+static _Thread_local int tls_last_error;
+
+void rw_set_last_error(int err) {
+    rw_fiber_handle *h = rw_sched_current_fiber();
+    if (h) h->last_error = err; else tls_last_error = err;
+}
+
+int64_t rw_last_error(void) {
+    rw_fiber_handle *h = rw_sched_current_fiber();
+    return h ? h->last_error : tls_last_error;
 }
 
 /* xorshift64 — small, fast, good enough to pick a starting victim

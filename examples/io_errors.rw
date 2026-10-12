@@ -1,0 +1,37 @@
+# Telling I/O failures apart with last_error / error_name (spec 51).
+
+def main() -> int:
+    ln = listen("tcp://127.0.0.1:0")
+    addr = local_addr(ln)
+    print(last_error())
+
+    # A second listener on the same port.
+    print(listen(addr))
+    print(error_name(last_error()))
+
+    # Nobody listens once the listener is closed.
+    close(ln)
+    print(dial(addr))
+    print(error_name(last_error()))
+
+    print(dial("bogus"))
+    print(error_name(last_error()))
+
+    print(dial("tcp://no-such-host.invalid:80"))
+    print(error_name(last_error()))
+    print(error_message(last_error()))
+
+    print(open("/nonexistent/dir/file", "r"))
+    print(error_name(last_error()))
+
+    # read returns empty bytes both at EOF and on error; last_error tells
+    # them apart.
+    w = open("/tmp/rw_io_errors.txt", "w")
+    close(w)
+    r = open("/tmp/rw_io_errors.txt", "r")
+    print(len(read(r, 10)))
+    print(last_error())
+    close(r)
+    print(len(read(r, 10)))
+    print(error_name(last_error()))
+    return 0
