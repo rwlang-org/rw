@@ -342,3 +342,38 @@ def test_idle_keep_alive_connection_is_closed(server):
 def test_bad_version_is_400(server):
     assert _parse(_request(server, b"GET / HTTP/2.0\r\n\r\n"))[0] == 400
 
+
+
+# ---------- chunked request bodies (spec 65) ----------
+
+def test_chunked_body_then_keep_alive(server):
+    with socket.create_connection(("127.0.0.1", server), timeout=5) as s:
+        s.sendall(b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+                  b"5;ext=1\r\nhello\r\n"
+                  b"7\r\n, world\r\n"
+                  b"0\r\nX-Trailer: t\r\n\r\n"
+                  b"GET /hello/next HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        f = s.makefile("rb")
+        status, headers, body = _read_response(f)
+        assert (status, body, headers["x-echo-length"]) == (201, b"hello, world", "12")
+        assert headers["connection"] == "keep-alive"
+        assert _read_response(f)[2] == b"hello, next\n"
+
+
+def test_chunked_split_across_reads(server):
+    status, _, body = _parse(_request(server, b"POST /echo HTTP/1.1\r\nHost: x\r\nConnection: close\r\n"
+                                              b"Transfer-Encoding: chunked\r\n\r\n3\r\nab",
+                                      b"c\r\n", b"0\r\n\r\n"))
+    assert (status, body) == (201, b"abc")
+
+
+@pytest.mark.parametrize("raw, status", [
+    (b"Transfer-Encoding: chunked\r\n\r\nzz\r\nabc\r\n0\r\n\r\n", 400),       # bad size
+    (b"Transfer-Encoding: chunked\r\n\r\n3\r\nabcX\r\n0\r\n\r\n", 400),       # no CRLF after data
+    (b"Transfer-Encoding: chunked\r\n\r\n200000\r\n", 413),                    # over 1 MiB
+    (b"Transfer-Encoding: gzip\r\n\r\n", 501),
+    (b"Content-Length: abc\r\n\r\n", 400),
+])
+def test_bad_bodies(server, raw, status):
+    resp = _request(server, b"POST /echo HTTP/1.1\r\nHost: x\r\nConnection: close\r\n" + raw)
+    assert _parse(resp)[0] == status
