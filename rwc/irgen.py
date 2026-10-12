@@ -359,14 +359,17 @@ class IRGen:
     def _emit_stmt(self, stmt: A.Stmt, ctx: "FunctionCtx") -> None:
         b = ctx.builder
         if isinstance(stmt, A.VarDecl):
-            mod_name, fn_name = ctx.func_key
-            ty = self.sema.local_types[(mod_name, fn_name, stmt.name)]
+            ty = self.sema.decl_types[id(stmt)]
             slot = ctx.alloca(llvm_type_of(ty), name=stmt.name)
             val = self._emit_expr(stmt.value, ctx)
             b.store(val, slot)
             ctx.locals[stmt.name] = slot
             return
         if isinstance(stmt, A.Assign):
+            decl_ty = self.sema.decl_types.get(id(stmt))
+            if decl_ty is not None:
+                # This assignment declares the variable (spec 32).
+                ctx.locals[stmt.name] = ctx.alloca(llvm_type_of(decl_ty), name=stmt.name)
             slot = ctx.locals[stmt.name]
             val = self._emit_expr(stmt.value, ctx)
             b.store(val, slot)

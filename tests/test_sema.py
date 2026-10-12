@@ -2015,3 +2015,41 @@ def test_dict_errors(body, msg):
 
 def test_user_function_named_like_dict_builtin_prefix():
     check("def dict_size(n: int) -> int:\n    return n\n\ndef main() -> int:\n    return dict_size(3)\n")
+
+
+# ----- local type inference (spec 32) -----
+
+def test_local_inference_ok():
+    res = check(
+        "class User:\n    name: string\n\n"
+        "def main() -> int:\n"
+        '    names = str_split("a,b", ",")\n'
+        "    total = 0\n"
+        "    for n in names:\n"
+        "        total += len(n)\n"
+        '    user = User("ann")\n'
+        "    first = names[0]\n"
+        "    maybe = Some(1.5)\n"
+        "    ratio = float(total) / 2.0\n"
+        "    total = total + 1\n"
+        '    label = user.name + first\n'
+        "    return total\n"
+    )
+    assert res is not None
+
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ("    x = []\n", "cannot infer the type of `x`"),
+        ("    x = None\n", "cannot infer the type of `x`"),
+        ("    x = list_new()\n", "cannot infer the type of `x`"),
+        ("    x = Ok(1)\n", "cannot infer the type of `x`"),
+        ("    x = print(1)\n", "cannot assign a void value to `x`"),
+        ('    x = 1\n    x = "a"\n', "type mismatch in assignment to `x`"),
+        ("    y += 1\n", "undefined variable: y"),
+    ],
+)
+def test_local_inference_errors(body, msg):
+    e = err("def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message

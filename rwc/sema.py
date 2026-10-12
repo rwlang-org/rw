@@ -57,6 +57,10 @@ class SemaResult:
     # id(ForEach) -> type of its loop variable (spec 29). Kept per loop, not
     # per name, because sibling loops may reuse a name with another type.
     foreach_types: Dict[int, T.Type] = field(default_factory=dict)
+    # id(VarDecl or declaring Assign) -> the declared type (spec 32). Kept
+    # per statement because sibling blocks may declare one name with
+    # different types.
+    decl_types: Dict[int, T.Type] = field(default_factory=dict)
 
 
 # Names of builtin functions. Spawning a builtin is an error, and a qualified
@@ -503,14 +507,12 @@ class Sema:
                 ))
             locals_[stmt.name] = declared
             self.result.local_types[(self.current_module, fn.name, stmt.name)] = declared
+            self.result.decl_types[id(stmt)] = declared
             return False
 
         if isinstance(stmt, A.Assign):
             if stmt.name not in locals_:
-                raise CompileError(Diagnostic(
-                    self.filename, stmt.line, stmt.col, len(stmt.name),
-                    f"undefined variable: {stmt.name}",
-                ))
+                return self._declare_by_assignment(fn, stmt, locals_)
             expected = locals_[stmt.name]
             val_ty = self._check_expr_expect(fn, stmt.value, locals_, expected)
             if val_ty != expected:
@@ -1384,6 +1386,39 @@ class Sema:
                 f"{obj_ty} has no field `{field}`",
             ))
         return obj_ty, obj_ty.fields[idx][1]
+
+    def _declare_by_assignment(self, fn: A.FuncDef, stmt: A.Assign,
+                               locals_: Dict[str, T.Type]) -> bool:
+        """`x = e` with `x` not in scope declares `x` with e's type (spec 32)."""
+        value = stmt.value
+        # A compound assignment (`x += 1`) desugars to `x = x + 1`; it never
+        # declares.
+        if isinstance(value, A.BinOp) and isinstance(value.left, A.Name) and value.left.name == stmt.name:
+            raise CompileError(Diagnostic(
+                self.filename, stmt.line, stmt.col, len(stmt.name),
+                f"undefined variable: {stmt.name}",
+            ))
+        untyped = (
+            isinstance(value, (A.NoneExpr, A.OkExpr, A.ErrExpr))
+            or (isinstance(value, A.ListLit) and not value.elems)
+            or self._is_builtin_call(value, "list_new", locals_)
+            or self._is_builtin_call(value, "dict_new", locals_)
+        )
+        if untyped:
+            raise CompileError(Diagnostic(
+                self.filename, stmt.line, stmt.col, len(stmt.name),
+                f"cannot infer the type of `{stmt.name}`; declare it as `{stmt.name}: T = ...`",
+            ))
+        ty = self._check_expr(fn, value, locals_)
+        if ty is T.VOID:
+            raise CompileError(Diagnostic(
+                self.filename, stmt.line, stmt.col, len(stmt.name),
+                f"cannot assign a void value to `{stmt.name}`",
+            ))
+        locals_[stmt.name] = ty
+        self.result.local_types[(self.current_module, fn.name, stmt.name)] = ty
+        self.result.decl_types[id(stmt)] = ty
+        return False
 
     def _check_dict_builtin(self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]) -> T.Type:
         """dict_new / dict_get / dict_has / dict_remove / dict_keys / dict_values
