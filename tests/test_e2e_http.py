@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import socket
 import subprocess
 import sys
@@ -13,26 +12,16 @@ from pathlib import Path
 
 import pytest
 
-from ._net import wait_for_port
+from ._net import listen_on_port_zero, start_announced
 
 REPO = Path(__file__).resolve().parent.parent
 EXAMPLES = REPO / "examples"
 
 
-def _free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
 @pytest.fixture(scope="module")
 def server():
-    """Build examples/http_hello.rw on a free port and run it for the module."""
-    port = _free_port()
-    src = (EXAMPLES / "http_hello.rw").read_text()
-    src = re.sub(r"tcp_listen\(\d+\)", f"tcp_listen({port})", src, count=1)
+    """Build examples/http_hello.rw on port 0 and run it for the module."""
+    src = listen_on_port_zero((EXAMPLES / "http_hello.rw").read_text())
     td = tempfile.mkdtemp()
     rw_path = Path(td) / "http_hello_test.rw"
     rw_path.write_text(src)
@@ -44,13 +33,7 @@ def server():
         cwd=REPO,
     )
     assert build.returncode == 0, f"rwc build failed:\n{build.stderr}"
-    proc = subprocess.Popen(
-        [str(out)],
-        env={**os.environ, "RW_WORKERS": "2"},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    wait_for_port(port, proc)
+    proc, port = start_announced([str(out)], env={**os.environ, "RW_WORKERS": "2"})
     try:
         yield port
     finally:

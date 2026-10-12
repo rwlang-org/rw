@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import socket
 import subprocess
@@ -14,31 +13,21 @@ from pathlib import Path
 
 import pytest
 
-from ._net import wait_for_port
+from ._net import listen_on_port_zero, start_announced
 
 REPO = Path(__file__).resolve().parent.parent
 EXAMPLES = REPO / "examples"
 
 
-def _free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
 @pytest.fixture(scope="module")
 def server():
-    """Build the app (and the framework next to it) on a free port."""
-    port = _free_port()
+    """Build the app (and the framework next to it) on port 0."""
     td = Path(tempfile.mkdtemp())
-    shutil.copy(EXAMPLES / "web.rw", td / "web.rw")
+    # web.serve(app, port) calls tcp_listen(port); listen on port 0 instead.
+    (td / "web.rw").write_text(listen_on_port_zero((EXAMPLES / "web.rw").read_text()))
     src = (EXAMPLES / "web_app.rw").read_text()
-    src = re.sub(r"serve\(app, \d+\)", f"serve(app, {port})", src, count=1)
     # A short per-connection timeout so the slow-client tests run quickly.
-    src = src.replace(f"return web.serve(app, {port})",
-                      f"app.timeout_ms = 300\n    return web.serve(app, {port})", 1)
+    src = src.replace("return web.serve(app, 8080)", "app.timeout_ms = 300\n    return web.serve(app, 8080)", 1)
     assert "app.timeout_ms = 300" in src
     (td / "web_app.rw").write_text(src)
     out = td / "web_app"
@@ -49,13 +38,7 @@ def server():
         cwd=REPO,
     )
     assert build.returncode == 0, f"rwc build failed:\n{build.stderr}"
-    proc = subprocess.Popen(
-        [str(out)],
-        env={**os.environ, "RW_WORKERS": "2"},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-    wait_for_port(port, proc)
+    proc, port = start_announced([str(out)], env={**os.environ, "RW_WORKERS": "2"})
     try:
         yield port
     finally:
