@@ -683,3 +683,27 @@ def test_parse_value_match():
     assert [p.value for p in vm.arms[0].patterns] == ["GET", "HEAD"]
     assert vm.arms[1].patterns[0].value == -1
     assert vm.arms[2].patterns == [] and vm.arms[2].bind == "other"
+
+
+# ----- default and keyword arguments (spec 41) -----
+
+def test_parse_defaults_and_keywords():
+    mod = parse_src(
+        'def g(name: string, greeting: string = "hi", n: int = -1) -> int:\n    return n\n\n'
+        'def main() -> int:\n    return g("a", n=2)\n'
+    )
+    g = mod.functions[0]
+    assert g.params[0].default is None and g.params[1].default.value == "hi"
+    call = mod.functions[1].body[0].value
+    assert isinstance(call.args[1], A.KeywordArg) and call.args[1].name == "n"
+
+
+@pytest.mark.parametrize("src, msg", [
+    ("def f(a: int = 1, b: int) -> int:\n    return a\n", "without a default follows"),
+    ("def f(a: int = g()) -> int:\n    return a\n", "default value must be a literal"),
+    ("def main() -> int:\n    return f(a=1, 2)\n", "positional argument after keyword"),
+])
+def test_parse_default_keyword_errors(src, msg):
+    with pytest.raises(ParserError) as ei:
+        parse_src(src)
+    assert msg in str(ei.value)
