@@ -1,0 +1,44 @@
+# Seeded sequences repeat; values stay in range; bytes come from the OS.
+def roll(n: int) -> List[int]:
+    out: List[int] = []
+    for i in range(0, n):
+        out = list_push(out, rand_int(1, 6))
+    return out
+
+def main() -> int:
+    rand_seed(42)
+    a = roll(10)
+    rand_seed(42)
+    b = roll(10)
+    same = true
+    for k in range(0, 10):
+        if a[k] != b[k]:
+            same = false
+    print(f"seeded sequences equal: {same}")
+
+    counts: Dict[int, int] = {}
+    for n in range(0, 6000):
+        v = rand_int(1, 6)
+        if v < 1 or v > 6:
+            print("out of range!")
+        counts[v] = (counts[v] + 1) if dict_has(counts, v) else 1
+    ok = len(counts) == 6
+    for face in counts:
+        if counts[face] < 800 or counts[face] > 1200:
+            ok = false
+    print(f"all faces roughly uniform: {ok}")
+
+    in_unit = true
+    total = 0.0
+    for m in range(0, 10000):
+        f = rand_float()
+        if f < 0.0 or f >= 1.0:
+            in_unit = false
+        total += f
+    mean = total / 10000.0
+    print(f"floats in [0, 1): {in_unit}, mean near 0.5: {mean > 0.45 and mean < 0.55}")
+
+    print(len(rand_bytes(16)))
+    print(rand_int(5, 5))
+    print(rand_int(-3, -3))
+    return 0
