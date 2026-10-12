@@ -10,8 +10,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        # Supported: Python 3.11-3.13 (pyproject requires >= 3.11) on Linux
+        # and macOS; every version on Linux, the pinned one on macOS.
+        os: [ubuntu-latest]
+        python: ["3.11", "3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python: "3.12"
     runs-on: ${{ matrix.os }}
+    name: test (${{ matrix.os }}, py${{ matrix.python }})
+    env:
+      UV_PYTHON: ${{ matrix.python }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install uv
