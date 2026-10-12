@@ -40,7 +40,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     out_path = Path(args.output) if args.output else src_path.with_suffix("")
     try:
         compile_source(source, filename=str(src_path), output=out_path,
-                       checked=not args.unchecked)
+                       checked=not args.unchecked, opt_level=args.opt)
     except CompileError as e:
         _report(e, source, src_path)
         return 1
@@ -56,7 +56,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         out = Path(td) / src_path.stem
         try:
             compile_source(source, filename=str(src_path), output=out,
-                           checked=not args.unchecked)
+                           checked=not args.unchecked, opt_level=args.opt)
         except CompileError as e:
             _report(e, source, src_path)
             return 1
@@ -149,16 +149,21 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--version", action="version", version=f"rwc {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    opt_help = "LLVM optimization level 0-3 (default: $RW_OPT_LEVEL or 2; spec 70)"
     p_build = sub.add_parser("build", help="compile .rw to a native executable")
     p_build.add_argument("input")
     p_build.add_argument("-o", "--output", default=None)
     unchecked_help = "omit run-time checks for integer division (spec 42)"
     p_build.add_argument("--unchecked", action="store_true", help=unchecked_help)
+    p_build.add_argument("-O", dest="opt", type=int, choices=range(4), default=None, metavar="LEVEL",
+                         help=opt_help)
     p_build.set_defaults(func=cmd_build)
 
     p_run = sub.add_parser("run", help="compile and run a .rw file")
     p_run.add_argument("input")
     p_run.add_argument("--unchecked", action="store_true", help=unchecked_help)
+    p_run.add_argument("-O", dest="opt", type=int, choices=range(4), default=None, metavar="LEVEL",
+                       help=opt_help)
     p_run.set_defaults(func=cmd_run)
 
     p_ir = sub.add_parser("emit-ir", help="print generated LLVM IR")

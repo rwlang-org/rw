@@ -17,10 +17,15 @@ jobs:
         include:
           - os: macos-latest
             python: "3.12"
+          # Programs build at -O2 by default (spec 70); keep -O0 covered.
+          - os: ubuntu-latest
+            python: "3.12"
+            opt: "0"
     runs-on: ${{ matrix.os }}
-    name: test (${{ matrix.os }}, py${{ matrix.python }})
+    name: test (${{ matrix.os }}, py${{ matrix.python }}${{ matrix.opt && format(', O{0}', matrix.opt) || '' }})
     env:
       UV_PYTHON: ${{ matrix.python }}
+      RW_OPT_LEVEL: ${{ matrix.opt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install uv

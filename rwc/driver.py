@@ -54,6 +54,19 @@ def _ensure_runtime_built(rt_dir: Path) -> Path:
     return lib
 
 
+# LLVM optimization level when neither -O nor $RW_OPT_LEVEL is given (spec 70).
+DEFAULT_OPT_LEVEL = 2
+
+
+def resolve_opt_level(level: Optional[int]) -> int:
+    if level is None:
+        env = os.environ.get("RW_OPT_LEVEL", "")
+        level = int(env) if env.isdigit() else DEFAULT_OPT_LEVEL
+    if not 0 <= level <= 3:
+        raise CompileError(Diagnostic("<rwc>", 1, 1, 1, f"optimization level must be 0-3, got {level}"))
+    return level
+
+
 _GC_FLAGS: Optional[list] = None
 
 
@@ -100,9 +113,12 @@ def compile_source(
     *,
     target_triple: Optional[str] = None,
     checked: bool = True,
+    opt_level: Optional[int] = None,
 ) -> CompileResult:
     """Compile a single rw source string to a native executable. `checked`
-    keeps the run-time checks for integer division (spec 42)."""
+    keeps the run-time checks for integer division (spec 42). `opt_level`
+    (0-3) is the LLVM optimization level (spec 70); None means
+    $RW_OPT_LEVEL, else the default."""
     try:
         program = load_program(source, filename)
         sema = analyze_program(program, filename=filename)
@@ -135,7 +151,8 @@ def compile_source(
         # -lm: math intrinsics (llvm.pow/exp/log/sin/cos, ...) may be lowered
         # to libm calls (e.g. `pow`) by the backend. macOS bundles these in
         # libSystem, but GNU/Linux requires explicit linking against libm.
-        cmd = [clang, ll_path, str(librw), "-o", str(output), *gc_link_flags(), "-lpthread", "-lm"]
+        level = resolve_opt_level(opt_level)
+        cmd = [clang, f"-O{level}", ll_path, str(librw), "-o", str(output), *gc_link_flags(), "-lpthread", "-lm"]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             raise CompileError(Diagnostic(
