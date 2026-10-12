@@ -1,0 +1,31 @@
+/srv/www/css/site.css
+a/b
+/abs
+/usr/lib | libx.so
+/
+noslash
+.gz ||
+a/c/d
+/
+../..
+.
+/srv/www/js/app.js
+None
+None
+None
+true
+true
+true
+a.txt,b.txt,sub
+file 5 true
+hello
+true
+false
+true
+false
+ENOTEMPTY
+true
+true
+false
+None
+ENOENT

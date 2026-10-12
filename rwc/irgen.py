@@ -208,6 +208,16 @@ class IRGen:
         self._opt_float_ty = llvm_type_of(T.option_of(T.FLOAT))
         self._rw_str_to_float = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [self._opt_float_ty.as_pointer(), RW_STR_TY]), "rw_str_to_float")
+        # filesystem (spec 59)
+        s_i64 = ir.FunctionType(I64, [RW_STR_TY])
+        self._rw_fs_kind = ir.Function(m, ir.FunctionType(RW_STR_TY, [RW_STR_TY]), "rw_fs_kind")
+        self._rw_fs_size = ir.Function(m, s_i64, "rw_fs_size")
+        self._rw_fs_mtime_ms = ir.Function(m, s_i64, "rw_fs_mtime_ms")
+        self._rw_fs_read_dir = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [RW_LIST_INT_TY.as_pointer(), RW_STR_TY]), "rw_fs_read_dir")
+        self._rw_fs_rename = ir.Function(m, ir.FunctionType(I64, [RW_STR_TY, RW_STR_TY]), "rw_fs_rename")
+        self._rw_fs_remove = ir.Function(m, s_i64, "rw_fs_remove")
+        self._rw_fs_mkdir = ir.Function(m, s_i64, "rw_fs_mkdir")
         # I/O errors (spec 51)
         self._rw_last_error = ir.Function(m, ir.FunctionType(I64, []), "rw_last_error")
         self._rw_error_name = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_error_name")
@@ -1388,6 +1398,10 @@ class IRGen:
             out_slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.call(self._rw_str_split, [out_slot, sv, sep])
             return ctx.builder.load(out_slot)
+        if call.callee == "fs_read_dir":
+            out_slot = ctx.alloca(RW_LIST_INT_TY)
+            ctx.builder.call(self._rw_fs_read_dir, [out_slot, self._emit_expr(call.args[0], ctx)])
+            return ctx.builder.load(out_slot)
         if call.callee == "signal_wait":
             slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.store(self._emit_expr(call.args[0], ctx), slot)
@@ -1444,6 +1458,12 @@ class IRGen:
             "set_backlog": self._rw_set_backlog,
             "byte_at": self._rw_byte_at,
             "chr": self._rw_chr,
+            "fs_kind": self._rw_fs_kind,
+            "fs_size": self._rw_fs_size,
+            "fs_mtime_ms": self._rw_fs_mtime_ms,
+            "fs_rename": self._rw_fs_rename,
+            "fs_remove": self._rw_fs_remove,
+            "fs_mkdir": self._rw_fs_mkdir,
             "error_name": self._rw_error_name,
             "error_message": self._rw_error_message,
         }

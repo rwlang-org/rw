@@ -1,0 +1,83 @@
+# Files and directories (spec 59). Thin wrappers over the fs_* builtins;
+# failures return None / false / an empty list with last_error() set.
+#
+#   import fs
+#   match fs.read_file("config.json"):
+#       case Some(text):
+#           ...
+#       case None:
+#           print(error_message(last_error()))
+
+class Stat:
+    kind: string      # "file", "dir", or "other"
+    size: int
+    mtime_ms: int     # last modification, Unix time in milliseconds
+
+def stat(p: string) -> Option[Stat]:
+    kind = fs_kind(p)
+    if kind == "":
+        return None
+    return Some(Stat(kind, fs_size(p), fs_mtime_ms(p)))
+
+def exists(p: string) -> bool:
+    return fs_kind(p) != ""
+
+def is_dir(p: string) -> bool:
+    return fs_kind(p) == "dir"
+
+def is_file(p: string) -> bool:
+    return fs_kind(p) == "file"
+
+# Entry names in directory `p`, sorted, without "." and "..".
+def read_dir(p: string) -> List[string]:
+    return fs_read_dir(p)
+
+def rename(src: string, dst: string) -> bool:
+    return fs_rename(src, dst) == 0
+
+# Remove a file or an empty directory.
+def remove(p: string) -> bool:
+    return fs_remove(p) == 0
+
+def mkdir(p: string) -> bool:
+    return fs_mkdir(p) == 0
+
+# mkdir -p: create `p` and any missing parents.
+def mkdir_all(p: string) -> bool:
+    if is_dir(p):
+        return true
+    prefix = "/" if str_starts_with(p, "/") else ""
+    for part in str_split(p, "/"):
+        if part == "":
+            continue
+        prefix = prefix + part + "/"
+        if not is_dir(prefix):
+            if fs_mkdir(prefix) != 0 and not is_dir(prefix):
+                return false
+    return true
+
+# The whole file, or None.
+def read_file(p: string) -> Option[string]:
+    fd = open(p, "r")
+    if fd < 0:
+        return None
+    out = ""
+    while true:
+        b = read(fd, 65536)
+        if len(b) == 0:
+            break
+        out = out + str_from_bytes(b)
+    failed = last_error() != 0
+    close(fd)
+    if failed:
+        return None
+    return Some(out)
+
+# Replace the file's contents (creating it if needed).
+def write_file(p: string, data: string) -> bool:
+    fd = open(p, "w")
+    if fd < 0:
+        return false
+    ok = write_all(fd, bytes_from_str(data)) >= 0
+    close(fd)
+    return ok
