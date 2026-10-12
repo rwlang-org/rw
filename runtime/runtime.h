@@ -176,6 +176,11 @@ int64_t rw_open      (rw_str addr, rw_str mode);
 rw_str  rw_local_addr(int64_t fd);
 rw_str  rw_peer_addr (int64_t fd);
 
+/* Timeouts (spec 53). */
+int64_t rw_dial_timeout     (rw_str addr, int64_t ms);
+void    rw_set_read_timeout (int64_t fd, int64_t ms);
+void    rw_set_write_timeout(int64_t fd, int64_t ms);
+
 /* spawn (one per return type) */
 rw_future_t *rw_spawn_i64 (int64_t (*fn)(void *), void *args);
 rw_future_t *rw_spawn_f64 (double  (*fn)(void *), void *args);

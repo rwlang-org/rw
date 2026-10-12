@@ -188,6 +188,12 @@ class IRGen:
         self._rw_local_addr = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_local_addr")
         self._rw_peer_addr = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_peer_addr")
         self._rw_write_all = ir.Function(m, ir.FunctionType(I64, [I64, RW_STR_TY]), "rw_write_all")
+        # timeouts (spec 53)
+        self._rw_dial_timeout = ir.Function(m, ir.FunctionType(I64, [RW_STR_TY, I64]), "rw_dial_timeout")
+        self._rw_set_read_timeout = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [I64, I64]), "rw_set_read_timeout")
+        self._rw_set_write_timeout = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [I64, I64]), "rw_set_write_timeout")
         # I/O errors (spec 51)
         self._rw_last_error = ir.Function(m, ir.FunctionType(I64, []), "rw_last_error")
         self._rw_error_name = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_error_name")
@@ -1401,6 +1407,9 @@ class IRGen:
             "peer_addr": self._rw_peer_addr,
             "last_error": self._rw_last_error,
             "write_all": self._rw_write_all,
+            "dial_timeout": self._rw_dial_timeout,
+            "set_read_timeout": self._rw_set_read_timeout,
+            "set_write_timeout": self._rw_set_write_timeout,
             "error_name": self._rw_error_name,
             "error_message": self._rw_error_message,
         }

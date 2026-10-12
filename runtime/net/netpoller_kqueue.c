@@ -49,23 +49,24 @@ void rw_netpoller_platform_run(void) {
                 /* shutdown wake-up; loop top will see the flag */
                 continue;
             }
-            rw_fiber_handle *h = (rw_fiber_handle *)events[i].udata;
-            if (h) rw_sched_enqueue_ready(h);
+            rw_pollfd *pd = (rw_pollfd *)events[i].udata;
+            if (!pd) continue;
+            /* EOF and errors arrive as the same filter with flags set. */
+            int dir = events[i].filter == EVFILT_WRITE ? RW_NET_WRITE : RW_NET_READ;
+            rw_netpoller_ready(pd, 1 << dir);
         }
     }
     if (g_kq >= 0) { close(g_kq); g_kq = -1; }
 }
 
-int rw_netpoller_register_read(int fd, rw_fiber_handle *h) {
-    struct kevent ev;
-    EV_SET(&ev, fd, EVFILT_READ, EV_ADD | EV_ONESHOT, 0, 0, h);
-    return kevent(g_kq, &ev, 1, NULL, 0, NULL);
-}
-
-int rw_netpoller_register_write(int fd, rw_fiber_handle *h) {
-    struct kevent ev;
-    EV_SET(&ev, fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, h);
-    return kevent(g_kq, &ev, 1, NULL, 0, NULL);
+/* One knote per (fd, filter); EV_ADD on an armed knote just re-arms it. */
+int rw_netpoller_register(int fd, rw_pollfd *pd, int events) {
+    struct kevent ev[2];
+    int n = 0;
+    if (events & (1 << RW_NET_READ))  EV_SET(&ev[n++], fd, EVFILT_READ,  EV_ADD | EV_ONESHOT, 0, 0, pd);
+    if (events & (1 << RW_NET_WRITE)) EV_SET(&ev[n++], fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, pd);
+    if (n == 0) return 0;
+    return kevent(g_kq, ev, n, NULL, 0, NULL) < 0 ? -1 : 0;
 }
 
 #endif /* __APPLE__ || __FreeBSD__ */

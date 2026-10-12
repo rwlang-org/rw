@@ -15,12 +15,14 @@
 #include "../aio.h"
 #include "../fiber/sched.h"
 #include "../runtime.h"
+#include "../timer.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -138,16 +140,23 @@ static void close_keep_errno(int fd) {
     rw_errno = saved;
 }
 
-/* Connect `fd` to `sa`. On a fiber the socket is nonblocking and the fiber
- * parks until the connect resolves; on the main thread connect blocks. */
-static int connect_fd(int fd, const struct sockaddr *sa, socklen_t len) {
+/* Connect `fd` to `sa`, giving up at deadline_ns (0 = never) with
+ * ETIMEDOUT. A fiber does a nonblocking connect and parks; the main thread
+ * blocks in connect, or in poll when there is a deadline. */
+static int connect_fd(int fd, const struct sockaddr *sa, socklen_t len, int64_t deadline_ns) {
     int on_fiber = rw_sched_current_fiber() != NULL;
-    if (on_fiber) rw_set_nonblocking(fd);
+    if (on_fiber || deadline_ns > 0) rw_set_nonblocking(fd);
     for (;;) {
         if (connect(fd, sa, len) == 0) break;
         if (rw_errno == EINTR) continue;
-        if (rw_errno != EINPROGRESS || !on_fiber) return -1;
-        rw_net_park_write(fd);
+        if (rw_errno != EINPROGRESS || (!on_fiber && deadline_ns == 0)) return -1;
+        /* A wake-up can be spurious (spec 53), so wait until the socket is
+         * actually writable. */
+        for (;;) {
+            if (rw_net_block(fd, RW_NET_WRITE, deadline_ns)) { rw_errno = ETIMEDOUT; return -1; }
+            struct pollfd p = { fd, POLLOUT, 0 };
+            if (poll(&p, 1, 0) == 1) break;
+        }
         int err = 0;
         socklen_t elen = sizeof err;
         if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen) != 0) return -1;
@@ -167,7 +176,7 @@ static void no_sigpipe(int fd) {
 #endif
 }
 
-static int64_t dial_impl(rw_str addr) {
+static int64_t dial_impl(rw_str addr, int64_t deadline_ns) {
     parsed_addr pa;
     parse_addr(addr, 0, &pa);
     if (pa.kind == ADDR_TCP) {
@@ -178,7 +187,7 @@ static int64_t dial_impl(rw_str addr) {
         for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
             fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
             if (fd < 0) continue;
-            if (connect_fd(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
+            if (connect_fd(fd, ai->ai_addr, ai->ai_addrlen, deadline_ns) == 0) break;
             close_keep_errno(fd);
             fd = -1;
         }
@@ -193,7 +202,7 @@ static int64_t dial_impl(rw_str addr) {
         strcpy(sun.sun_path, pa.path);
         int fd = socket(AF_UNIX, SOCK_STREAM, 0);
         if (fd < 0) return -1;
-        if (connect_fd(fd, (struct sockaddr *)&sun, sizeof sun) != 0) { close_keep_errno(fd); return -1; }
+        if (connect_fd(fd, (struct sockaddr *)&sun, sizeof sun, deadline_ns) != 0) { close_keep_errno(fd); return -1; }
         no_sigpipe(fd);
         return fd;
     }
@@ -261,8 +270,15 @@ int64_t rw_accept(int64_t listen_fd) {
 /* Record the outcome for last_error() (spec 51). A malformed address is
  * EINVAL. */
 int64_t rw_dial(rw_str addr) {
+    return rw_dial_timeout(addr, 0);
+}
+
+/* ms <= 0: no timeout. The deadline covers connecting, not name
+ * resolution (spec 53). */
+int64_t rw_dial_timeout(rw_str addr, int64_t ms) {
     rw_errno = EINVAL;
-    int64_t fd = dial_impl(addr);
+    int64_t fd = dial_impl(addr, ms > 0 ? rw_mono_ns() + ms * 1000000 : 0);
+    if (fd >= 0) rw_net_reset_fd((int)fd);
     rw_set_last_error(fd >= 0 ? 0 : rw_errno);
     return fd;
 }
@@ -270,6 +286,7 @@ int64_t rw_dial(rw_str addr) {
 int64_t rw_listen(rw_str addr) {
     rw_errno = EINVAL;
     int64_t fd = listen_impl(addr);
+    if (fd >= 0) rw_net_reset_fd((int)fd);
     rw_set_last_error(fd >= 0 ? 0 : rw_errno);
     return fd;
 }

@@ -36,6 +36,10 @@ def server():
     shutil.copy(EXAMPLES / "web.rw", td / "web.rw")
     src = (EXAMPLES / "web_app.rw").read_text()
     src = re.sub(r"serve\(app, \d+\)", f"serve(app, {port})", src, count=1)
+    # A short per-connection timeout so the slow-client tests run quickly.
+    src = src.replace(f"return web.serve(app, {port})",
+                      f"app.timeout_ms = 300\n    return web.serve(app, {port})", 1)
+    assert "app.timeout_ms = 300" in src
     (td / "web_app.rw").write_text(src)
     out = td / "web_app"
     build = subprocess.run(
@@ -148,6 +152,26 @@ def test_wrong_method_is_405(server):
 def test_malformed_request_is_400(server):
     status, _, _ = _parse(_request(server, b"NONSENSE\r\n\r\n"))
     assert status == 400
+
+
+def test_slow_partial_head_is_408(server):
+    with socket.create_connection(("127.0.0.1", server), timeout=10) as s:
+        s.sendall(b"GET /hello/slow HTTP/1.1\r\nHost: x\r\n")  # head never finished
+        t0 = time.monotonic()
+        data = b""
+        while chunk := s.recv(4096):
+            data += chunk
+        took = time.monotonic() - t0
+    status, _, _ = _parse(data)
+    assert status == 408
+    assert 0.25 <= took < 5
+
+
+def test_idle_connection_is_closed(server):
+    with socket.create_connection(("127.0.0.1", server), timeout=10) as s:
+        t0 = time.monotonic()
+        assert s.recv(4096) == b""
+        assert time.monotonic() - t0 < 5
 
 
 def test_oversized_body_is_413(server):
