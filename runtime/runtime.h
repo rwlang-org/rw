@@ -119,6 +119,19 @@ int64_t  rw_dict_len   (rw_dict *d);
 void     rw_dict_keys  (rw_list *out, rw_dict *d);
 void     rw_dict_values(rw_list *out, rw_dict *d);
 
+/* OS API (spec 40). */
+typedef struct {
+    int64_t tag;    /* 0 = None, 1 = Some */
+    rw_str  value;
+} rw_option_str;
+void    rw_set_args (int32_t argc, char **argv);   /* called by the C main */
+void    rw_os_args  (rw_list *out);                /* List[string] */
+void    rw_os_getenv(rw_option_str *out, rw_str name);
+int8_t  rw_os_setenv(rw_str name, rw_str value);
+void    rw_os_exit  (int64_t code);
+rw_str  rw_os_getcwd(void);
+int8_t  rw_os_chdir (rw_str path);
+
 /* List[int]: range-checked accessor returning Option[int]. */
 void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i);
 
