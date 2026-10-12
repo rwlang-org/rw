@@ -184,6 +184,12 @@ int64_t rw_dial_timeout     (rw_str addr, int64_t ms);
 void    rw_set_read_timeout (int64_t fd, int64_t ms);
 void    rw_set_write_timeout(int64_t fd, int64_t ms);
 
+/* Socket operations (spec 56): 0 on success, -1 with last_error. */
+int64_t rw_sock_shutdown(int64_t fd, rw_str how);   /* "read" / "write" / "both" */
+int64_t rw_set_nodelay  (int64_t fd, int8_t on);
+int64_t rw_set_keepalive(int64_t fd, int8_t on);
+int64_t rw_set_backlog  (int64_t fd, int64_t n);
+
 /* spawn (one per return type) */
 rw_future_t *rw_spawn_i64 (int64_t (*fn)(void *), void *args);
 rw_future_t *rw_spawn_f64 (double  (*fn)(void *), void *args);

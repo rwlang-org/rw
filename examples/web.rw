@@ -267,6 +267,21 @@ def serialize(res: Response) -> string:
     return out + res.body
 
 # write() may write only part of the buffer; keep going until all is sent.
+# Close after a response without resetting the connection. If the client sent
+# more than was read (a refused body, say), closing at once makes the kernel
+# answer with RST, which can destroy the response before the client reads it.
+# So half-close, then discard what is left for a short while (spec 56).
+def linger_close(fd: int) -> int:
+    shutdown(fd, "write")
+    set_read_timeout(fd, 500)
+    drained: int = 0
+    while drained < 1048576:
+        b: Bytes = read(fd, 65536)
+        if len(b) == 0:
+            break
+        drained += len(b)
+    return close(fd)
+
 def handle_conn(app: App, fd: int) -> int:
     set_read_timeout(fd, app.timeout_ms)
     set_write_timeout(fd, app.timeout_ms)
@@ -283,7 +298,7 @@ def handle_conn(app: App, fd: int) -> int:
     write_all(fd, bytes_from_str(serialize(res)))
     if app.log:
         print(req.method + " " + req.path + " " + str_from_int(res.status))
-    return close(fd)
+    return linger_close(fd)
 
 # Listen on `port` and handle each connection in its own fiber. Only returns
 # if the port cannot be opened.

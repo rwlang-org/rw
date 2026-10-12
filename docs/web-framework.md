@@ -95,6 +95,9 @@ The framework adds `Content-Length` and `Connection: close` to every response.
   stalls gets `408 Request Timeout`; one that sends nothing is closed (spec 53)
 - Responses are written completely even when `write` accepts only part of
   the buffer
+- After the response the connection is half-closed and leftover request
+  bytes are drained before closing, so a refused request still sees its
+  status instead of a connection reset (spec 56)
 - Each connection runs in its own fiber, which is freed when the connection
   is done (spec 19)
 - The access log goes to stdout through `print`; when stdout is a pipe it is
