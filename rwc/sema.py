@@ -66,6 +66,10 @@ class SemaResult:
     # id(Name | FieldAccess) -> the constant it refers to (spec 35); irgen
     # emits the constant's literal in its place.
     const_refs: Dict[int, A.ConstDef] = field(default_factory=dict)
+    # Tuples (spec 37): id(Index on a tuple) -> normalised element index, and
+    # (id(TupleAssign), position) -> type for targets that are declared.
+    tuple_index: Dict[int, int] = field(default_factory=dict)
+    unpack_decls: Dict[Tuple[int, int], T.Type] = field(default_factory=dict)
 
 
 # Names of builtin functions. Spawning a builtin is an error, and a qualified
@@ -192,6 +196,12 @@ class Sema:
                 return self.class_map[ty.name]
             raise CompileError(Diagnostic(self.filename, ty.line, ty.col, len(ty.name),
                                           f"unknown type: {ty.name}"))
+        if isinstance(ty, A.TypeTuple):
+            elems = [self._resolve_type(e) for e in ty.elems]
+            if any(e is T.VOID for e in elems):
+                raise CompileError(Diagnostic(self.filename, ty.line, ty.col, 5,
+                                              "tuple elements cannot be void"))
+            return T.TupleType(elems)
         if isinstance(ty, A.TypeDict):
             key, value = self._resolve_type(ty.key), self._resolve_type(ty.value)
             if key is not T.INT and key is not T.STRING:
@@ -600,6 +610,35 @@ class Sema:
             self._check_expr(fn, stmt.expr, locals_)
             return False
 
+        if isinstance(stmt, A.TupleAssign):
+            vt = self._check_expr(fn, stmt.value, locals_)
+            if not isinstance(vt, T.TupleType):
+                raise CompileError(Diagnostic(self.filename, stmt.line, stmt.col, 1,
+                                              f"cannot unpack `{vt}`"))
+            if len(vt.elems) != len(stmt.names):
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, 1,
+                    f"cannot unpack a tuple of {len(vt.elems)} into {len(stmt.names)} names",
+                ))
+            for i, (name, et) in enumerate(zip(stmt.names, vt.elems, strict=True)):
+                if name == "_":
+                    continue
+                if name in locals_:
+                    if locals_[name] != et:
+                        raise CompileError(Diagnostic(
+                            self.filename, stmt.line, stmt.col, len(name),
+                            f"type mismatch in assignment to `{name}`: "
+                            f"expected `{locals_[name]}`, found `{et}`",
+                        ))
+                    continue
+                if name in self.const_map:
+                    raise CompileError(Diagnostic(self.filename, stmt.line, stmt.col, len(name),
+                                                  f"cannot assign to constant `{name}`"))
+                locals_[name] = et
+                self.result.local_types[(self.current_module, fn.name, name)] = et
+                self.result.unpack_decls[(id(stmt), i)] = et
+            return False
+
         if isinstance(stmt, A.IndexAssign):
             obj_ty = self._check_expr(fn, stmt.obj, locals_)
             if isinstance(obj_ty, T.ListType) or obj_ty is T.STRING:
@@ -809,6 +848,8 @@ class Sema:
             self._is_builtin_call(expr, "dict_new", locals_) or isinstance(expr, A.DictLit)
         ):
             self._type_hints[id(expr)] = expected
+        elif isinstance(expected, T.TupleType) and isinstance(expr, A.TupleLit):
+            self._type_hints[id(expr)] = expected
         elif isinstance(expected, T.OptionType) and isinstance(expr, (A.NoneExpr, A.SomeExpr)):
             self._type_hints[id(expr)] = expected
         elif isinstance(expected, T.ResultType) and isinstance(expr, (A.OkExpr, A.ErrExpr)):
@@ -992,6 +1033,18 @@ class Sema:
                         f"list element {i} must be {first}, found `{et}`",
                     ))
             return T.list_of(first)
+        if isinstance(expr, A.TupleLit):
+            thint = self._type_hints.get(id(expr))
+            hints = thint.elems if isinstance(thint, T.TupleType) and len(thint.elems) == len(expr.elems) else None
+            elems: List[T.Type] = []
+            for i, e in enumerate(expr.elems):
+                et = (self._check_expr_expect(fn, e, locals_, hints[i]) if hints
+                      else self._check_expr(fn, e, locals_))
+                if et is T.VOID:
+                    raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
+                                                  "tuple elements cannot be void"))
+                elems.append(et)
+            return T.TupleType(elems)
         if isinstance(expr, A.DictLit):
             hint = self._type_hints.get(id(expr))
             dhint = hint if isinstance(hint, T.DictType) else None
@@ -1021,6 +1074,20 @@ class Sema:
             return T.DictType(kt, vt)
         if isinstance(expr, A.Index):
             obj_ty = self._check_expr(fn, expr.obj, locals_)
+            if isinstance(obj_ty, T.TupleType):
+                ix = expr.index
+                neg = isinstance(ix, A.UnaryOp) and ix.op == "-" and isinstance(ix.operand, A.IntLit)
+                if not (isinstance(ix, A.IntLit) or neg):
+                    raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
+                                                  "tuple index must be an integer literal"))
+                raw = -ix.operand.value if neg else ix.value  # type: ignore[union-attr]
+                n = len(obj_ty.elems)
+                pos = raw + n if raw < 0 else raw
+                if not 0 <= pos < n:
+                    raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
+                                                  f"tuple index {raw} out of range for {obj_ty}"))
+                self.result.tuple_index[id(expr)] = pos
+                return obj_ty.elems[pos]
             if isinstance(obj_ty, T.DictType):
                 self._check_dict_key(fn, obj_ty, expr.index, locals_, expr.line, expr.col)
                 return obj_ty.value

@@ -139,6 +139,15 @@ class DictType(Type):
         self.name = f"Dict[{key}, {value}]"
 
 
+class TupleType(Type):
+    """`tuple[T1, ..., Tn]` (spec 37): an immutable value, compared
+    structurally."""
+
+    def __init__(self, elems: List[Type]) -> None:
+        self.elems = elems
+        self.name = f"tuple[{', '.join(str(e) for e in elems)}]"
+
+
 def is_numeric(t: Type) -> bool:
     return t is INT or t is FLOAT
 

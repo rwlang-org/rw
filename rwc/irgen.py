@@ -61,6 +61,8 @@ def llvm_type_of(t: T.Type) -> ir.Type:
         return I8P  # pointer to a heap record (spec 20)
     if isinstance(t, T.DictType):
         return I8P  # pointer to a heap hash table (spec 31)
+    if isinstance(t, T.TupleType):
+        return ir.LiteralStructType([llvm_type_of(e) for e in t.elems])  # by value (spec 37)
     if isinstance(t, T.FunctionType):
         # Pointer to the function's own LLVM type (spec 21).
         return ir.FunctionType(llvm_type_of(t.ret), [llvm_type_of(p) for p in t.params]).as_pointer()
@@ -376,6 +378,16 @@ class IRGen:
             return
         if isinstance(stmt, A.ForEach):
             self._emit_foreach(stmt, ctx)
+            return
+        if isinstance(stmt, A.TupleAssign):
+            v = self._emit_expr(stmt.value, ctx)
+            for i, name in enumerate(stmt.names):
+                if name == "_":
+                    continue
+                decl = self.sema.unpack_decls.get((id(stmt), i))
+                if decl is not None:
+                    ctx.locals[name] = ctx.alloca(llvm_type_of(decl), name=name)
+                b.store(b.extract_value(v, i), ctx.locals[name])
             return
         if isinstance(stmt, A.IndexAssign):
             dt = self.sema.expr_types[id(stmt.obj)]
@@ -780,6 +792,13 @@ class IRGen:
             return ir.Constant(I8, 1 if expr.value else 0)
         if isinstance(expr, A.StringLit):
             return self._emit_string_literal(expr.value, b)
+        if isinstance(expr, A.TupleLit):
+            agg = ir.Constant(llvm_type_of(self.sema.expr_types[id(expr)]), None)
+            for i, e in enumerate(expr.elems):
+                agg = b.insert_value(agg, self._emit_expr(e, ctx), i)
+            return agg
+        if isinstance(expr, A.Index) and id(expr) in self.sema.tuple_index:
+            return b.extract_value(self._emit_expr(expr.obj, ctx), self.sema.tuple_index[id(expr)])
         if isinstance(expr, A.ListLit):
             return self._emit_list_lit(expr, ctx)
         if isinstance(expr, A.DictLit):

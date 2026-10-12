@@ -73,7 +73,16 @@ class TypeDict:
     col: int
 
 
-TypeExpr = Union[TypeName, TypeFuture, TypeCallable, TypeList, TypeOption, TypeResult, TypeDict]
+@dataclass
+class TypeTuple:
+    """`tuple[T1, ..., Tn]` (spec 37)."""
+    elems: List["TypeExpr"]
+    line: int
+    col: int
+
+
+TypeExpr = Union[TypeName, TypeFuture, TypeCallable, TypeList, TypeOption, TypeResult, TypeDict,
+                 TypeTuple]
 
 
 # ----- Expressions -----
@@ -201,6 +210,14 @@ class ListLit:
 
 
 @dataclass
+class TupleLit:
+    """`(e1, ..., en)` with n >= 2 (spec 37)."""
+    elems: List["Expr"]
+    line: int
+    col: int
+
+
+@dataclass
 class DictLit:
     """`{k1: v1, ..., kn: vn}` (spec 36)."""
     keys: List["Expr"]
@@ -252,7 +269,7 @@ Expr = Union[
     UnaryOp, BinOp, IfExpr, Call, SpawnExpr, AwaitExpr,
     SomeExpr, NoneExpr,
     OkExpr, ErrExpr,
-    FieldAccess, CallValue, ListLit, Index, Slice, DictLit,
+    FieldAccess, CallValue, ListLit, Index, Slice, DictLit, TupleLit,
 ]
 
 
@@ -389,9 +406,18 @@ class IndexAssign:
     col: int
 
 
+@dataclass
+class TupleAssign:
+    """`a, b = e`: unpack a tuple; `_` discards (spec 37)."""
+    names: List[str]
+    value: Expr
+    line: int
+    col: int
+
+
 Stmt = Union[
     VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt, Break, Continue, Assert,
-    FieldAssign, ForEach, IndexAssign,
+    FieldAssign, ForEach, IndexAssign, TupleAssign,
 ]
 
 

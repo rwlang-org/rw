@@ -348,6 +348,16 @@ class Parser:
             return A.TypeResult(ok, err, t.line, t.col)
         # `Callable[[P1, ...], R]` (spec 21). `Callable` is not a keyword; it is
         # only special in type position.
+        # `tuple[T1, ..., Tn]` / `Tuple[...]` (spec 37).
+        if t.kind == TokenKind.IDENT and t.value in ("tuple", "Tuple") and self.peek(1).kind == TokenKind.LBRACK:
+            self.i += 2
+            elems: List[A.TypeExpr] = [self.parse_type()]
+            while self.match(TokenKind.COMMA):
+                elems.append(self.parse_type())
+            self.eat(TokenKind.RBRACK, "']' to close tuple[...]")
+            if len(elems) < 2:
+                raise ParserError("a tuple type needs at least two elements", t.line, t.col, len(t.value))
+            return A.TypeTuple(elems, t.line, t.col)
         # `Dict[K, V]` (spec 31); like Callable, special only in type position.
         if t.kind == TokenKind.IDENT and t.value == "Dict" and self.peek(1).kind == TokenKind.LBRACK:
             self.i += 2  # `Dict` `[`
@@ -427,6 +437,15 @@ class Parser:
         # IDENT followed by '='  => assignment
         if t.kind == TokenKind.IDENT:
             nxt = self.peek(1).kind
+            if nxt == TokenKind.COMMA:
+                # `a, b = e` (spec 37).
+                names = [self.eat(TokenKind.IDENT).value]
+                while self.match(TokenKind.COMMA):
+                    names.append(self.eat(TokenKind.IDENT, "name in unpacking").value)
+                self.eat(TokenKind.ASSIGN, "'=' after unpacking targets")
+                value = self._parse_expr_or_tuple()
+                self.eat(TokenKind.NEWLINE)
+                return A.TupleAssign(names, value, t.line, t.col)
             if nxt == TokenKind.COLON:
                 return self.parse_var_decl()
             if nxt == TokenKind.ASSIGN:
@@ -452,9 +471,19 @@ class Parser:
         if self.cur.kind == TokenKind.NEWLINE:
             self.eat(TokenKind.NEWLINE)
             return A.Return(None, kw.line, kw.col)
-        expr = self.parse_expr()
+        expr = self._parse_expr_or_tuple()
         self.eat(TokenKind.NEWLINE)
         return A.Return(expr, kw.line, kw.col)
+
+    def _parse_expr_or_tuple(self) -> A.Expr:
+        """An expression, or `e1, e2, ...` as a tuple (spec 37)."""
+        first = self.parse_expr()
+        if self.cur.kind != TokenKind.COMMA:
+            return first
+        elems = [first]
+        while self.match(TokenKind.COMMA):
+            elems.append(self.parse_expr())
+        return A.TupleLit(elems, first.line, first.col)
 
     def parse_assert(self) -> A.Assert:
         kw = self.eat(TokenKind.KW_ASSERT)
@@ -1104,6 +1133,13 @@ class Parser:
         if t.kind == TokenKind.LPAREN:
             self.i += 1
             inner = self.parse_expr()
+            if self.cur.kind == TokenKind.COMMA:
+                # Tuple literal `(e1, ..., en)` (spec 37).
+                elems = [inner]
+                while self.match(TokenKind.COMMA):
+                    elems.append(self.parse_expr())
+                self.eat(TokenKind.RPAREN, "')' to close the tuple")
+                return A.TupleLit(elems, t.line, t.col)
             self.eat(TokenKind.RPAREN, "')'")
             return inner
         raise ParserError(

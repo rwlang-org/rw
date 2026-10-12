@@ -649,3 +649,20 @@ def test_parse_dict_literal():
     d, e = mod.functions[0].body[0].value, mod.functions[0].body[1].value
     assert isinstance(d, A.DictLit) and len(d.keys) == 2
     assert isinstance(e, A.DictLit) and e.keys == []
+
+
+# ----- tuples (spec 37) -----
+
+def test_parse_tuples():
+    mod = parse_src(
+        "def f() -> tuple[int, string]:\n    return 1, \"a\"\n\n"
+        "def main() -> int:\n    t: Tuple[int, bool] = (1, true)\n    a, _ = f()\n    x = (1)\n    return t[0]\n"
+    )
+    f, main = mod.functions
+    assert isinstance(f.return_type, A.TypeTuple) and len(f.return_type.elems) == 2
+    assert isinstance(f.body[0].value, A.TupleLit)
+    decl, unpack, paren = main.body[0], main.body[1], main.body[2]
+    assert isinstance(decl.type_expr, A.TypeTuple)
+    assert isinstance(decl.value, A.TupleLit)
+    assert isinstance(unpack, A.TupleAssign) and unpack.names == ["a", "_"]
+    assert isinstance(paren.value, A.IntLit)
