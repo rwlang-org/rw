@@ -340,3 +340,17 @@ def test_list_syntax_lowering():
     for sym in ("rw_list_push", "rw_list_slice", "rw_list_at", "rw_str_index"):
         assert re.search(rf'call .*@"{sym}"\(', ir_text), sym
     assert "for.update" in ir_text
+
+
+def test_integer_division_is_checked_unless_unchecked():
+    from rwc.irgen import generate
+    src = "def f(a: int, b: int) -> int:\n    return a / b + a % b\n\ndef main() -> int:\n    return f(1, 1)\n"
+    ast = desugar_module(parse(tokenize(src)))
+    program = LoadedProgram(root=ast, root_name="<root>")
+    checked = str(generate(program, analyze_program(program)))
+    assert "division by zero in f (line 2)" in checked
+    assert re.search(r'call void @"rw_panic"\(', checked)
+    ast2 = desugar_module(parse(tokenize(src)))
+    program2 = LoadedProgram(root=ast2, root_name="<root>")
+    unchecked = str(generate(program2, analyze_program(program2), checked=False))
+    assert "division by zero" not in unchecked
