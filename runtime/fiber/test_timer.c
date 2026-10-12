@@ -15,12 +15,14 @@
 
 static _Atomic int64_t g_order = 0;
 static int64_t g_rank[3];
+static int64_t g_deadline[3];
 static _Atomic int64_t g_woken = 0;
 
 static int64_t sleeper(void *arg) {
     int64_t i = (int64_t)(intptr_t)arg;
     int64_t ms = (3 - i) * 30;  /* 90, 60, 30 ms: reverse of spawn order */
     int64_t t0 = rw_mono_ns();
+    g_deadline[i] = t0 + ms * 1000000;
     rw_sleep_ms(ms);
     int64_t slept = rw_mono_ns() - t0;
     assert(slept >= ms * 1000000);
@@ -41,7 +43,12 @@ int main(void) {
     rw_fiber_handle *h[3];
     for (int i = 0; i < 3; i++) h[i] = rw_sched_spawn_i64(sleeper, (void *)(intptr_t)i);
     for (int i = 0; i < 3; i++) rw_sched_join_i64(h[i]);
-    assert(g_rank[2] == 0 && g_rank[1] == 1 && g_rank[0] == 2);
+    /* Fibers wake in deadline order. The deadlines are taken when each
+     * fiber starts, so on a loaded machine a late start can move one; compare
+     * actual deadlines (with 5 ms of slack) rather than assuming 30 ms gaps. */
+    for (int a = 0; a < 3; a++)
+        for (int b = 0; b < 3; b++)
+            if (g_deadline[a] + 5000000 < g_deadline[b]) assert(g_rank[a] < g_rank[b]);
 
     const int N = 10000;
     int64_t t0 = rw_mono_ns();
