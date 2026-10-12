@@ -615,6 +615,9 @@ class Sema:
             self._check_expr(fn, stmt.expr, locals_)
             return False
 
+        if isinstance(stmt, A.ValueMatch):
+            return self._check_value_match(fn, stmt, locals_, ret_ty)
+
         if isinstance(stmt, A.TupleAssign):
             vt = self._check_expr(fn, stmt.value, locals_)
             if not isinstance(vt, T.TupleType):
@@ -1595,6 +1598,49 @@ class Sema:
                 f"{obj_ty} has no field `{field}`",
             ))
         return obj_ty, obj_ty.fields[idx][1]
+
+    def _check_value_match(self, fn: A.FuncDef, stmt: A.ValueMatch,
+                           locals_: Dict[str, T.Type], ret_ty: T.Type) -> bool:
+        """match on an int / string / bool with literal, `_`, and binding
+        patterns (spec 38). Returns whether every path returns."""
+        tt = self._check_expr(fn, stmt.target, locals_)
+        if tt not in (T.INT, T.STRING, T.BOOL):
+            raise CompileError(Diagnostic(
+                self.filename, stmt.line, stmt.col, 5,
+                f"value patterns can only match int, string, or bool, found `{tt}`",
+            ))
+        seen: set = set()
+        catch_all = False
+        all_return = True
+        for arm in stmt.arms:
+            if catch_all:
+                raise CompileError(Diagnostic(self.filename, arm.line, arm.col, 4,
+                                              "unreachable case after a catch-all pattern"))
+            for p in arm.patterns:
+                pt = self._check_expr(fn, p, locals_)
+                if pt != tt:
+                    raise CompileError(Diagnostic(
+                        self.filename, arm.line, arm.col, 4,
+                        f"pattern of type `{pt}` cannot match a `{tt}`",
+                    ))
+                key = p.value  # type: ignore[attr-defined]
+                if key in seen:
+                    raise CompileError(Diagnostic(self.filename, arm.line, arm.col, 4,
+                                                  f"duplicate pattern {key!r}"))
+                seen.add(key)
+            arm_locals = dict(locals_)
+            if not arm.patterns:
+                catch_all = True
+                if arm.bind is not None:
+                    if arm.bind in locals_:
+                        raise CompileError(Diagnostic(
+                            self.filename, arm.line, arm.col, len(arm.bind),
+                            f"variable `{arm.bind}` already declared",
+                        ))
+                    arm_locals[arm.bind] = tt
+            all_return = self._check_block(fn, arm.body, arm_locals, ret_ty) and all_return
+        exhaustive = catch_all or (tt is T.BOOL and seen == {True, False})
+        return exhaustive and all_return
 
     def _declare_by_assignment(self, fn: A.FuncDef, stmt: A.Assign,
                                locals_: Dict[str, T.Type]) -> bool:

@@ -2172,3 +2172,38 @@ def test_tuples_ok():
 def test_tuple_errors(body, msg):
     e = err("def main() -> int:\n" + body + "    return 0\n")
     assert msg in e.diagnostic.message
+
+
+# ----- value match (spec 38) -----
+
+def test_value_match_ok_and_returns():
+    check(
+        "def code(m: string) -> int:\n"
+        "    match m:\n"
+        '        case "GET" | "HEAD":\n            return 1\n'
+        "        case _:\n            return 0\n\n"
+        "def flag(b: bool) -> int:\n"
+        "    match b:\n        case true:\n            return 1\n        case false:\n            return 0\n\n"
+        "def main() -> int:\n"
+        "    match 3:\n        case 1:\n            print(1)\n        case n:\n            print(n + 1)\n"
+        '    return code("GET") + flag(true)\n'
+    )
+
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ("    match 1.5:\n        case _:\n            print(1)\n", "can only match int, string, or bool"),
+        ('    match 1:\n        case "a":\n            print(1)\n', "pattern of type `string` cannot match a `int`"),
+        ("    match 1:\n        case 1:\n            print(1)\n        case 1:\n            print(2)\n", "duplicate pattern 1"),
+        ("    match 1:\n        case _:\n            print(1)\n        case 2:\n            print(2)\n", "unreachable case after a catch-all"),
+    ],
+)
+def test_value_match_errors(body, msg):
+    e = err("def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message
+
+
+def test_non_exhaustive_value_match_does_not_return():
+    e = err("def f(x: int) -> int:\n    match x:\n        case 1:\n            return 1\n\ndef main() -> int:\n    return f(1)\n")
+    assert "does not return on all paths" in e.diagnostic.message
