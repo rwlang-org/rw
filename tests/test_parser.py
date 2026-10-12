@@ -585,3 +585,26 @@ def test_parse_dict_type():
 def test_parse_slice_assignment_is_error():
     with pytest.raises(ParserError):
         parse_src("def main() -> int:\n    xs[0:1] = 1\n    return 0\n")
+
+
+# ----- methods (spec 33) -----
+
+def test_parse_class_methods_lowered_to_functions():
+    mod = parse_src(
+        "class Counter:\n    count: int\n\n"
+        "    def inc(self, by: int) -> int:\n        return by\n\n"
+        "    def reset(self) -> void:\n        return\n"
+    )
+    c = mod.classes[0]
+    assert [f.name for f in c.fields] == ["count"]
+    assert c.methods == ["inc", "reset"]
+    names = [fn.name for fn in mod.functions]
+    assert names == ["Counter.inc", "Counter.reset"]
+    inc = mod.functions[0]
+    assert [p.name for p in inc.params] == ["self", "by"]
+    assert inc.params[0].type_expr.name == "Counter"
+
+
+def test_parse_method_requires_self():
+    with pytest.raises(ParserError):
+        parse_src("class C:\n    x: int\n\n    def m(a: int) -> int:\n        return a\n")

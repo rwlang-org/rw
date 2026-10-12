@@ -782,6 +782,12 @@ class IRGen:
             return self._emit_index(expr, ctx)
         if isinstance(expr, A.Slice):
             return self._emit_slice(expr, ctx)
+        if isinstance(expr, A.CallValue) and id(expr) in self.sema.method_calls:
+            # `e.m(args)` -> Class.m(e, args) (spec 33).
+            assert isinstance(expr.callee, A.FieldAccess)
+            recv = self._emit_expr(expr.callee.obj, ctx)
+            fn = self.funcs[self.sema.method_calls[id(expr)]]
+            return b.call(fn, [recv] + [self._emit_expr(a, ctx) for a in expr.args])
         if isinstance(expr, A.CallValue):
             callee = self._emit_expr(expr.callee, ctx)
             return b.call(callee, [self._emit_expr(a, ctx) for a in expr.args])
@@ -988,6 +994,13 @@ class IRGen:
             and id(call) not in self.sema.constructor_calls
         ):
             return self._emit_conversion(call, ctx)
+        method_key = self.sema.method_calls.get(id(call))
+        if method_key is not None:
+            # `x.m(args)` with x a local -> Class.m(x, args) (spec 33).
+            assert call.module is not None
+            recv = b.load(ctx.locals[call.module])
+            return b.call(self.funcs[method_key],
+                          [recv] + [self._emit_expr(a, ctx) for a in call.args])
         if id(call) in self.sema.local_fn_calls:
             callee = b.load(ctx.locals[call.callee])
             return b.call(callee, [self._emit_expr(a, ctx) for a in call.args])

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 class Type:
@@ -57,6 +57,8 @@ class ClassType(Type):
         self.short_name = name
         self.module = module
         self.fields: List[Tuple[str, Type]] = []
+        # Method name -> (module, "Class.method") function key (spec 33).
+        self.methods: Dict[str, Tuple[Optional[str], str]] = {}
 
     def __eq__(self, other: object) -> bool:
         return self is other
