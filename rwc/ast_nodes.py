@@ -210,6 +210,16 @@ class ListLit:
 
 
 @dataclass
+class KeywordArg:
+    """`name=value` in a call's argument list (spec 41). Sema replaces the
+    call's arguments with the bound positional list before type checking."""
+    name: str
+    value: "Expr"
+    line: int
+    col: int
+
+
+@dataclass
 class TupleLit:
     """`(e1, ..., en)` with n >= 2 (spec 37)."""
     elems: List["Expr"]
@@ -269,7 +279,7 @@ Expr = Union[
     UnaryOp, BinOp, IfExpr, Call, SpawnExpr, AwaitExpr,
     SomeExpr, NoneExpr,
     OkExpr, ErrExpr,
-    FieldAccess, CallValue, ListLit, Index, Slice, DictLit, TupleLit,
+    FieldAccess, CallValue, ListLit, Index, Slice, DictLit, TupleLit, KeywordArg,
 ]
 
 
@@ -450,6 +460,8 @@ class Param:
     type_expr: TypeExpr
     line: int
     col: int
+    # A literal default value (spec 41); None when the parameter is required.
+    default: Optional["Expr"] = None
 
 
 @dataclass

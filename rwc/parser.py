@@ -267,6 +267,7 @@ class Parser:
         while self.match(TokenKind.COMMA):
             params.append(self.parse_param())
         self.eat(TokenKind.RPAREN, "')'")
+        self._check_default_order(params)
         self.eat(TokenKind.ARROW, "'->' after parameter list")
         ret_ty = self.parse_type()
         self.eat(TokenKind.COLON, "':' to start method body")
@@ -285,6 +286,7 @@ class Parser:
             while self.match(TokenKind.COMMA):
                 params.append(self.parse_param())
         self.eat(TokenKind.RPAREN, "')'")
+        self._check_default_order(params)
         self.eat(TokenKind.ARROW, "'->' after parameter list")
         ret_ty = self.parse_type()
         self.eat(TokenKind.COLON, "':' to start function body")
@@ -292,11 +294,32 @@ class Parser:
         body = self.parse_block()
         return A.FuncDef(name_tok.value, params, ret_ty, body, kw.line, kw.col)
 
+    @staticmethod
+    def _check_default_order(params: List[A.Param]) -> None:
+        seen_default = False
+        for p in params:
+            if p.default is not None:
+                seen_default = True
+            elif seen_default:
+                raise ParserError("a parameter without a default follows one with a default",
+                                  p.line, p.col, len(p.name))
+
     def parse_param(self) -> A.Param:
         name_tok = self.eat(TokenKind.IDENT, "parameter name")
         self.eat(TokenKind.COLON, "':' after parameter name")
         ty = self.parse_type()
-        return A.Param(name_tok.value, ty, name_tok.line, name_tok.col)
+        default: Optional[A.Expr] = None
+        if self.match(TokenKind.ASSIGN):
+            # A literal default (spec 41), inlined at each call that omits it.
+            default = self.parse_expr()
+            lit = default.operand if isinstance(default, A.UnaryOp) and default.op == "-" else default
+            ok = isinstance(lit, (A.IntLit, A.FloatLit, A.StringLit, A.BoolLit)) and (
+                lit is default or isinstance(lit, (A.IntLit, A.FloatLit))
+            )
+            if not ok:
+                raise ParserError("a default value must be a literal",
+                                  name_tok.line, name_tok.col, len(name_tok.value))
+        return A.Param(name_tok.value, ty, name_tok.line, name_tok.col, default=default)
 
     def parse_type(self) -> A.TypeExpr:
         t = self.cur
@@ -1118,10 +1141,22 @@ class Parser:
         """Parse a comma-separated argument list, with `(` already consumed,
         up to and including the closing `)`."""
         args: List[A.Expr] = []
+        seen_keyword = False
         if self.cur.kind != TokenKind.RPAREN:
-            args.append(self.parse_expr())
-            while self.match(TokenKind.COMMA):
-                args.append(self.parse_expr())
+            while True:
+                if self.cur.kind == TokenKind.IDENT and self.peek(1).kind == TokenKind.ASSIGN:
+                    # Keyword argument `name=value` (spec 41).
+                    name = self.eat(TokenKind.IDENT)
+                    self.i += 1  # '='
+                    args.append(A.KeywordArg(name.value, self.parse_expr(), name.line, name.col))
+                    seen_keyword = True
+                else:
+                    if seen_keyword:
+                        raise ParserError("positional argument after keyword argument",
+                                          self.cur.line, self.cur.col, max(1, len(self.cur.value)))
+                    args.append(self.parse_expr())
+                if not self.match(TokenKind.COMMA):
+                    break
         self.eat(TokenKind.RPAREN, "')'")
         return args
 

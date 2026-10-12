@@ -1,0 +1,30 @@
+class User:
+    name: string
+    age: int
+
+    def greet(self, greeting: string = "hi", punct: string = "!") -> string:
+        return f"{greeting}, {self.name}{punct}"
+
+def greet(name: string, greeting: string = "hello", times: int = 1) -> string:
+    out = ""
+    for i in range(0, times):
+        out += f"{greeting} {name}. "
+    return str_strip(out)
+
+def scale(x: float, factor: float = 2.0, offset: float = -0.5) -> float:
+    return x * factor + offset
+
+def main() -> int:
+    print(greet("ann"))
+    print(greet("ann", "hey"))
+    print(greet("bob", times=2))
+    print(greet(times=1, greeting="yo", name="cy"))
+    print(scale(1.0))
+    print(scale(1.0, offset=0.0))
+    u = User(age=31, name="ann")
+    print(u.greet())
+    print(u.greet(punct="?"))
+    print(u.greet("hello", punct="."))
+    f = spawn greet("dee", times=3)
+    print(await f)
+    return 0

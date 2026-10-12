@@ -361,6 +361,15 @@ class Sema:
                         ))
                     seen.add(p.name)
                     pt = self._resolve_type(p.type_expr)
+                    if p.default is not None:
+                        lit = p.default.operand if isinstance(p.default, A.UnaryOp) else p.default
+                        dt = {A.IntLit: T.INT, A.FloatLit: T.FLOAT, A.StringLit: T.STRING,
+                              A.BoolLit: T.BOOL}[type(lit)]
+                        if dt != pt:
+                            raise CompileError(Diagnostic(
+                                self.filename, p.line, p.col, len(p.name),
+                                f"default value of `{p.name}` must be {pt}, found `{dt}`",
+                            ))
                     if pt is T.VOID:
                         raise CompileError(Diagnostic(
                             self.filename, p.line, p.col, len(p.name),
@@ -1236,6 +1245,46 @@ class Sema:
         self.result.call_resolution[id(call)] = key
         return key
 
+    def _bind_args(self, args: List[A.Expr], params: List[A.Param], what: str,
+                   line: int, col: int) -> List[A.Expr]:
+        """Resolve keyword arguments and defaults into one positional list in
+        parameter order (spec 41). Too many positional arguments are left for
+        the caller's arity check."""
+        positional = [a for a in args if not isinstance(a, A.KeywordArg)]
+        keywords = [a for a in args if isinstance(a, A.KeywordArg)]
+        if not keywords and all(p.default is None for p in params[len(positional):]):
+            return positional
+        if len(positional) > len(params):
+            return positional
+        slots: List[Optional[A.Expr]] = list(positional) + [None] * (len(params) - len(positional))
+        names = [p.name for p in params]
+        for kw in keywords:
+            if kw.name not in names:
+                raise CompileError(Diagnostic(self.filename, kw.line, kw.col, len(kw.name),
+                                              f"`{what}` got an unexpected keyword argument `{kw.name}`"))
+            i = names.index(kw.name)
+            if slots[i] is not None:
+                raise CompileError(Diagnostic(self.filename, kw.line, kw.col, len(kw.name),
+                                              f"`{what}` got multiple values for argument `{kw.name}`"))
+            slots[i] = kw.value
+        out: List[A.Expr] = []
+        for p, a in zip(params, slots, strict=True):
+            if a is None:
+                if p.default is None:
+                    raise CompileError(Diagnostic(self.filename, line, col, len(what),
+                                                  f"`{what}` missing argument `{p.name}`"))
+                a = p.default
+            out.append(a)
+        return out
+
+    def _reject_keywords(self, args: List[A.Expr], what: str) -> None:
+        for a in args:
+            if isinstance(a, A.KeywordArg):
+                raise CompileError(Diagnostic(
+                    self.filename, a.line, a.col, len(a.name),
+                    f"`{what}` does not take keyword arguments",
+                ))
+
     def _check_call(self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]) -> T.Type:
         # Calls through function values (spec 21) come first: locals shadow
         # functions, builtins, and import qualifiers.
@@ -1269,6 +1318,8 @@ class Sema:
             return self._check_user_call(fn, call, locals_)
         if call.callee in self.class_map:
             return self._check_constructor(fn, call, locals_, self.class_map[call.callee])
+        if call.callee in _BUILTIN_FUNCS:
+            self._reject_keywords(call.args, call.callee)
         # Builtin: print accepts any printable.
         if call.callee == "print":
             if len(call.args) != 1:
@@ -1568,7 +1619,11 @@ class Sema:
     def _check_constructor(
         self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type], cls: T.ClassType
     ) -> T.Type:
-        """`ClassName(args...)`: one positional argument per field (spec 20)."""
+        """`ClassName(args...)`: one positional argument per field (spec 20);
+        fields may also be passed by keyword (spec 41)."""
+        field_params = [A.Param(fname, A.TypeName("int", 0, 0), call.line, call.col)
+                        for fname, _ in cls.fields]
+        call.args = self._bind_args(call.args, field_params, str(cls), call.line, call.col)
         if len(call.args) != len(cls.fields):
             raise CompileError(Diagnostic(
                 self.filename, call.line, call.col, len(call.callee),
@@ -1757,6 +1812,7 @@ class Sema:
         key = cls.methods[name]
         sig = self.result.functions[key]
         self.result.method_calls[call_id] = key
+        args[:] = self._bind_args(args, sig.node.params[1:], name, line, col)
         ftype = T.FunctionType([pt for _, pt in sig.params[1:]], sig.return_type)
         return self._check_fn_value_call(fn, ftype, args, name, line, col, locals_)
 
@@ -1780,6 +1836,7 @@ class Sema:
                 self.filename, line, col, max(1, len(what)),
                 f"`{callee_ty}` is not callable",
             ))
+        self._reject_keywords(args, what)
         if len(args) != len(callee_ty.params):
             raise CompileError(Diagnostic(
                 self.filename, line, col, max(1, len(what)),
@@ -1799,6 +1856,7 @@ class Sema:
         or not). Builtins must already have been dispatched."""
         key = self._resolve_user_func(call)
         sig = self.result.functions[key]
+        call.args = self._bind_args(call.args, sig.node.params, call.callee, call.line, call.col)
         if len(call.args) != len(sig.params):
             raise CompileError(Diagnostic(
                 self.filename, call.line, call.col, len(call.callee),

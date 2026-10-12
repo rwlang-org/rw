@@ -2207,3 +2207,41 @@ def test_value_match_errors(body, msg):
 def test_non_exhaustive_value_match_does_not_return():
     e = err("def f(x: int) -> int:\n    match x:\n        case 1:\n            return 1\n\ndef main() -> int:\n    return f(1)\n")
     assert "does not return on all paths" in e.diagnostic.message
+
+
+# ----- default and keyword arguments (spec 41) -----
+
+KW_PRELUDE = (
+    "class User:\n    name: string\n    age: int\n\n"
+    "    def greet(self, greeting: string = \"hi\", times: int = 1) -> string:\n"
+    "        return greeting\n\n"
+    'def g(name: string, greeting: string = "hello", times: int = 1) -> string:\n    return name\n\n'
+)
+
+
+def test_defaults_and_keywords_ok():
+    check(
+        KW_PRELUDE + "def main() -> int:\n"
+        '    a = g("x")\n    b = g("x", "yo")\n    c = g("x", times=3)\n    d = g(times=2, name="y")\n'
+        '    u = User(age=3, name="ann")\n    e = u.greet(times=2)\n'
+        '    f: Future[string] = spawn g("z", times=4)\n'
+        "    return 0\n"
+    )
+
+
+@pytest.mark.parametrize("body, msg", [
+    ('    g("x", nope=1)\n', "unexpected keyword argument `nope`"),
+    ('    g("x", name="y")\n', "multiple values for argument `name`"),
+    ("    g(times=1)\n", "missing argument `name`"),
+    ('    print(s="a")\n', "`print` does not take keyword arguments"),
+    ('    h: Callable[[string, string, int], string] = g\n    h("a", "b", times=1)\n', "does not take keyword arguments"),
+    ('    User(name="a")\n', "missing argument `age`"),
+])
+def test_default_keyword_errors(body, msg):
+    e = err(KW_PRELUDE + "def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message
+
+
+def test_default_type_mismatch():
+    e = err('def f(a: int = "x") -> int:\n    return a\n\ndef main() -> int:\n    return f()\n')
+    assert "default value of `a` must be int" in e.diagnostic.message
