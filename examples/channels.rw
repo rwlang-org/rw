@@ -1,0 +1,43 @@
+# Producers and consumers communicating over channels.
+def produce(out: Channel[int], start: int, n: int) -> int:
+    for i in range(start, start + n):
+        chan_send(out, i)
+    return n
+
+def square_all(inp: Channel[int], out: Channel[int]) -> int:
+    count = 0
+    for v in inp:                       # until inp is closed
+        chan_send(out, v * v)
+        count += 1
+    return count
+
+def main() -> int:
+    # Rendezvous channel: each send waits for a receiver.
+    nums: Channel[int] = chan_new(0)
+    squares: Channel[int] = chan_new(16)
+    p1 = spawn produce(nums, 1, 5)
+    p2 = spawn produce(nums, 6, 5)
+    worker = spawn square_all(nums, squares)
+    sent = await p1 + await p2
+    chan_close(nums)
+    handled = await worker
+    chan_close(squares)
+    total = 0
+    for s in squares:
+        total += s
+    print(f"sent={sent} handled={handled} sum of squares={total}")
+
+    # Buffered values are still received after close; then recv gives None.
+    words: Channel[string] = chan_new(3)
+    chan_send(words, "a")
+    chan_send(words, "b")
+    print(len(words))
+    chan_close(words)
+    for w in words:
+        print(w)
+    match chan_recv(words):
+        case Some(w):
+            print(w)
+        case None:
+            print("closed")
+    return 0
