@@ -137,6 +137,10 @@ class IRGen:
             m, ir.FunctionType(RW_STR_TY, [F64]), "rw_str_from_float")
         self._rw_str_cmp = ir.Function(
             m, ir.FunctionType(I64, [RW_STR_TY, RW_STR_TY]), "rw_str_cmp")
+        # timers and clocks (spec 39)
+        self._rw_sleep_ms = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_sleep_ms")
+        self._rw_time_ms = ir.Function(m, ir.FunctionType(I64, []), "rw_time_ms")
+        self._rw_mono_ns = ir.Function(m, ir.FunctionType(I64, []), "rw_mono_ns")
         # string builtins (spec 28); split/join take the list by pointer.
         s2s = ir.FunctionType(RW_STR_TY, [RW_STR_TY])
         self._rw_str_strip = ir.Function(m, s2s, "rw_str_strip")
@@ -1112,6 +1116,9 @@ class IRGen:
             "str_replace": self._rw_str_replace,
             "str_contains": self._rw_str_contains,
             "str_ends_with": self._rw_str_ends_with,
+            "sleep": self._rw_sleep_ms,
+            "time_ms": self._rw_time_ms,
+            "mono_ns": self._rw_mono_ns,
         }
         if call.callee in direct:
             fn = direct[call.callee]

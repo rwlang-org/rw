@@ -84,6 +84,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "str_split", "str_join", "str_strip", "str_replace", "str_lower", "str_upper",
     "str_contains", "str_ends_with",
     "dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values",
+    "sleep", "time_ms", "mono_ns",
 })
 
 _DICT_BUILTINS = frozenset({
@@ -114,6 +115,10 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
     "str_upper": ((T.STRING,), T.STRING),
     "str_contains": ((T.STRING, T.STRING), T.BOOL),
     "str_ends_with": ((T.STRING, T.STRING), T.BOOL),
+    # spec 39
+    "sleep": ((T.INT,), T.VOID),
+    "time_ms": ((), T.INT),
+    "mono_ns": ((), T.INT),
 }
 
 

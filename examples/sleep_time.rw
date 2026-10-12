@@ -1,0 +1,28 @@
+# Sleeping fibers wake in deadline order; sleep parks the fiber, so other
+# fibers keep running on the same worker (the e2e suite uses RW_WORKERS=1).
+class Log:
+    lines: List[string]
+
+def worker(log: Log, name: string, ms: int) -> int:
+    sleep(ms)
+    log.lines = list_push(log.lines, name)
+    return ms
+
+def main() -> int:
+    log = Log([])
+    t0 = mono_ns()
+    a = spawn worker(log, "slow", 60)
+    b = spawn worker(log, "fast", 10)
+    c = spawn worker(log, "mid", 30)
+    total = await a + await b + await c
+    elapsed_ms = (mono_ns() - t0) / 1000000
+    print(str_join(log.lines, " < "))
+    print(total)
+    # A sleep never ends early. (How much the sleeps overlap depends on the
+    # machine's load, so it is not asserted here.)
+    if elapsed_ms >= 60:
+        print("waited at least 60 ms")
+    if time_ms() > 1700000000000:
+        print("wall clock ok")
+    sleep(0)
+    return 0
