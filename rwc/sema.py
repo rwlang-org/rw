@@ -86,6 +86,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values",
     "sleep", "time_ms", "mono_ns",
     "rand_int", "rand_float", "rand_seed", "rand_bytes",
+    "await_all", "await_any",
     "os_args", "os_getenv", "os_setenv", "os_exit", "os_getcwd", "os_chdir",
 })
 
@@ -1399,6 +1400,19 @@ class Sema:
             return T.STRING
         if call.callee in _DICT_BUILTINS:
             return self._check_dict_builtin(fn, call, locals_)
+        if call.callee in ("await_all", "await_any"):
+            if len(call.args) != 1:
+                raise CompileError(Diagnostic(self.filename, call.line, call.col, len(call.callee),
+                                              f"{call.callee} takes 1 argument, got {len(call.args)}"))
+            lt = self._check_expr(fn, call.args[0], locals_)
+            if not (isinstance(lt, T.ListType) and isinstance(lt.elem, T.FutureType)
+                    and lt.elem.inner is not T.VOID):
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"{call.callee} argument must be a List of Futures with a value, found `{lt}`",
+                ))
+            inner = lt.elem.inner
+            return T.list_of(inner) if call.callee == "await_all" else T.TupleType([T.INT, inner])
         if call.callee in _CONVERSIONS:
             accepted, ret, names = _CONVERSIONS[call.callee]
             if len(call.args) != 1:

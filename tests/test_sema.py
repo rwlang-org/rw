@@ -2269,3 +2269,25 @@ def test_range_for_variable_can_be_reused():
 def test_range_for_over_variable_of_another_type_is_error():
     e = err('def main() -> int:\n    i = "s"\n    for i in range(0, 3):\n        print(i)\n    return 0\n')
     assert "loop variable `i` is already declared as `string`, not int" in e.diagnostic.message
+
+
+# ----- await_all / await_any (spec 45) -----
+
+def test_await_all_any_types():
+    check(
+        "def f(x: int) -> int:\n    return x\n\n"
+        "def main() -> int:\n"
+        "    fs: List[Future[int]] = [spawn f(1), spawn f(2)]\n"
+        "    rs: List[int] = await_all(fs)\n"
+        "    i, v = await_any([spawn f(3)])\n"
+        "    return rs[0] + i + v\n"
+    )
+
+
+@pytest.mark.parametrize("body, msg", [
+    ("    print(len(await_all([1, 2])))\n", "await_all argument must be a List of Futures"),
+    ("    x = await_any(3)\n", "await_any argument must be a List of Futures"),
+])
+def test_await_all_any_errors(body, msg):
+    e = err("def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message

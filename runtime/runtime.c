@@ -887,6 +887,22 @@ rw_str  rw_await_str (rw_future_t *f) {
 void    rw_await_void(rw_future_t *f) {
     rw_sched_join_void((rw_fiber_handle *)f);
 }
+int64_t rw_await_any(const rw_list *futures) {
+    if (futures->len == 0) {
+        fputs("rw: await_any of an empty list\n", stderr);
+        abort();
+    }
+    rw_future_t **fs = (rw_future_t **)futures->data;
+    for (;;) {
+        for (int64_t i = 0; i < futures->len; i++) {
+            if (rw_sched_is_done((rw_fiber_handle *)fs[i])) return i;
+        }
+        /* A fiber cannot sit on several wait lists at once, so poll; the
+         * sleep parks a fiber (or sleeps the main thread) between checks. */
+        rw_sleep_ms(1);
+    }
+}
+
 void    rw_detach    (rw_future_t *f) {
     rw_sched_detach((rw_fiber_handle *)f);
 }

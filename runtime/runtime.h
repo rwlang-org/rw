@@ -163,6 +163,9 @@ int64_t rw_await_i64 (rw_future_t *f);
 double  rw_await_f64 (rw_future_t *f);
 int8_t  rw_await_bool(rw_future_t *f);
 rw_str  rw_await_str (rw_future_t *f);
+/* await_any (spec 45): index of the first finished Future in a
+ * List[Future[T]] (elements are rw_future_t*); polls every millisecond. */
+int64_t rw_await_any(const rw_list *futures);
 /* Drop a Future without awaiting it; the fiber is freed when it finishes. */
 void    rw_detach    (rw_future_t *f);
 void    rw_await_void(rw_future_t *f);

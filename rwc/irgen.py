@@ -144,6 +144,9 @@ class IRGen:
         self._rw_sleep_ms = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_sleep_ms")
         self._rw_time_ms = ir.Function(m, ir.FunctionType(I64, []), "rw_time_ms")
         self._rw_mono_ns = ir.Function(m, ir.FunctionType(I64, []), "rw_mono_ns")
+        # await_any (spec 45)
+        self._rw_await_any = ir.Function(
+            m, ir.FunctionType(I64, [RW_LIST_INT_TY.as_pointer()]), "rw_await_any")
         # random numbers (spec 43)
         self._rw_rand_int = ir.Function(m, ir.FunctionType(I64, [I64, I64]), "rw_rand_int")
         self._rw_rand_float = ir.Function(m, ir.FunctionType(F64, []), "rw_rand_float")
@@ -696,6 +699,42 @@ class IRGen:
         ctx.builder.store(value, slot)
         return ctx.builder.bitcast(slot, I8P)
 
+    def _emit_await_many(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
+        """await_all: await each Future in order into a List[T].
+        await_any: (index, value) of the first Future to finish (spec 45)."""
+        b = ctx.builder
+        lt = self.sema.expr_types[id(call.args[0])]
+        assert isinstance(lt, T.ListType) and isinstance(lt.elem, T.FutureType)
+        inner = lt.elem.inner
+        await_fn = self._decl_await(inner)
+        slot = ctx.alloca(RW_LIST_INT_TY)
+        b.store(self._emit_expr(call.args[0], ctx), slot)
+        if call.callee == "await_any":
+            idx = b.call(self._rw_await_any, [slot])
+            value = b.call(await_fn, [self._list_get(ctx, slot, lt, idx)])
+            tup = ir.Constant(llvm_type_of(T.TupleType([T.INT, inner])), None)
+            return b.insert_value(b.insert_value(tup, idx, 0), value, 1)
+        out_ty = T.list_of(inner)
+        out = ctx.alloca(RW_LIST_INT_TY)
+        b.call(self._rw_list_int_new if out_ty is T.LIST_INT else self._rw_list_new, [out])
+        n = b.call(self._rw_list_int_len, [slot])
+        idx_slot = ctx.alloca(I64)
+        b.store(ir.Constant(I64, 0), idx_slot)
+        cond_bb = ctx.function.append_basic_block("await_all.cond")
+        body_bb = ctx.function.append_basic_block("await_all.body")
+        end_bb = ctx.function.append_basic_block("await_all.end")
+        b.branch(cond_bb)
+        b.position_at_end(cond_bb)
+        i = b.load(idx_slot)
+        b.cbranch(b.icmp_signed("<", i, n), body_bb, end_bb)
+        b.position_at_end(body_bb)
+        value = b.call(await_fn, [self._list_get(ctx, slot, lt, i)])
+        b.store(self._list_push_value(ctx, b.load(out), out_ty, value), out)
+        b.store(b.add(i, ir.Constant(I64, 1)), idx_slot)
+        b.branch(cond_bb)
+        b.position_at_end(end_bb)
+        return b.load(out)
+
     def _dict_keys_list(self, ctx: "FunctionCtx", d: ir.Value) -> ir.Value:
         out = ctx.alloca(RW_LIST_INT_TY)
         ctx.builder.call(self._rw_dict_keys, [out, d])
@@ -1161,6 +1200,8 @@ class IRGen:
             # Both are noops at the IR level: the value carries the
             # same {len, ptr} layout, only the sema type changes.
             return self._emit_expr(call.args[0], ctx)
+        if call.callee in ("await_all", "await_any"):
+            return self._emit_await_many(call, ctx)
         if call.callee in ("dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values"):
             return self._emit_dict_builtin(call, ctx)
         if call.callee == "os_args":

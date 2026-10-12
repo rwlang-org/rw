@@ -720,6 +720,10 @@ void rw_sched_detach(rw_fiber_handle *h) {
     if (h) release_handle(h);
 }
 
+int8_t rw_sched_is_done(rw_fiber_handle *h) {
+    return atomic_load_explicit(&h->state, memory_order_acquire) == RW_FIBER_DONE;
+}
+
 int64_t rw_sched_live_fibers(void) {
     return atomic_load_explicit(&g_live_fibers, memory_order_relaxed);
 }
