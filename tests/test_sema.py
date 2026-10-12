@@ -1897,7 +1897,7 @@ def test_list_syntax_ok():
         ('    xs: List[int] = [1]\n    print(xs["a"])\n', "index must be int"),
         ("    xs: List[int] = [1]\n    print(xs[0:\"a\"])\n", "slice bounds must be int"),
         ("    n: int = 5\n    for x in n:\n        print(x)\n", "cannot iterate over `int`"),
-        ("    xs: List[int] = [1]\n    x: int = 0\n    for x in xs:\n        print(x)\n", "already declared"),
+        ('    xs: List[int] = [1]\n    x = "s"\n    for x in xs:\n        print(x)\n', "loop variable `x` is already declared as `string`"),
     ],
 )
 def test_list_syntax_errors(body, msg):
@@ -2245,3 +2245,27 @@ def test_default_keyword_errors(body, msg):
 def test_default_type_mismatch():
     e = err('def f(a: int = "x") -> int:\n    return a\n\ndef main() -> int:\n    return f()\n')
     assert "default value of `a` must be int" in e.diagnostic.message
+
+
+
+# ----- reusing loop variables -----
+
+def test_range_for_variable_can_be_reused():
+    check(
+        "def main() -> int:\n"
+        "    t = 0\n"
+        "    for i in range(0, 3):\n        t += i\n"
+        "    for i in range(0, 3):\n        t += i\n"
+        "    i = 10\n"
+        "    for i in range(0, 2):\n        t += i\n"
+        "    xs = [1, 2]\n"
+        "    x = 0\n"
+        "    for x in xs:\n        t += x\n"
+        "    for x in xs:\n        t += x\n"
+        "    return t\n"
+    )
+
+
+def test_range_for_over_variable_of_another_type_is_error():
+    e = err('def main() -> int:\n    i = "s"\n    for i in range(0, 3):\n        print(i)\n    return 0\n')
+    assert "loop variable `i` is already declared as `string`, not int" in e.diagnostic.message
