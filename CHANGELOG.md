@@ -1,5 +1,38 @@
 # Changelog
 
+## [v0.0.11](https://github.com/rwlang-org/rw/compare/v0.0.10...v0.0.11) - 2026-10-12
+- feat: local type inference (x = expr declares x) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/182
+- feat: methods on records by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/184
+- test: wait for e2e servers to listen instead of a fixed sleep by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/185
+- feat: f-strings by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/186
+- feat: module constants by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/187
+- feat: dict literals by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/188
+- feat: tuples and multiple return values by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/189
+- feat: match on int / string / bool values by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/190
+- feat: sleep, time_ms, and mono_ns by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/191
+- feat: OS API (args, environment, cwd, exit) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/192
+- feat: default and keyword arguments by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/193
+- feat: run-time checks for integer division by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/194
+- feat: random numbers by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/195
+- fix: loops may reuse an existing variable name by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/196
+- feat: channels (Channel[T]) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/197
+- feat: await_all and await_any by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/198
+- feat: fiber-aware Mutex by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/199
+- fix(runtime): await_any returns the first future to finish by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/200
+- feat: with and defer by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/201
+- feat: rwc check (type-check without codegen) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/202
+- feat: did-you-mean suggestions and conversion hints by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/203
+- feat: dial / listen / accept / open with address strings (RFC #175) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/204
+- feat: last_error / error_name / error_message for I/O builtins by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/205
+- feat: write_all builtin by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/206
+- feat: read / write / accept / connect timeouts by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/207
+- feat: stdlib search path and bufio.Reader by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/208
+- feat: str_lstrip / str_rstrip / str_rfind by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/209
+- feat: shutdown / set_nodelay / set_keepalive / set_backlog by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/210
+- test: run e2e servers on port 0 and read the announced address by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/211
+- test: eight fibers accepting on one listener by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/212
+- feat: signal_wait, close wakes parked fibers, graceful web shutdown by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/213
+
 ## [v0.0.10](https://github.com/rwlang-org/rw/compare/v0.0.9...v0.0.10) - 2026-10-12
 - feat: int()/float()/str() conversions and string ordering by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/170
 - feat: compound assignment (+= and friends) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/171
