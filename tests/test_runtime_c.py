@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from rwc.driver import gc_link_flags
+
 REPO = Path(__file__).resolve().parent.parent
 RUNTIME = REPO / "runtime"
 
@@ -36,7 +38,7 @@ def test_c_runtime(librw: Path, name: str):
     src = RUNTIME / "fiber" / f"{name}.c"
     with tempfile.TemporaryDirectory() as td:
         exe = Path(td) / name
-        libs = ["-lpthread", "-lm"] if sys.platform.startswith("linux") else []
+        libs = gc_link_flags() + (["-lpthread", "-lm"] if sys.platform.startswith("linux") else [])
         cc = subprocess.run(
             [
                 _cc(),

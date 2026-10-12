@@ -152,8 +152,11 @@ static int connect_fd(int fd, const struct sockaddr *sa, socklen_t len, int64_t 
     if (on_fiber || deadline_ns > 0) rw_set_nonblocking(fd);
     for (;;) {
         if (connect(fd, sa, len) == 0) break;
-        if (rw_errno == EINTR) continue;
-        if (rw_errno != EINPROGRESS || (!on_fiber && deadline_ns == 0)) return -1;
+        /* An interrupted connect keeps going in the background (on Linux
+         * the GC's stop-the-world signal can cause this, spec 67): wait for
+         * it like a nonblocking one instead of calling connect again. */
+        int interrupted = rw_errno == EINTR;
+        if (!interrupted && (rw_errno != EINPROGRESS || (!on_fiber && deadline_ns == 0))) return -1;
         /* A wake-up can be spurious (spec 53), so wait until the socket is
          * actually writable. */
         for (;;) {

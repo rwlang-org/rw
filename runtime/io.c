@@ -13,6 +13,7 @@
 #include "net/netpoller.h"
 #include "fiber/sched.h"
 #include "runtime.h"
+#include "rwgc.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -53,24 +54,23 @@ static void read_impl(rw_str *out, int64_t fd, int64_t max) {
         return;
     }
 
-    char *buf = (char *)malloc((size_t)max);
-    if (!buf)     { out->len = 0; out->ptr = NULL; return; }
+    char *buf = (char *)rw_gc_alloc_atomic((size_t)max);   /* becomes the string (spec 67) */
     int64_t deadline = -1;   /* computed on the first EAGAIN */
     for (;;) {
         ssize_t n = read((int)fd, buf, (size_t)max);
         if (n > 0)  { out->len = n; out->ptr = buf; return; }
-        if (n == 0) { free(buf); out->len = 0; out->ptr = NULL; rw_errno = 0; return; }
+        if (n == 0) { rw_gc_free(buf); out->len = 0; out->ptr = NULL; rw_errno = 0; return; }
         if (rw_errno == EAGAIN || rw_errno == EWOULDBLOCK) {
             /* Fibers park on the netpoller; the main thread polls. The read
              * timeout (spec 53) bounds the whole call. */
             if (deadline < 0) deadline = rw_net_deadline((int)fd, RW_NET_READ);
             int r = rw_net_block((int)fd, RW_NET_READ, deadline);
             if (r) {
-                free(buf); out->len = 0; out->ptr = NULL; rw_errno = RW_NET_ERRNO(r); return;
+                rw_gc_free(buf); out->len = 0; out->ptr = NULL; rw_errno = RW_NET_ERRNO(r); return;
             }
             continue;
         }
-        free(buf); out->len = 0; out->ptr = NULL; return;
+        rw_gc_free(buf); out->len = 0; out->ptr = NULL; return;
     }
 }
 

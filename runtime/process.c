@@ -5,6 +5,7 @@
  */
 
 #include "runtime.h"
+#include "rwgc.h"
 #include "aio.h"
 #include "net/netpoller.h"
 
@@ -117,8 +118,7 @@ void rw_proc_start(rw_list_int *out, const rw_list *argv) {
     rw_set_nonblocking(in[1]);
     rw_set_nonblocking(o[0]);
     rw_set_nonblocking(e[0]);
-    int64_t *v = (int64_t *)malloc(4 * sizeof(int64_t));
-    if (!v) { rw_set_last_error(ENOMEM); return; }
+    int64_t *v = (int64_t *)rw_gc_alloc_atomic(4 * sizeof(int64_t));
     v[0] = pid;
     v[1] = in[1];
     v[2] = o[0];

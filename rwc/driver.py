@@ -54,6 +54,29 @@ def _ensure_runtime_built(rt_dir: Path) -> Path:
     return lib
 
 
+_GC_FLAGS: Optional[list] = None
+
+
+def gc_link_flags() -> list:
+    """Linker flags for the Boehm GC (spec 67), found by
+    scripts/gc-prefix.sh (RW_GC_PREFIX overrides it)."""
+    global _GC_FLAGS
+    if _GC_FLAGS is None:
+        script = _find_runtime_dir().parent / "scripts" / "gc-prefix.sh"
+        res = subprocess.run(["sh", str(script)], capture_output=True, text=True)
+        if res.returncode != 0:
+            raise CompileError(Diagnostic(
+                "<rwc>", 1, 1, 1,
+                res.stderr.strip() or "Boehm GC (bdw-gc) not found",
+            ))
+        prefix = res.stdout.strip()
+        flags = []
+        if prefix not in ("/usr", "/usr/local"):
+            flags += [f"-L{prefix}/lib", f"-Wl,-rpath,{prefix}/lib"]
+        _GC_FLAGS = flags + ["-lgc"]
+    return list(_GC_FLAGS)
+
+
 def _find_clang() -> str:
     clang = shutil.which("clang") or shutil.which("cc")
     if not clang:
@@ -112,7 +135,7 @@ def compile_source(
         # -lm: math intrinsics (llvm.pow/exp/log/sin/cos, ...) may be lowered
         # to libm calls (e.g. `pow`) by the backend. macOS bundles these in
         # libSystem, but GNU/Linux requires explicit linking against libm.
-        cmd = [clang, ll_path, str(librw), "-o", str(output), "-lpthread", "-lm"]
+        cmd = [clang, ll_path, str(librw), "-o", str(output), *gc_link_flags(), "-lpthread", "-lm"]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             raise CompileError(Diagnostic(

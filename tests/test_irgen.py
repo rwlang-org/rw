@@ -88,7 +88,7 @@ def test_spawn_creates_trampoline_and_uses_runtime():
     assert "rw_trampoline_add" in ir_text
     assert "rw_spawn_i64" in ir_text
     assert "rw_await_i64" in ir_text
-    assert "malloc" in ir_text
+    assert "rw_gc_alloc" in ir_text  # spawn arguments live on the GC heap (spec 67)
 
 
 def test_function_symbols_are_prefixed_with_rw_user():
@@ -240,7 +240,7 @@ def test_record_constructor_and_fields_emit_malloc_gep():
     )
     # Records are passed as i8* and allocated with malloc.
     assert re.search(r'define i64 @"rw_user_bump"\(i8\* %"p"\)', ir_text)
-    assert re.search(r'call i8\* @"malloc"\(', ir_text)
+    assert re.search(r'call i8\* @"rw_gc_alloc"\(', ir_text)  # records on the GC heap (spec 67)
     # Field access goes through the {i64, {i64, i8*}} layout.
     assert "{i64, {i64, i8*}}*" in ir_text
     assert "getelementptr" in ir_text

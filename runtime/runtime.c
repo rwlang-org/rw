@@ -1,4 +1,5 @@
 #include "runtime.h"
+#include "rwgc.h"
 #include "aio.h"
 #include "timer.h"
 #include "fiber/sched.h"
@@ -52,8 +53,7 @@ rw_str rw_str_from_cstr(const char *cstr, int64_t len) {
 
 rw_str rw_str_copy_cstr(const char *cstr) {
     size_t n = strlen(cstr);
-    char *p = (char *)malloc(n + 1);
-    if (!p) return rw_str_from_cstr("", 0);
+    char *p = (char *)rw_gc_alloc_atomic(n + 1);
     memcpy(p, cstr, n + 1);
     return rw_str_from_cstr(p, (int64_t)n);
 }
@@ -77,7 +77,7 @@ rw_str rw_str_concat(rw_str a, rw_str b) {
         out.ptr = NULL;
         return out;
     }
-    char *p = (char *)malloc((size_t)out.len);
+    char *p = (char *)rw_gc_alloc_atomic((size_t)out.len);
     if (!p) {
         /* OOM: degrade to empty string rather than crash. */
         out.len = 0;
@@ -130,8 +130,7 @@ rw_str rw_str_from_int(int64_t n) {
     out.len = 0;
     out.ptr = NULL;
     if (len <= 0) return out;
-    char *p = (char *)malloc((size_t)len);
-    if (!p) return out;  /* OOM: degrade to empty string, like concat. */
+    char *p = (char *)rw_gc_alloc_atomic((size_t)len);
     memcpy(p, buf, (size_t)len);
     out.len = len;
     out.ptr = p;
@@ -151,8 +150,7 @@ rw_str rw_str_from_float(double v) {
     out.len = 0;
     out.ptr = NULL;
     if (len <= 0) return out;
-    char *p = (char *)malloc((size_t)len);
-    if (!p) return out;
+    char *p = (char *)rw_gc_alloc_atomic((size_t)len);
     memcpy(p, buf, (size_t)len);
     out.len = len;
     out.ptr = p;
@@ -271,7 +269,7 @@ void rw_list_int_push(rw_list_int *out, const rw_list_int *l, int64_t v) {
         new_cap = l->cap * 2;
         while (new_cap < l->len + 1) new_cap *= 2;
     }
-    int64_t *new_data = (int64_t *)malloc((size_t)new_cap * sizeof(int64_t));
+    int64_t *new_data = (int64_t *)rw_gc_alloc_atomic((size_t)new_cap * sizeof(int64_t));
     if (!new_data) {
         /* OOM: degrade to an empty list rather than crash. */
         out->len = 0;
@@ -331,7 +329,7 @@ void rw_list_push(rw_list *out, const rw_list *l, const void *elem, int64_t elem
         new_cap = l->cap * 2;
         while (new_cap < l->len + 1) new_cap *= 2;
     }
-    char *new_data = (char *)malloc((size_t)(new_cap * elem_size));
+    char *new_data = (char *)rw_gc_alloc((size_t)(new_cap * elem_size));
     if (!new_data) {
         out->len = 0;
         out->cap = 0;
@@ -363,8 +361,7 @@ static rw_str str_alloc(int64_t len, char **buf) {
     out.ptr = NULL;
     *buf = NULL;
     if (len <= 0) return out;
-    char *p = (char *)malloc((size_t)len);
-    if (!p) return out;  /* OOM: degrade to "" like concat */
+    char *p = (char *)rw_gc_alloc_atomic((size_t)len);
     *buf = p;
     out.len = len;
     out.ptr = p;
@@ -382,7 +379,7 @@ void rw_str_split(rw_list *out, rw_str s, rw_str sep) {
             else i++;
         }
     }
-    rw_str *parts = (rw_str *)malloc((size_t)n * sizeof(rw_str));
+    rw_str *parts = (rw_str *)rw_gc_alloc((size_t)n * sizeof(rw_str));
     if (!parts) return;
     int64_t k = 0, start = 0;
     if (sep.len > 0) {
@@ -534,7 +531,7 @@ void rw_list_slice(rw_list *out, const rw_list *l, int64_t start, int64_t stop, 
     out->cap = 0;
     out->data = NULL;
     if (n <= 0) return;
-    char *data = (char *)malloc((size_t)(n * elem_size));
+    char *data = (char *)rw_gc_alloc((size_t)(n * elem_size));
     if (!data) return;
     memcpy(data, l->data + start * elem_size, (size_t)(n * elem_size));
     out->len = n;
@@ -591,7 +588,7 @@ static char *entry_key(const rw_dict *d, char *e) { (void)d; return e + 16; }
 static char *entry_val(const rw_dict *d, char *e) { return e + 16 + d->key_size; }
 
 rw_dict *rw_dict_new(int64_t key_kind, int64_t val_size) {
-    rw_dict *d = (rw_dict *)calloc(1, sizeof *d);
+    rw_dict *d = (rw_dict *)rw_gc_alloc(sizeof *d);   /* zero-filled */
     if (!d) { fputs("rw: out of memory (dict)\n", stderr); abort(); }
     d->key_kind = key_kind;
     d->key_size = key_kind == 0 ? (int64_t)sizeof(int64_t) : (int64_t)sizeof(rw_str);
@@ -615,10 +612,10 @@ static int64_t dict_find_slot(const rw_dict *d, const void *key, uint64_t h) {
 
 static void dict_rebuild(rw_dict *d, int64_t new_cap) {
     /* Compact live entries into a new array and rebuild the index. */
-    char *entries = (char *)malloc((size_t)(new_cap * d->entry_size));
+    char *entries = (char *)rw_gc_alloc((size_t)(new_cap * d->entry_size));
     int64_t index_cap = 8;
     while (index_cap * 2 < new_cap * 3) index_cap *= 2;  /* load <= 2/3 */
-    int64_t *index = (int64_t *)malloc((size_t)index_cap * sizeof(int64_t));
+    int64_t *index = (int64_t *)rw_gc_alloc_atomic((size_t)index_cap * sizeof(int64_t));
     if (!entries || !index) { fputs("rw: out of memory (dict)\n", stderr); abort(); }
     for (int64_t i = 0; i < index_cap; i++) index[i] = -1;
     int64_t n = 0;
@@ -631,8 +628,7 @@ static void dict_rebuild(rw_dict *d, int64_t new_cap) {
         while (index[j] >= 0) j = (j + 1) & mask;
         index[j] = n++;
     }
-    free(d->entries);
-    free(d->index);
+    /* The old arrays become garbage (spec 67). */
     d->entries = entries;
     d->index = index;
     d->index_cap = index_cap;
@@ -709,7 +705,7 @@ static void dict_collect(rw_list *out, rw_dict *d, int keys) {
     out->cap = 0;
     out->data = NULL;
     if (d->len == 0) return;
-    char *data = (char *)malloc((size_t)(d->len * size));
+    char *data = (char *)rw_gc_alloc((size_t)(d->len * size));
     if (!data) return;
     int64_t n = 0;
     for (int64_t i = 0; i < d->used; i++) {
@@ -752,7 +748,7 @@ void rw_os_args(rw_list *out) {
     out->cap = 0;
     out->data = NULL;
     if (g_argc <= 0) return;
-    rw_str *items = (rw_str *)malloc((size_t)g_argc * sizeof(rw_str));
+    rw_str *items = (rw_str *)rw_gc_alloc((size_t)g_argc * sizeof(rw_str));
     if (!items) return;
     for (int32_t i = 0; i < g_argc; i++) {
         items[i] = rw_str_from_cstr(g_argv[i], (int64_t)strlen(g_argv[i]));
@@ -894,8 +890,7 @@ double rw_rand_float(void) {
 
 rw_str rw_rand_bytes(int64_t n) {
     if (n <= 0) return rw_str_from_cstr("", 0);
-    char *p = (char *)malloc((size_t)n);
-    if (!p) { fputs("rw: out of memory\n", stderr); abort(); }
+    char *p = (char *)rw_gc_alloc_atomic((size_t)n);
     os_random(p, (size_t)n);
     rw_str out;
     out.len = n;

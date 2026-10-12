@@ -136,6 +136,5 @@ The framework adds `Content-Length` and `Connection` (`keep-alive` or `close`) t
 
 TLS, chunked responses (streaming), and compression. HTML templates come
 from the stdlib `template` module (spec 66); `examples/web_app.rw`'s
-`/page/:name` uses one. Strings and
-lists allocated while handling a request are not freed (memory management,
-#67).
+`/page/:name` uses one. Memory is reclaimed by the garbage collector
+(spec 67), so a long-running server's memory stays flat.
