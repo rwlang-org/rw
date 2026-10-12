@@ -49,6 +49,14 @@ rw_str rw_str_from_cstr(const char *cstr, int64_t len) {
     return s;
 }
 
+rw_str rw_str_copy_cstr(const char *cstr) {
+    size_t n = strlen(cstr);
+    char *p = (char *)malloc(n + 1);
+    if (!p) return rw_str_from_cstr("", 0);
+    memcpy(p, cstr, n + 1);
+    return rw_str_from_cstr(p, (int64_t)n);
+}
+
 /* ---------- string ops ---------- */
 
 int64_t rw_str_len(rw_str s) {
@@ -705,7 +713,7 @@ void rw_os_exit(int64_t code) {
 rw_str rw_os_getcwd(void) {
     char buf[4096];
     if (!getcwd(buf, sizeof buf)) return rw_str_from_cstr("", 0);
-    return rw_str_from_cstr(buf, (int64_t)strlen(buf));
+    return rw_str_copy_cstr(buf);
 }
 
 int8_t rw_os_chdir(rw_str path) {

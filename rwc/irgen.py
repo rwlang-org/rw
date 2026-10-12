@@ -180,6 +180,13 @@ class IRGen:
             m, ir.FunctionType(I8, [RW_STR_TY, RW_STR_TY]), "rw_os_setenv")
         self._rw_os_exit = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_os_exit")
         self._rw_os_getcwd = ir.Function(m, ir.FunctionType(RW_STR_TY, []), "rw_os_getcwd")
+        # address-based I/O entry points (spec 50)
+        self._rw_dial = ir.Function(m, ir.FunctionType(I64, [RW_STR_TY]), "rw_dial")
+        self._rw_listen = ir.Function(m, ir.FunctionType(I64, [RW_STR_TY]), "rw_listen")
+        self._rw_accept = ir.Function(m, ir.FunctionType(I64, [I64]), "rw_accept")
+        self._rw_open = ir.Function(m, ir.FunctionType(I64, [RW_STR_TY, RW_STR_TY]), "rw_open")
+        self._rw_local_addr = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_local_addr")
+        self._rw_peer_addr = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_peer_addr")
         self._rw_os_chdir = ir.Function(m, ir.FunctionType(I8, [RW_STR_TY]), "rw_os_chdir")
         # string builtins (spec 28); split/join take the list by pointer.
         s2s = ir.FunctionType(RW_STR_TY, [RW_STR_TY])
@@ -1381,6 +1388,12 @@ class IRGen:
             "os_exit": self._rw_os_exit,
             "os_getcwd": self._rw_os_getcwd,
             "os_chdir": self._rw_os_chdir,
+            "dial": self._rw_dial,
+            "listen": self._rw_listen,
+            "accept": self._rw_accept,
+            "open": self._rw_open,
+            "local_addr": self._rw_local_addr,
+            "peer_addr": self._rw_peer_addr,
         }
         if call.callee in direct:
             fn = direct[call.callee]

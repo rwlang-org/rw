@@ -92,6 +92,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "await_all", "await_any",
     "mutex_new", "mutex_lock", "mutex_unlock", "mutex_try_lock",
     "os_args", "os_getenv", "os_setenv", "os_exit", "os_getcwd", "os_chdir",
+    "dial", "listen", "accept", "open", "local_addr", "peer_addr",
 })
 
 _DICT_BUILTINS = frozenset({
@@ -143,6 +144,13 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
     "os_exit": ((T.INT,), T.VOID),
     "os_getcwd": ((), T.STRING),
     "os_chdir": ((T.STRING,), T.BOOL),
+    # spec 50
+    "dial": ((T.STRING,), T.INT),
+    "listen": ((T.STRING,), T.INT),
+    "accept": ((T.INT,), T.INT),
+    "open": ((T.STRING, T.STRING), T.INT),
+    "local_addr": ((T.INT,), T.STRING),
+    "peer_addr": ((T.INT,), T.STRING),
 }
 
 

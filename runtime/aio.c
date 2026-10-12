@@ -22,7 +22,7 @@
 #define RW_AIO_DEFAULT_THREADS 4
 #define RW_AIO_MAX_THREADS 64
 
-typedef enum { RW_AIO_READ, RW_AIO_WRITE } rw_aio_op;
+typedef enum { RW_AIO_READ, RW_AIO_WRITE, RW_AIO_CALL } rw_aio_op;
 
 typedef struct rw_aio_task {
     rw_aio_op op;
@@ -31,6 +31,8 @@ typedef struct rw_aio_task {
     int64_t   max;           /* read */
     rw_str    in;            /* write: caller-provided buffer */
     int64_t   wret;          /* write result */
+    void    (*fn)(void *);   /* call */
+    void     *arg;           /* call */
     rw_fiber_handle *waiter; /* fiber to wake on completion */
     struct rw_aio_task *next;
 } rw_aio_task;
@@ -75,6 +77,8 @@ static void run_task(rw_aio_task *t) {
         ssize_t n = read((int)t->fd, buf, (size_t)t->max);
         if (n > 0) { t->out->len = n; t->out->ptr = buf; }
         else       { free(buf); t->out->len = 0; t->out->ptr = NULL; }
+    } else if (t->op == RW_AIO_CALL) {
+        t->fn(t->arg);
     } else { /* RW_AIO_WRITE */
         ssize_t n = write((int)t->fd, t->in.ptr, (size_t)t->in.len);
         t->wret = (int64_t)n;
@@ -157,4 +161,13 @@ int64_t rw_aio_write(int64_t fd, rw_str b) {
     t.waiter = me; t.next = NULL;
     rw_sched_park_commit(commit_task, &t);
     return t.wret;
+}
+
+void rw_aio_call(void (*fn)(void *), void *arg) {
+    rw_fiber_handle *me = rw_sched_current_fiber();
+    if (!me) { fn(arg); return; }
+    rw_aio_task t;
+    t.op = RW_AIO_CALL; t.fn = fn; t.arg = arg;
+    t.waiter = me; t.next = NULL;
+    rw_sched_park_commit(commit_task, &t);
 }
