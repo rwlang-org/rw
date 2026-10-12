@@ -135,7 +135,12 @@ struct rw_fiber_handle {
      * detach. Both use an atomic exchange and whoever arrives second frees,
      * so each handle is freed exactly once and never while in use. */
     _Atomic int      reap;
+    /* Position in the global completion order, set just before DONE is
+     * published (spec 45: await_any returns the first future to finish). */
+    uint64_t         finish_seq;
 };
+
+static _Atomic uint64_t g_finish_seq = 0;
 
 enum {
     REAP_NONE = 0,
@@ -577,6 +582,7 @@ static void park_on(rw_fiber_handle *target) {
  * ctx. Called from every fiber_entry_<T> trampoline. The result must
  * already be written into h->result before calling this. */
 static void finalize_fiber(rw_fiber_handle *h) {
+    h->finish_seq = atomic_fetch_add_explicit(&g_finish_seq, 1, memory_order_relaxed);
     /* Publish: result write (already done by caller) happens-before
      * this release-store of DONE; any joiner that observes DONE with
      * acquire ordering will see the result. */
@@ -722,6 +728,10 @@ void rw_sched_detach(rw_fiber_handle *h) {
 
 int8_t rw_sched_is_done(rw_fiber_handle *h) {
     return atomic_load_explicit(&h->state, memory_order_acquire) == RW_FIBER_DONE;
+}
+
+uint64_t rw_sched_finish_seq(rw_fiber_handle *h) {
+    return h->finish_seq;  /* valid once rw_sched_is_done(h) */
 }
 
 int64_t rw_sched_live_fibers(void) {

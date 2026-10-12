@@ -894,9 +894,20 @@ int64_t rw_await_any(const rw_list *futures) {
     }
     rw_future_t **fs = (rw_future_t **)futures->data;
     for (;;) {
+        /* Several may have finished since the last check: pick the one that
+         * finished first, not the one with the lowest index. */
+        int64_t best = -1;
+        uint64_t best_seq = 0;
         for (int64_t i = 0; i < futures->len; i++) {
-            if (rw_sched_is_done((rw_fiber_handle *)fs[i])) return i;
+            rw_fiber_handle *h = (rw_fiber_handle *)fs[i];
+            if (!rw_sched_is_done(h)) continue;
+            uint64_t seq = rw_sched_finish_seq(h);
+            if (best < 0 || seq < best_seq) {
+                best = i;
+                best_seq = seq;
+            }
         }
+        if (best >= 0) return best;
         /* A fiber cannot sit on several wait lists at once, so poll; the
          * sleep parks a fiber (or sleeps the main thread) between checks. */
         rw_sleep_ms(1);
