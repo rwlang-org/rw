@@ -1,0 +1,27 @@
+# Many fibers update shared state; the mutex keeps every update.
+class Counter:
+    value: int
+    lock: Mutex
+
+def bump(c: Counter, times: int) -> int:
+    for i in range(0, times):
+        mutex_lock(c.lock)
+        v = c.value
+        sleep(0)                 # give other fibers a chance to interleave
+        c.value = v + 1
+        mutex_unlock(c.lock)
+    return times
+
+def main() -> int:
+    c = Counter(0, mutex_new())
+    fs: List[Future[int]] = []
+    for i in range(0, 50):
+        fs = list_push(fs, spawn bump(c, 20))
+    done = 0
+    for n in await_all(fs):
+        done += n
+    print(f"{done} updates, counter = {c.value}")
+    if mutex_try_lock(c.lock):
+        print("lock is free")
+        mutex_unlock(c.lock)
+    return 0

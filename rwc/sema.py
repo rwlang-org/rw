@@ -88,6 +88,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "rand_int", "rand_float", "rand_seed", "rand_bytes",
     "chan_new", "chan_send", "chan_recv", "chan_close",
     "await_all", "await_any",
+    "mutex_new", "mutex_lock", "mutex_unlock", "mutex_try_lock",
     "os_args", "os_getenv", "os_setenv", "os_exit", "os_getcwd", "os_chdir",
 })
 
@@ -128,6 +129,11 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
     "rand_float": ((), T.FLOAT),
     "rand_seed": ((T.INT,), T.VOID),
     "rand_bytes": ((T.INT,), T.BYTES),
+    # spec 46
+    "mutex_new": ((), T.MUTEX),
+    "mutex_lock": ((T.MUTEX,), T.VOID),
+    "mutex_unlock": ((T.MUTEX,), T.VOID),
+    "mutex_try_lock": ((T.MUTEX,), T.BOOL),
     # spec 40
     "os_args": ((), T.list_of(T.STRING)),
     "os_getenv": ((T.STRING,), T.option_of(T.STRING)),
@@ -144,6 +150,7 @@ _BUILTIN_TYPES: Dict[str, T.Type] = {
     "bool": T.BOOL,
     "string": T.STRING,
     "Bytes": T.BYTES,
+    "Mutex": T.MUTEX,
     "List[int]": T.LIST_INT,
     "Option[int]": T.OPTION_INT,
     "Result[int, int]": T.RESULT_INT_INT,

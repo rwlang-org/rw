@@ -63,6 +63,8 @@ def llvm_type_of(t: T.Type) -> ir.Type:
         return I8P  # pointer to a heap hash table (spec 31)
     if isinstance(t, T.ChannelType):
         return I8P  # pointer to a runtime channel (spec 44)
+    if t is T.MUTEX:
+        return I8P  # pointer to a runtime mutex (spec 46)
     if isinstance(t, T.TupleType):
         return ir.LiteralStructType([llvm_type_of(e) for e in t.elems])  # by value (spec 37)
     if isinstance(t, T.FunctionType):
@@ -152,6 +154,11 @@ class IRGen:
         self._rw_chan_recv = ir.Function(m, ir.FunctionType(I8, [I8P, I8P]), "rw_chan_recv")
         self._rw_chan_close = ir.Function(m, ir.FunctionType(ir.VoidType(), [I8P]), "rw_chan_close")
         self._rw_chan_len = ir.Function(m, ir.FunctionType(I64, [I8P]), "rw_chan_len")
+        # Mutex (spec 46)
+        self._rw_mutex_new = ir.Function(m, ir.FunctionType(I8P, []), "rw_mutex_new")
+        self._rw_mutex_lock = ir.Function(m, ir.FunctionType(ir.VoidType(), [I8P]), "rw_mutex_lock")
+        self._rw_mutex_unlock = ir.Function(m, ir.FunctionType(ir.VoidType(), [I8P]), "rw_mutex_unlock")
+        self._rw_mutex_try_lock = ir.Function(m, ir.FunctionType(I8, [I8P]), "rw_mutex_try_lock")
         # await_any (spec 45)
         self._rw_await_any = ir.Function(
             m, ir.FunctionType(I64, [RW_LIST_INT_TY.as_pointer()]), "rw_await_any")
@@ -1311,6 +1318,10 @@ class IRGen:
             "rand_float": self._rw_rand_float,
             "rand_seed": self._rw_rand_seed,
             "rand_bytes": self._rw_rand_bytes,
+            "mutex_new": self._rw_mutex_new,
+            "mutex_lock": self._rw_mutex_lock,
+            "mutex_unlock": self._rw_mutex_unlock,
+            "mutex_try_lock": self._rw_mutex_try_lock,
             "os_setenv": self._rw_os_setenv,
             "os_exit": self._rw_os_exit,
             "os_getcwd": self._rw_os_getcwd,

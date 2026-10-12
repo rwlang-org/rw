@@ -188,3 +188,72 @@ int64_t rw_chan_len(rw_chan *c) {
     pthread_mutex_unlock(&c->mu);
     return n;
 }
+
+/* ---------- Mutex (spec 46) ----------
+ *
+ * Same waiter machinery as channels. unlock hands the lock directly to the
+ * first waiter (no barging), so waiters acquire it in FIFO order. */
+
+struct rw_mutex {
+    pthread_mutex_t mu;
+    int      locked;
+    rw_waitq waiters;
+};
+
+rw_mutex *rw_mutex_new(void) {
+    rw_mutex *m = (rw_mutex *)calloc(1, sizeof *m);
+    if (!m) { fputs("rw: out of memory (mutex)\n", stderr); abort(); }
+    pthread_mutex_init(&m->mu, NULL);
+    return m;
+}
+
+static void mutex_unlock_commit(rw_fiber_handle *self, void *arg) {
+    (void)self;
+    pthread_mutex_unlock(&((rw_mutex *)arg)->mu);
+}
+
+void rw_mutex_lock(rw_mutex *m) {
+    pthread_mutex_lock(&m->mu);
+    if (!m->locked) {
+        m->locked = 1;
+        pthread_mutex_unlock(&m->mu);
+        return;
+    }
+    rw_waiter w;
+    w.value = NULL;
+    q_push(&m->waiters, &w);
+    w.fiber = rw_sched_current_fiber();
+    w.done = 0;
+    if (w.fiber) {
+        rw_sched_park_commit(mutex_unlock_commit, m);  /* releases m->mu */
+        return;  /* the unlocker handed us the lock */
+    }
+    pthread_cond_init(&w.cv, NULL);
+    while (!w.done) pthread_cond_wait(&w.cv, &m->mu);
+    pthread_cond_destroy(&w.cv);
+    pthread_mutex_unlock(&m->mu);
+}
+
+int8_t rw_mutex_try_lock(rw_mutex *m) {
+    pthread_mutex_lock(&m->mu);
+    int8_t got = !m->locked;
+    if (got) m->locked = 1;
+    pthread_mutex_unlock(&m->mu);
+    return got;
+}
+
+void rw_mutex_unlock(rw_mutex *m) {
+    pthread_mutex_lock(&m->mu);
+    if (!m->locked) {
+        pthread_mutex_unlock(&m->mu);
+        fputs("rw: unlock of a mutex that is not locked\n", stderr);
+        abort();
+    }
+    rw_waiter *w = q_pop(&m->waiters);
+    if (w) {
+        wake(w);          /* ownership passes to w; stays locked */
+    } else {
+        m->locked = 0;
+    }
+    pthread_mutex_unlock(&m->mu);
+}

@@ -33,6 +33,7 @@ BOOL = _Primitive("bool")
 STRING = _Primitive("string")
 VOID = _Primitive("void")
 BYTES = _Primitive("Bytes")
+MUTEX = _Primitive("Mutex")  # a reference to a runtime lock (spec 46)
 
 
 @dataclass(eq=False)
