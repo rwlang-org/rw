@@ -194,6 +194,11 @@ class IRGen:
             m, ir.FunctionType(ir.VoidType(), [I64, I64]), "rw_set_read_timeout")
         self._rw_set_write_timeout = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [I64, I64]), "rw_set_write_timeout")
+        # socket operations (spec 56)
+        self._rw_sock_shutdown = ir.Function(m, ir.FunctionType(I64, [I64, RW_STR_TY]), "rw_sock_shutdown")
+        self._rw_set_nodelay = ir.Function(m, ir.FunctionType(I64, [I64, I8]), "rw_set_nodelay")
+        self._rw_set_keepalive = ir.Function(m, ir.FunctionType(I64, [I64, I8]), "rw_set_keepalive")
+        self._rw_set_backlog = ir.Function(m, ir.FunctionType(I64, [I64, I64]), "rw_set_backlog")
         # I/O errors (spec 51)
         self._rw_last_error = ir.Function(m, ir.FunctionType(I64, []), "rw_last_error")
         self._rw_error_name = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_error_name")
@@ -1416,6 +1421,10 @@ class IRGen:
             "dial_timeout": self._rw_dial_timeout,
             "set_read_timeout": self._rw_set_read_timeout,
             "set_write_timeout": self._rw_set_write_timeout,
+            "shutdown": self._rw_sock_shutdown,
+            "set_nodelay": self._rw_set_nodelay,
+            "set_keepalive": self._rw_set_keepalive,
+            "set_backlog": self._rw_set_backlog,
             "error_name": self._rw_error_name,
             "error_message": self._rw_error_message,
         }

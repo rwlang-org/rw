@@ -182,6 +182,14 @@ def test_oversized_head_is_413(server):
     assert status == 413
 
 
+def test_413_with_unread_data_is_not_reset(server):
+    # The server stops reading at 64 KiB but the client keeps sending; the
+    # lingering close must still deliver the response instead of an RST.
+    head = b"GET / HTTP/1.1\r\nX: " + b"a" * 200000 + b"\r\n\r\n"
+    status, _, _ = _parse(_request(server, head))
+    assert status == 413
+
+
 def test_oversized_body_is_413(server):
     status, _, _ = _parse(_request(server, b"POST /echo HTTP/1.1\r\nContent-Length: 2000000\r\n\r\n"))
     assert status == 413

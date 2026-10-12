@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -339,4 +340,36 @@ rw_str rw_peer_addr(int64_t fd) {
     memset(&ss, 0, sizeof ss);
     if (getpeername((int)fd, (struct sockaddr *)&ss, &len) != 0) return rw_str_from_cstr("", 0);
     return format_sockaddr(&ss, len);
+}
+
+/* ---- socket operations (spec 56) ---- */
+
+static int64_t report(int rc) {
+    rw_set_last_error(rc == 0 ? 0 : rw_errno);
+    return rc == 0 ? 0 : -1;
+}
+
+int64_t rw_sock_shutdown(int64_t fd, rw_str how) {
+    int h;
+    if (how.len == 4 && memcmp(how.ptr, "read", 4) == 0) h = SHUT_RD;
+    else if (how.len == 5 && memcmp(how.ptr, "write", 5) == 0) h = SHUT_WR;
+    else if (how.len == 4 && memcmp(how.ptr, "both", 4) == 0) h = SHUT_RDWR;
+    else { rw_set_last_error(EINVAL); return -1; }
+    return report(shutdown((int)fd, h));
+}
+
+int64_t rw_set_nodelay(int64_t fd, int8_t on) {
+    int v = on ? 1 : 0;
+    return report(setsockopt((int)fd, IPPROTO_TCP, TCP_NODELAY, &v, sizeof v));
+}
+
+int64_t rw_set_keepalive(int64_t fd, int8_t on) {
+    int v = on ? 1 : 0;
+    return report(setsockopt((int)fd, SOL_SOCKET, SO_KEEPALIVE, &v, sizeof v));
+}
+
+/* listen(2) again on a listening socket only changes its backlog. */
+int64_t rw_set_backlog(int64_t fd, int64_t n) {
+    if (n < 1) { rw_set_last_error(EINVAL); return -1; }
+    return report(listen((int)fd, (int)(n > 65535 ? 65535 : n)));
 }
