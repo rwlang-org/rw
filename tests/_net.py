@@ -2,27 +2,55 @@
 
 from __future__ import annotations
 
-import socket
 import subprocess
 import time
 
+# Port 0 instead of a "free" port picked in advance (spec 50, #163): the
+# kernel assigns the port at listen() and the server announces it, so two
+# tests can never race for the same port and no readiness probe is needed.
+_ANNOUNCE = '''
 
-def wait_for_port(port: int, proc: subprocess.Popen, timeout: float = 10.0) -> None:
-    """Block until `proc` accepts TCP connections on `port`.
+def rw_test_announce(ln: int) -> int:
+    write(1, bytes_from_str(local_addr(ln) + "\\n"))
+    return ln
+'''
 
-    A fixed sleep was flaky on a loaded machine: the server had not reached
-    listen() yet and the first request was refused. The probe connection is
-    closed immediately; the servers treat it as a client that hung up.
-    """
+
+def listen_on_port_zero(src: str) -> str:
+    """Rewrite the program's `tcp_listen(...)` call to listen on
+    127.0.0.1:0 and print the bound address as its first output line."""
+    import re
+
+    new, n = re.subn(r"tcp_listen\([^)]*\)", 'rw_test_announce(listen("tcp://127.0.0.1:0"))', src, count=1)
+    assert n == 1, "no tcp_listen(...) call to rewrite"
+    return new + _ANNOUNCE
+
+
+def start_announced(argv: list[str], env: dict | None = None, timeout: float = 10.0) -> tuple[subprocess.Popen, int]:
+    """Start a server built from `listen_on_port_zero` source and return
+    (proc, port) once it has announced its address. The rest of its stdout
+    is drained in the background so a chatty server never blocks on a full
+    pipe."""
+    import selectors
+    import threading
+
+    proc = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    sel = selectors.DefaultSelector()
+    sel.register(proc.stdout, selectors.EVENT_READ)
+    line = b""
     deadline = time.monotonic() + timeout
-    while True:
-        if proc.poll() is not None:
+    while not line.endswith(b"\n"):
+        left = deadline - time.monotonic()
+        if left <= 0 or not sel.select(left):
+            proc.kill()
+            raise AssertionError(f"server did not announce its address within {timeout}s")
+        b = proc.stdout.read1(1) if hasattr(proc.stdout, "read1") else proc.stdout.read(1)
+        if not b:
             _, err = proc.communicate(timeout=1.0)
             raise AssertionError(f"server exited early (rc={proc.returncode}): {err!r}")
-        try:
-            socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
-            return
-        except OSError:
-            if time.monotonic() > deadline:
-                raise AssertionError(f"server did not listen on port {port} within {timeout}s") from None
-            time.sleep(0.05)
+        line += b
+    sel.close()
+    addr = line.decode().strip()
+    assert addr.startswith("tcp://127.0.0.1:"), addr
+    threading.Thread(target=lambda: proc.stdout.read(), daemon=True).start()
+    return proc, int(addr.rsplit(":", 1)[1])

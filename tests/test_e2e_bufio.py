@@ -13,6 +13,8 @@ import threading
 import time
 from pathlib import Path
 
+from ._net import listen_on_port_zero, start_announced
+
 REPO = Path(__file__).resolve().parent.parent
 EXAMPLES = REPO / "examples"
 
@@ -90,22 +92,15 @@ def test_reader_one_byte_at_a_time():
 
 
 def test_tcp_chat_example():
-    port_sock = socket.socket()
-    port_sock.bind(("127.0.0.1", 0))
-    port = port_sock.getsockname()[1]
-    port_sock.close()
     td = Path(tempfile.mkdtemp())
-    src = (EXAMPLES / "tcp_chat.rw").read_text().replace("tcp_listen(8080)", f"tcp_listen({port})")
+    src = listen_on_port_zero((EXAMPLES / "tcp_chat.rw").read_text())
     (td / "chat.rw").write_text(src)
     exe = td / "chat"
     build = subprocess.run([sys.executable, "-m", "rwc.cli", "build", str(td / "chat.rw"), "-o", str(exe)],
                            capture_output=True, text=True, cwd=REPO)
     assert build.returncode == 0, build.stderr
-    proc = subprocess.Popen([str(exe)], env={**os.environ, "RW_WORKERS": "2"},
-                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    proc, port = start_announced([str(exe)], env={**os.environ, "RW_WORKERS": "2"})
     try:
-        from ._net import wait_for_port
-        wait_for_port(port, proc)
         with socket.create_connection(("127.0.0.1", port), timeout=10) as c:
             f = c.makefile("rwb", buffering=0)
             c.sendall(b"hel")

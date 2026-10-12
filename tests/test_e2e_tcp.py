@@ -3,32 +3,22 @@
 from __future__ import annotations
 
 import os
-import re
 import socket
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from ._net import wait_for_port
+from ._net import listen_on_port_zero, start_announced
 
 REPO = Path(__file__).resolve().parent.parent
 EXAMPLES = REPO / "examples"
 
 
-def _free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def _build_echo_server(port: int) -> Path:
-    """Materialise examples/tcp_echo.rw with the desired port and
-    build it. Returns the path to the built binary."""
-    src = (EXAMPLES / "tcp_echo.rw").read_text()
-    src = re.sub(r"tcp_listen\(\d+\)", f"tcp_listen({port})", src, count=1)
+def _build_echo_server() -> Path:
+    """Materialise examples/tcp_echo.rw listening on port 0 and build it.
+    Returns the path to the built binary."""
+    src = listen_on_port_zero((EXAMPLES / "tcp_echo.rw").read_text())
     td = tempfile.mkdtemp()
     rw_path = Path(td) / "tcp_echo_test.rw"
     rw_path.write_text(src)
@@ -41,20 +31,13 @@ def _build_echo_server(port: int) -> Path:
     return out
 
 
-def _start_server(binary: Path, port: int) -> subprocess.Popen:
-    env = {**os.environ, "RW_WORKERS": "2"}
-    proc = subprocess.Popen(
-        [str(binary)], env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    wait_for_port(port, proc)
-    return proc
+def _start_server(binary: Path) -> tuple[subprocess.Popen, int]:
+    return start_announced([str(binary)], env={**os.environ, "RW_WORKERS": "2"})
 
 
 def test_echo_single_connection():
-    port = _free_port()
-    binary = _build_echo_server(port)
-    proc = _start_server(binary, port)
+    binary = _build_echo_server()
+    proc, port = _start_server(binary)
     try:
         s = socket.create_connection(("127.0.0.1", port), timeout=2.0)
         s.sendall(b"hello\n")
@@ -67,9 +50,8 @@ def test_echo_single_connection():
 
 
 def test_echo_ten_concurrent_connections():
-    port = _free_port()
-    binary = _build_echo_server(port)
-    proc = _start_server(binary, port)
+    binary = _build_echo_server()
+    proc, port = _start_server(binary)
     try:
         socks = [socket.create_connection(("127.0.0.1", port), timeout=2.0)
                  for _ in range(10)]
