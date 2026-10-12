@@ -105,6 +105,24 @@ int64_t rw_write(int64_t fd, rw_str b) {
     return n;
 }
 
+/* Write all of `b`, retrying partial writes (spec 52). Returns b.len, or -1
+ * with last_error set if any write fails. */
+int64_t rw_write_all(int64_t fd, rw_str b) {
+    int64_t off = 0;
+    while (off < b.len) {
+        rw_errno = 0;
+        rw_str rest = { b.len - off, b.ptr + off };
+        int64_t n = write_impl(fd, rest);
+        if (n <= 0) {
+            rw_set_last_error(n < 0 && rw_errno ? rw_errno : EIO);
+            return -1;
+        }
+        off += n;
+    }
+    rw_set_last_error(0);
+    return off;
+}
+
 int64_t rw_close(int64_t fd) {
     int rc = close((int)fd);
     rw_set_last_error(rc < 0 ? rw_errno : 0);
