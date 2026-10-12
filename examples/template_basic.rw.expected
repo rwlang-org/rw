@@ -1,0 +1,12 @@
+[Hello, &lt;rw&gt; &amp; co!]
+[<b> <b>]
+[<li>a=1</li><li>b=2.5</li>]
+[none]
+[x y ]
+[Tokyo /  / ]
+[ann in rw.dev]
+[off 3]
+error: unclosed section 'a' at line 1, column 1
+error: unexpected closing tag 'a' at line 1, column 1
+error: 'b' closes section 'a' at line 1, column 7
+error: unclosed tag at line 1, column 4

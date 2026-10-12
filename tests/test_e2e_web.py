@@ -377,3 +377,11 @@ def test_chunked_split_across_reads(server):
 def test_bad_bodies(server, raw, status):
     resp = _request(server, b"POST /echo HTTP/1.1\r\nHost: x\r\nConnection: close\r\n" + raw)
     assert _parse(resp)[0] == status
+
+
+def test_template_page(server):
+    status, headers, body = _call(server, "GET", "/page/%3Cann%3E?tags=a,b%26c")
+    assert (status, headers["content-type"]) == (200, "text/html; charset=utf-8")
+    assert body == b"<h1>Hello, &lt;ann&gt;</h1><span>a</span><span>b&amp;c</span>\n"
+    assert _call(server, "GET", "/page/bob")[2] == b"<h1>Hello, bob</h1><p>no tags</p>\n"
+
