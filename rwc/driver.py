@@ -137,6 +137,18 @@ def emit_ir(source: str, filename: str, checked: bool = True) -> str:
     return str(llmod)
 
 
+def check_source(source: str, filename: str) -> None:
+    """Parse and type-check without generating code (`rwc check`, spec 48).
+    Raises CompileError on the first error."""
+    try:
+        program = load_program(source, filename)
+        analyze_program(program, filename=filename)
+    except LexerError as e:
+        raise CompileError(Diagnostic(filename, e.line, e.col, e.length, e.message)) from e
+    except ParserError as e:
+        raise CompileError(Diagnostic(filename, e.line, e.col, e.length, e.message)) from e
+
+
 def emit_ast(source: str, filename: str) -> ASTModule:
     """Return the entry module AST (imports resolved & parsed, not merged)."""
     return load_program(source, filename).root
