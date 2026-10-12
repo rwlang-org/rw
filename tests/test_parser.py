@@ -566,7 +566,22 @@ def test_parse_for_each():
     assert isinstance(loop.iterable, A.Name) and loop.iterable.name == "xs"
 
 
-def test_parse_index_assignment_is_error():
-    with pytest.raises(ParserError) as ei:
-        parse_src("def main() -> int:\n    xs[0] = 1\n    return 0\n")
-    assert "immutable" in str(ei.value)
+def test_parse_index_assignment():
+    # Parsed for every object; sema accepts it only for dicts (spec 31).
+    mod = parse_src("def main() -> int:\n    d[k] = 1\n    d[\"x\"] += 2\n    return 0\n")
+    s0, s1 = mod.functions[0].body[0], mod.functions[0].body[1]
+    assert isinstance(s0, A.IndexAssign) and isinstance(s0.index, A.Name)
+    assert isinstance(s1, A.IndexAssign) and isinstance(s1.value, A.BinOp)
+    assert isinstance(s1.value.left, A.Index)
+
+
+def test_parse_dict_type():
+    mod = parse_src("def f(d: Dict[string, List[string]]) -> int:\n    return 0\n")
+    t = mod.functions[0].params[0].type_expr
+    assert isinstance(t, A.TypeDict) and t.key.name == "string"
+    assert isinstance(t.value, A.TypeList)
+
+
+def test_parse_slice_assignment_is_error():
+    with pytest.raises(ParserError):
+        parse_src("def main() -> int:\n    xs[0:1] = 1\n    return 0\n")

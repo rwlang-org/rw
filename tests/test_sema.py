@@ -1964,3 +1964,54 @@ def test_spawn_with_unsupported_return_type_is_error(ret):
             if ret.startswith("Option") else
             f"def f() -> {ret}:\n    return Err(1)\n\ndef main() -> int:\n    spawn f()\n    return 0\n")
     assert f"cannot spawn a function returning `{ret}`" in e.diagnostic.message
+
+
+# ----- Dict[K, V] (spec 31) -----
+
+def test_dict_ok():
+    check(
+        "class User:\n    name: string\n\n"
+        "def count(words: List[string]) -> Dict[string, int]:\n"
+        "    c: Dict[string, int] = dict_new()\n"
+        "    for w in words:\n"
+        "        if dict_has(c, w):\n"
+        "            c[w] += 1\n"
+        "        else:\n"
+        "            c[w] = 1\n"
+        "    return c\n\n"
+        "def main() -> int:\n"
+        '    c: Dict[string, int] = count(["a", "b"])\n'
+        "    users: Dict[int, User] = dict_new()\n"
+        '    users[1] = User("ann")\n'
+        "    n: int = len(c) + len(dict_keys(c)) + len(dict_values(users))\n"
+        "    for k in c:\n"
+        "        print(k + str(c[k]))\n"
+        "    match dict_get(users, 1):\n"
+        "        case Some(u):\n"
+        "            print(u.name)\n"
+        "        case None:\n"
+        '            print("none")\n'
+        "    removed: bool = dict_remove(users, 1)\n"
+        "    return n\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ("    d: Dict[float, int] = dict_new()\n", "Dict keys must be int or string"),
+        ("    d: Dict[string, int] = dict_new()\n    d[1] = 2\n", "Dict[string, int] key must be string"),
+        ('    d: Dict[string, int] = dict_new()\n    d["a"] = "b"\n', "cannot assign `string` to an element of Dict[string, int]"),
+        ("    xs: List[int] = [1]\n    xs[0] = 2\n", "lists and strings are immutable"),
+        ("    print(len(dict_new()))\n", "cannot infer the type of dict_new()"),
+        ('    d: Dict[string, int] = dict_new()\n    print(dict_get(d, 1))\n', "dict_get argument 2 must be string"),
+        ("    n: int = 3\n    print(dict_has(n, 1))\n", "dict_has argument 1 must be a Dict"),
+    ],
+)
+def test_dict_errors(body, msg):
+    e = err("def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message
+
+
+def test_user_function_named_like_dict_builtin_prefix():
+    check("def dict_size(n: int) -> int:\n    return n\n\ndef main() -> int:\n    return dict_size(3)\n")

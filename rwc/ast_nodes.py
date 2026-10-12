@@ -64,7 +64,16 @@ class TypeResult:
     col: int
 
 
-TypeExpr = Union[TypeName, TypeFuture, TypeCallable, TypeList, TypeOption, TypeResult]
+@dataclass
+class TypeDict:
+    """`Dict[K, V]` (spec 31)."""
+    key: "TypeExpr"
+    value: "TypeExpr"
+    line: int
+    col: int
+
+
+TypeExpr = Union[TypeName, TypeFuture, TypeCallable, TypeList, TypeOption, TypeResult, TypeDict]
 
 
 # ----- Expressions -----
@@ -361,9 +370,19 @@ class FieldAssign:
     col: int
 
 
+@dataclass
+class IndexAssign:
+    """`obj[index] = value`; valid only for dicts (spec 31)."""
+    obj: Expr
+    index: Expr
+    value: Expr
+    line: int
+    col: int
+
+
 Stmt = Union[
     VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt, Break, Continue, Assert,
-    FieldAssign, ForEach,
+    FieldAssign, ForEach, IndexAssign,
 ]
 
 

@@ -1,0 +1,69 @@
+class User:
+    name: string
+    age: int
+
+def count_words(text: string) -> Dict[string, int]:
+    counts: Dict[string, int] = dict_new()
+    for w in str_split(text, " "):
+        if dict_has(counts, w):
+            counts[w] += 1
+        else:
+            counts[w] = 1
+    return counts
+
+def bump(d: Dict[string, int], key: string) -> int:
+    # Dicts are references: the caller sees this update.
+    d[key] = d[key] * 10
+    return 0
+
+def main() -> int:
+    counts: Dict[string, int] = count_words("the cat and the hat and the bat")
+    print(len(counts))
+    for w in counts:
+        print(w + " " + str(counts[w]))
+    print(str_join(dict_keys(counts), ","))
+    total: int = 0
+    for n in dict_values(counts):
+        total += n
+    print(total)
+
+    bump(counts, "the")
+    print(counts["the"])
+
+    match dict_get(counts, "dog"):
+        case Some(n):
+            print(n)
+        case None:
+            print("no dog")
+
+    # Removing and re-adding moves a key to the end.
+    print(dict_remove(counts, "cat"))
+    print(dict_remove(counts, "cat"))
+    counts["cat"] = 1
+    print(str_join(dict_keys(counts), ","))
+
+    # Int keys and record values.
+    users: Dict[int, User] = dict_new()
+    users[7] = User("ann", 31)
+    users[-3] = User("bob", 25)
+    users[7].age += 1
+    for id in users:
+        u: User = users[id]
+        print(str(id) + " " + u.name + " " + str(u.age))
+    match dict_get(users, 99):
+        case Some(u):
+            print(u.name)
+        case None:
+            print("no user 99")
+
+    # Many keys force the table to grow; updating inside a loop over the keys
+    # is safe because the loop iterates over a snapshot.
+    squares: Dict[int, int] = dict_new()
+    for i in range(0, 1000):
+        squares[i] = i * i
+    for k in squares:
+        if k % 2 == 0:
+            dict_remove(squares, k)
+    print(len(squares))
+    print(squares[999])
+    return 0
