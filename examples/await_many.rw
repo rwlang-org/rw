@@ -1,0 +1,23 @@
+def work(n: int, ms: int) -> int:
+    sleep(ms)
+    return n * n
+
+def name_of(i: int) -> string:
+    sleep(30 * i)
+    return f"task-{i}"
+
+def main() -> int:
+    futures: List[Future[int]] = []
+    for i in range(1, 6):
+        futures = list_push(futures, spawn work(i, 10 * (6 - i)))
+    results = await_all(futures)
+    for r in results:
+        print(r)
+
+    names: List[Future[string]] = [spawn name_of(3), spawn name_of(1), spawn name_of(2)]
+    first, name = await_any(names)
+    print(f"first done: #{first} {name}")
+    # The others are still running and can be awaited afterwards.
+    rest = [await names[(first + 1) % 3], await names[(first + 2) % 3]]
+    print(len(rest))
+    return 0

@@ -89,6 +89,10 @@ void rw_sched_detach(rw_fiber_handle *h);
 extern _Atomic int32_t rw_preempt_flag;
 void rw_safepoint(void);
 
+/* Whether the fiber has finished (its result can be joined without
+ * blocking). Spec 45. */
+int8_t rw_sched_is_done(rw_fiber_handle *h);
+
 /* Number of fiber handles spawned but not yet freed. For tests. */
 int64_t rw_sched_live_fibers(void);
 
