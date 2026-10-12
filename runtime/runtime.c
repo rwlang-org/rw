@@ -42,6 +42,83 @@ void rw_panic(rw_str msg) {
     exit(1);
 }
 
+/* ---------- assert_eq (spec 68) ---------- */
+
+static void put_where(rw_str where) {
+    fputs("rw: assert_eq failed ", stderr);
+    fwrite(where.ptr, 1, (size_t)where.len, stderr);
+    fputc('\n', stderr);
+}
+
+void rw_assert_eq_fail_i64(int64_t a, int64_t b, rw_str where) {
+    put_where(where);
+    fprintf(stderr, "  left:  %lld\n  right: %lld\n", (long long)a, (long long)b);
+    exit(1);
+}
+
+void rw_assert_eq_fail_f64(double a, double b, rw_str where) {
+    put_where(where);
+    fprintf(stderr, "  left:  %.17g\n  right: %.17g\n", a, b);
+    exit(1);
+}
+
+void rw_assert_eq_fail_bool(int8_t a, int8_t b, rw_str where) {
+    put_where(where);
+    fprintf(stderr, "  left:  %s\n  right: %s\n", a ? "true" : "false", b ? "true" : "false");
+    exit(1);
+}
+
+/* A string as a quoted literal, escaping quotes, backslashes and controls. */
+static void put_quoted(const char *p, int64_t n) {
+    fputc('"', stderr);
+    for (int64_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)p[i];
+        if (c == '"' || c == '\\') fprintf(stderr, "\\%c", c);
+        else if (c == '\n') fputs("\\n", stderr);
+        else if (c == '\t') fputs("\\t", stderr);
+        else if (c == '\r') fputs("\\r", stderr);
+        else if (c < 32 || c == 127) fprintf(stderr, "\\x%02x", c);
+        else fputc(c, stderr);
+    }
+    fputc('"', stderr);
+}
+
+static int64_t line_end(rw_str s, int64_t from) {
+    while (from < s.len && s.ptr[from] != '\n') from++;
+    return from;
+}
+
+void rw_assert_eq_fail_str(rw_str a, rw_str b, rw_str where) {
+    put_where(where);
+    fputs("  left:  ", stderr);
+    put_quoted(a.ptr, a.len);
+    fputs("\n  right: ", stderr);
+    put_quoted(b.ptr, b.len);
+    fputc('\n', stderr);
+    /* Multi-line values: point at the first line that differs. */
+    if (memchr(a.ptr, '\n', (size_t)a.len) || memchr(b.ptr, '\n', (size_t)b.len)) {
+        int64_t ia = 0, ib = 0, line = 1;
+        for (;;) {
+            int64_t ea = line_end(a, ia), eb = line_end(b, ib);
+            int same = (ea - ia == eb - ib) && memcmp(a.ptr + ia, b.ptr + ib, (size_t)(ea - ia)) == 0;
+            int a_done = ea >= a.len, b_done = eb >= b.len;
+            if (!same || a_done != b_done) {
+                fprintf(stderr, "  first difference at line %lld:\n  - ", (long long)line);
+                if (ia <= a.len) put_quoted(a.ptr + ia, ea - ia); else fputs("(no line)", stderr);
+                fputs("\n  + ", stderr);
+                if (ib <= b.len) put_quoted(b.ptr + ib, eb - ib); else fputs("(no line)", stderr);
+                fputc('\n', stderr);
+                break;
+            }
+            if (a_done && b_done) break;
+            ia = ea + 1;
+            ib = eb + 1;
+            line++;
+        }
+    }
+    exit(1);
+}
+
 /* ---------- string helper ---------- */
 
 rw_str rw_str_from_cstr(const char *cstr, int64_t len) {
