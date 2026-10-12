@@ -391,6 +391,7 @@ class IRGen:
 
         # If the block didn't terminate, add a synthetic terminator (for void) or unreachable.
         if not ctx.builder.block.is_terminated:
+            self._emit_cleanups(ctx, 0)
             if sig.return_type is T.VOID:
                 ctx.builder.ret_void()
             else:
@@ -460,10 +461,18 @@ class IRGen:
             return
         if isinstance(stmt, A.Return):
             if stmt.value is None:
+                self._emit_cleanups(ctx, 0)
                 b.ret_void()
             else:
-                v = self._emit_expr(stmt.value, ctx)
+                v = self._emit_expr(stmt.value, ctx)  # before the cleanups run
+                self._emit_cleanups(ctx, 0)
                 b.ret(v)
+            return
+        if isinstance(stmt, A.Defer):
+            ctx.cleanups.append(("defer", stmt.stmt, len(ctx.loop_stack)))
+            return
+        if isinstance(stmt, A.With):
+            self._emit_with(stmt, ctx)
             return
         if isinstance(stmt, A.If):
             cond_i8 = self._emit_expr(stmt.cond, ctx)
@@ -512,9 +521,11 @@ class IRGen:
             b.position_at_end(end_bb)
             return
         if isinstance(stmt, A.Break):
+            self._emit_cleanups(ctx, len(ctx.loop_stack))
             b.branch(ctx.loop_stack[-1][1])
             return
         if isinstance(stmt, A.Continue):
+            self._emit_cleanups(ctx, len(ctx.loop_stack))
             b.branch(ctx.loop_stack[-1][0])
             return
         if isinstance(stmt, A.Assert):
@@ -560,6 +571,50 @@ class IRGen:
             b.position_at_end(end_bb)
             return
         raise RuntimeError(f"unsupported stmt: {type(stmt).__name__}")
+
+    def _emit_cleanup(self, entry, ctx: "FunctionCtx") -> None:
+        kind, payload, _ = entry
+        b = ctx.builder
+        if kind == "defer":
+            self._emit_stmt(payload, ctx)
+            return
+        value, rtype = payload
+        if rtype is T.MUTEX:
+            b.call(self._rw_mutex_unlock, [value])
+        else:
+            b.call(self.funcs[rtype.methods["close"]], [value])
+
+    def _emit_cleanups(self, ctx: "FunctionCtx", min_depth: int) -> None:
+        """Emit, innermost first, the pending cleanups pushed at loop depth
+        >= min_depth (0 = all of them, for a return). They stay on the stack:
+        other paths still need them."""
+        for entry in reversed(ctx.cleanups):
+            if entry[2] >= min_depth:
+                self._emit_cleanup(entry, ctx)
+
+    def _emit_with(self, stmt: A.With, ctx: "FunctionCtx") -> None:
+        b = ctx.builder
+        rtype = self.sema.with_types[id(stmt)]
+        value = self._emit_expr(stmt.expr, ctx)
+        if rtype is T.MUTEX:
+            b.call(self._rw_mutex_lock, [value])
+        saved = None
+        if stmt.var is not None:
+            slot = ctx.alloca(llvm_type_of(rtype), name=stmt.var)
+            b.store(value, slot)
+            saved = ctx.locals.get(stmt.var)
+            ctx.locals[stmt.var] = slot
+        entry = ("with", (value, rtype), len(ctx.loop_stack))
+        ctx.cleanups.append(entry)
+        self._emit_block(stmt.body, ctx)
+        ctx.cleanups.pop()
+        if not b.block.is_terminated:
+            self._emit_cleanup(entry, ctx)
+        if stmt.var is not None:
+            if saved is None:
+                ctx.locals.pop(stmt.var, None)
+            else:
+                ctx.locals[stmt.var] = saved
 
     def _emit_value_match(self, stmt: A.ValueMatch, ctx: "FunctionCtx") -> None:
         """Test arms in order; the first whose pattern equals the value runs
@@ -1564,6 +1619,10 @@ class FunctionCtx:
         # Stack of enclosing loops as (cond_bb, end_bb); continue -> cond_bb,
         # break -> end_bb. Pushed/popped around each While body emission.
         self.loop_stack: list = []
+        # Pending cleanups (spec 47), innermost last: ("defer", stmt, depth)
+        # or ("with", (value, type), depth), where depth is len(loop_stack)
+        # when pushed. Emitted before return / break / continue leaves them.
+        self.cleanups: list = []
 
     def alloca(self, ty: ir.Type, name: str = "") -> ir.AllocaInstr:
         """Allocate a stack slot at the start of the entry block. An alloca

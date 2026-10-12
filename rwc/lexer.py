@@ -44,6 +44,8 @@ class TokenKind(Enum):
     KW_BREAK = auto()
     KW_CONTINUE = auto()
     KW_ASSERT = auto()
+    KW_WITH = auto()    # spec 47
+    KW_DEFER = auto()   # spec 47
     KW_AND = auto()
     KW_OR = auto()
     KW_NOT = auto()
@@ -128,6 +130,8 @@ KEYWORDS: dict[str, TokenKind] = {
     "break": TokenKind.KW_BREAK,
     "continue": TokenKind.KW_CONTINUE,
     "assert": TokenKind.KW_ASSERT,
+    "with": TokenKind.KW_WITH,
+    "defer": TokenKind.KW_DEFER,
     "and": TokenKind.KW_AND,
     "or": TokenKind.KW_OR,
     "not": TokenKind.KW_NOT,

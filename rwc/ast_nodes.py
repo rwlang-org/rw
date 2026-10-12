@@ -449,6 +449,26 @@ class IndexAssign:
 
 
 @dataclass
+class Defer:
+    """`defer <call>`: run the call when the function returns, last deferred
+    first (spec 47)."""
+    stmt: "ExprStmt"
+    line: int
+    col: int
+
+
+@dataclass
+class With:
+    """`with expr [as name]:` — releases the resource when the body is left
+    by any path (spec 47)."""
+    expr: Expr
+    var: Optional[str]
+    body: List["Stmt"]
+    line: int
+    col: int
+
+
+@dataclass
 class TupleAssign:
     """`a, b = e`: unpack a tuple; `_` discards (spec 37)."""
     names: List[str]
@@ -459,7 +479,7 @@ class TupleAssign:
 
 Stmt = Union[
     VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt, Break, Continue, Assert,
-    FieldAssign, ForEach, IndexAssign, TupleAssign, ValueMatch,
+    FieldAssign, ForEach, IndexAssign, TupleAssign, ValueMatch, Defer, With,
 ]
 
 

@@ -2305,3 +2305,14 @@ def test_await_all_any_types():
 def test_await_all_any_errors(body, msg):
     e = err("def main() -> int:\n" + body + "    return 0\n")
     assert msg in e.diagnostic.message
+
+
+# ----- with / defer (spec 47) -----
+
+@pytest.mark.parametrize("src, msg", [
+    ("def main() -> int:\n    if true:\n        defer print(1)\n    return 0\n", "defer is only allowed at the top level"),
+    ("def main() -> int:\n    with 3:\n        print(1)\n    return 0\n", "with needs a Mutex or a record with a `close(self)` method"),
+    ("class R:\n    x: int\n\ndef main() -> int:\n    with R(1):\n        print(1)\n    return 0\n", "with needs a Mutex or a record"),
+])
+def test_with_defer_errors(src, msg):
+    assert msg in err(src).diagnostic.message
