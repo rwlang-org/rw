@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.0.13](https://github.com/rwlang-org/rw/compare/v0.0.12...v0.0.13) - 2026-10-12
+
+- feat: garbage collection with the Boehm GC by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/224
+- feat: rwc test and assert_eq by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/226
+- ci: test Python 3.11, 3.12 and 3.13 by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/227
+- feat: UDP (udp:// for dial / listen, recv_from, send_to) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/228
+- feat: -O0..-O3 for rwc build / run, -O2 by default by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/229
+
 ## [v0.0.12](https://github.com/rwlang-org/rw/compare/v0.0.11...v0.0.12) - 2026-10-12
 
 - ci: bump astral-sh/setup-uv from 10.1.0 to 10.2.0 by @dependabot[bot] in https://github.com/rwlang-org/rw/pull/179
