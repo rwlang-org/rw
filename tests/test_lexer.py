@@ -270,3 +270,25 @@ def test_from_and_as_keywords():
     assert TokenKind.KW_FROM in kinds_list
     assert TokenKind.KW_IMPORT in kinds_list
     assert TokenKind.KW_AS in kinds_list
+
+
+# ----- f-strings (spec 34) -----
+
+def test_fstring_parts():
+    toks = tokenize('f"a{x}b{{c}}{d["k"]}\\n"\n')
+    t = toks[0]
+    assert t.kind == TokenKind.FSTRING
+    kinds = [(k, text) for k, text, _, _ in t.parts]
+    assert kinds == [("lit", "a"), ("expr", "x"), ("lit", "b{c}"), ("expr", 'd["k"]'), ("lit", "\n")]
+
+
+@pytest.mark.parametrize("src, msg", [
+    ('f"a{x"\n', "unterminated '{' in f-string"),
+    ('f"a}b"\n', "single '}' in f-string"),
+    ('f"{ }"\n', "empty expression in f-string"),
+    ('f"abc\n', "unterminated f-string"),
+])
+def test_fstring_lex_errors(src, msg):
+    with pytest.raises(LexerError) as ei:
+        tokenize(src)
+    assert msg in str(ei.value)
