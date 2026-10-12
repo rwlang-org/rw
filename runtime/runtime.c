@@ -1,5 +1,6 @@
 #include "runtime.h"
 #include "aio.h"
+#include "timer.h"
 #include "fiber/sched.h"
 #include "net/netpoller.h"
 
@@ -650,9 +651,11 @@ void rw_init(void) {
     rw_sched_init();
     rw_netpoller_init();
     rw_aio_init();
+    rw_timer_init();
 }
 
 void rw_shutdown(void) {
+    rw_timer_shutdown();
     rw_aio_shutdown();
     rw_netpoller_shutdown();
     rw_sched_shutdown();
