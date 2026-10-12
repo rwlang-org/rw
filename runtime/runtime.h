@@ -201,6 +201,15 @@ int64_t rw_set_nodelay  (int64_t fd, int8_t on);
 int64_t rw_set_keepalive(int64_t fd, int8_t on);
 int64_t rw_set_backlog  (int64_t fd, int64_t n);
 
+/* Filesystem (spec 59): -1 / "" / empty on error, with last_error. */
+rw_str  rw_fs_kind    (rw_str path);    /* "file" / "dir" / "other" / "" */
+int64_t rw_fs_size    (rw_str path);
+int64_t rw_fs_mtime_ms(rw_str path);
+void    rw_fs_read_dir(rw_list *out, rw_str path);   /* sorted names */
+int64_t rw_fs_rename  (rw_str from, rw_str to);
+int64_t rw_fs_remove  (rw_str path);    /* file or empty directory */
+int64_t rw_fs_mkdir   (rw_str path);
+
 /* Signals (spec 57): wait for one of the named signals ("SIGTERM", ...). */
 rw_str  rw_signal_wait(const rw_list *names);
 

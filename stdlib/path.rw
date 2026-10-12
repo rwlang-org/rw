@@ -1,0 +1,84 @@
+# POSIX path strings (spec 59). Pure string operations: nothing here touches
+# the filesystem, and ".." is resolved lexically (symlinks are not followed).
+#
+#   import path
+#   path.join("/srv/www", "css/site.css")      # "/srv/www/css/site.css"
+#   path.normalize("a/./b/../c//d")            # "a/c/d"
+#   path.join_under("/srv/www", "../etc/pwd")  # None: escapes the root
+
+def is_abs(p: string) -> bool:
+    return str_starts_with(p, "/")
+
+# `b` appended to `a` with one "/" between them. An absolute `b` replaces
+# `a`, as in Python's os.path.join.
+def join(a: string, b: string) -> string:
+    if b == "":
+        return a
+    if a == "" or is_abs(b):
+        return b
+    if str_ends_with(a, "/"):
+        return a + b
+    return a + "/" + b
+
+# (directory, last component), split at the last "/". The directory keeps
+# no trailing "/" unless it is the root.
+def split(p: string) -> tuple[string, string]:
+    i = str_rfind(p, "/")
+    if i < 0:
+        return "", p
+    head = str_slice(p, 0, i)
+    if head == "":
+        head = "/"
+    return head, str_slice(p, i + 1, len(p))
+
+def basename(p: string) -> string:
+    d, b = split(p)
+    return b
+
+def dirname(p: string) -> string:
+    d, b = split(p)
+    return d
+
+# The extension of the last component, with its dot ("x.tar.gz" -> ".gz");
+# "" if there is none. A leading dot (".bashrc") is not an extension.
+def ext(p: string) -> string:
+    b = basename(p)
+    i = str_rfind(b, ".")
+    if i <= 0:
+        return ""
+    return str_slice(b, i, len(b))
+
+# The shortest equivalent path: drops "." and empty components and resolves
+# ".." against the component before it. A relative path keeps leading ".."
+# it cannot resolve; an absolute one stops at "/". "" becomes ".".
+def normalize(p: string) -> string:
+    abs = is_abs(p)
+    out: List[string] = []
+    for part in str_split(p, "/"):
+        if part == "" or part == ".":
+            continue
+        if part == "..":
+            if len(out) > 0 and out[-1] != "..":
+                out = out[0:len(out) - 1]
+            elif not abs:
+                out = list_push(out, "..")
+            continue
+        out = list_push(out, part)
+    joined = str_join(out, "/")
+    if abs:
+        return "/" + joined
+    if joined == "":
+        return "."
+    return joined
+
+# `rel` resolved under `root`, or None if it would leave `root` (through
+# "..", or by being absolute). Use it to map request paths onto a directory.
+def join_under(root: string, rel: string) -> Option[string]:
+    if is_abs(rel):
+        return None
+    clean = normalize(rel)
+    if clean == ".." or str_starts_with(clean, "../"):
+        return None
+    if clean == ".":
+        return Some(normalize(root))
+    return Some(join(normalize(root), clean))

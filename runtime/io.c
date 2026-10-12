@@ -178,7 +178,8 @@ static const struct { int code; const char *name; } k_errnames[] = {
     { ENETUNREACH, "ENETUNREACH" }, { ECONNABORTED, "ECONNABORTED" },
     { ECONNRESET, "ECONNRESET" }, { ENOTCONN, "ENOTCONN" }, { ETIMEDOUT, "ETIMEDOUT" },
     { ECONNREFUSED, "ECONNREFUSED" }, { EHOSTUNREACH, "EHOSTUNREACH" },
-    { EINPROGRESS, "EINPROGRESS" }, { RW_ENOHOST, "ENOHOST" },
+    { EINPROGRESS, "EINPROGRESS" }, { ENOTEMPTY, "ENOTEMPTY" }, { EXDEV, "EXDEV" },
+    { ELOOP, "ELOOP" }, { EROFS, "EROFS" }, { EBUSY, "EBUSY" }, { RW_ENOHOST, "ENOHOST" },
 };
 
 rw_str rw_error_name(int64_t err) {

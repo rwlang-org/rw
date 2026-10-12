@@ -1,0 +1,51 @@
+# path and fs from the standard library (spec 59).
+import path
+import fs
+
+def show(o: Option[string]) -> string:
+    match o:
+        case Some(s):
+            return s
+        case None:
+            return "None"
+
+def main() -> int:
+    print(path.join("/srv/www", "css/site.css"))
+    print(path.join("a/", "b"))
+    print(path.join("a", "/abs"))
+    d, b = path.split("/usr/lib/libx.so")
+    print(d + " | " + b)
+    print(path.dirname("/x"))
+    print(path.basename("noslash"))
+    print(path.ext("x.tar.gz") + " " + path.ext(".bashrc") + "|" + path.ext("Makefile") + "|")
+    print(path.normalize("a/./b/../c//d"))
+    print(path.normalize("/../x/.."))
+    print(path.normalize("../../a/.."))
+    print(path.normalize(""))
+    print(show(path.join_under("/srv/www", "css/../js/app.js")))
+    print(show(path.join_under("/srv/www", "../etc/passwd")))
+    print(show(path.join_under("/srv/www", "/etc/passwd")))
+    print(show(path.join_under("/srv/www/", "a/../../www2")))
+
+    root = "/tmp/rw_fs_test_" + str(rand_int(0, 1000000000))
+    print(fs.mkdir_all(root + "/sub/deeper"))
+    print(fs.write_file(root + "/b.txt", "hello"))
+    print(fs.write_file(root + "/a.txt", "x"))
+    print(str_join(fs.read_dir(root), ","))
+    match fs.stat(root + "/b.txt"):
+        case Some(st):
+            print(st.kind + " " + str(st.size) + " " + str(st.mtime_ms > 0))
+        case None:
+            print("no stat")
+    print(show(fs.read_file(root + "/b.txt")))
+    print(fs.rename(root + "/b.txt", root + "/c.txt"))
+    print(fs.exists(root + "/b.txt"))
+    print(fs.is_file(root + "/c.txt"))
+    print(fs.remove(root + "/sub"))
+    print(error_name(last_error()))
+    print(fs.remove(root + "/sub/deeper") and fs.remove(root + "/sub"))
+    print(fs.remove(root + "/a.txt") and fs.remove(root + "/c.txt") and fs.remove(root))
+    print(fs.exists(root))
+    print(show(fs.read_file(root + "/nope")))
+    print(error_name(last_error()))
+    return 0
