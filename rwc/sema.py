@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Tuple
 
 from . import ast_nodes as A
 from . import types as T
-from .diagnostics import CompileError, Diagnostic
+from .diagnostics import CompileError, Diagnostic, conversion_hint, did_you_mean
 from .loader import LoadedProgram
 
 
@@ -224,8 +224,10 @@ class Sema:
                 return self.type_alias_map[ty.name]
             if ty.name in self.class_map:
                 return self.class_map[ty.name]
-            raise CompileError(Diagnostic(self.filename, ty.line, ty.col, len(ty.name),
-                                          f"unknown type: {ty.name}"))
+            raise CompileError(Diagnostic(
+                self.filename, ty.line, ty.col, len(ty.name), f"unknown type: {ty.name}",
+                help=did_you_mean(ty.name, [*_BUILTIN_TYPES, *self.type_alias_map, *self.class_map]),
+            ))
         if isinstance(ty, A.TypeChannel):
             elem = self._resolve_type(ty.elem)
             if elem is T.VOID:
@@ -460,6 +462,7 @@ class Sema:
             raise CompileError(Diagnostic(
                 self.filename, cdef.line, cdef.col, len(cdef.name),
                 f"type mismatch: declared `{declared}`, value has type `{lit_ty}`",
+                help=conversion_hint(declared, lit_ty),
             ))
         self.result.expr_types[id(v)] = lit_ty
         self.result.expr_types[id(cdef.value)] = lit_ty
@@ -649,6 +652,7 @@ class Sema:
                 raise CompileError(Diagnostic(
                     self.filename, stmt.line, stmt.col, len(stmt.name),
                     f"type mismatch: declared `{declared}`, value has type `{val_ty}`",
+                    help=conversion_hint(declared, val_ty),
                 ))
             locals_[stmt.name] = declared
             self.result.local_types[(self.current_module, fn.name, stmt.name)] = declared
@@ -670,6 +674,7 @@ class Sema:
                     self.filename, stmt.line, stmt.col, len(stmt.name),
                     f"type mismatch in assignment to `{stmt.name}`: "
                     f"expected `{expected}`, found `{val_ty}`",
+                    help=conversion_hint(expected, val_ty),
                 ))
             return False
 
@@ -781,6 +786,7 @@ class Sema:
                 raise CompileError(Diagnostic(
                     self.filename, stmt.line, stmt.col, 6,
                     f"return type mismatch: expected `{ret_ty}`, found `{val_ty}`",
+                    help=conversion_hint(ret_ty, val_ty),
                 ))
             return True
 
@@ -1005,6 +1011,7 @@ class Sema:
             raise CompileError(Diagnostic(
                 self.filename, expr.line, expr.col, len(expr.name),
                 f"undefined variable: {expr.name}",
+                help=did_you_mean(expr.name, self._value_names(locals_)),
             ))
         if isinstance(expr, A.UnaryOp):
             inner = self._check_expr(fn, expr.operand, locals_)
@@ -1108,6 +1115,8 @@ class Sema:
                 raise CompileError(Diagnostic(
                     self.filename, expr.line, expr.col, len(expr.field),
                     f"module '{expr.obj.name}' has no function `{expr.field}`",
+                    help=did_you_mean(expr.field, [*self._module_funcs(real_mod),
+                                                   *self._consts_by_module.get(real_mod, {})]),
                 ))
             self.result.func_refs[id(expr)] = key
             return self._func_value_type(key)
@@ -1218,6 +1227,7 @@ class Sema:
                 raise CompileError(Diagnostic(
                     self.filename, expr.line, expr.col, len(recv.field),
                     f"{recv_ty} has no field or method `{recv.field}`",
+                    help=did_you_mean(recv.field, self._members(recv_ty)),
                 ))
             _, fty = self._field_of(recv_ty, recv.field, recv.line, recv.col)
             self.result.expr_types[id(recv)] = fty
@@ -1312,6 +1322,7 @@ class Sema:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
                     f"module '{call.module}' has no function `{call.callee}`",
+                    help=did_you_mean(call.callee, self._module_funcs(real_module)),
                 ))
         elif call.callee in self._from_env:
             # Unqualified call to a `from x import y` name.
@@ -1323,6 +1334,9 @@ class Sema:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
                     f"undefined function: {call.callee}",
+                    help=did_you_mean(call.callee, [*self._module_funcs(self.current_module),
+                                                    *self._from_env, *_BUILTIN_FUNCS,
+                                                    *self.class_map]),
                 ))
         self.result.call_resolution[id(call)] = key
         return key
@@ -1380,6 +1394,7 @@ class Sema:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
                     f"{recv_ty} has no field or method `{call.callee}`",
+                    help=did_you_mean(call.callee, self._members(recv_ty)),
                 ))
             # `r.f(...)`: call the function stored in field f of record r.
             cls, fty = self._field_of(recv_ty, call.callee, call.line, call.col)
@@ -1738,6 +1753,18 @@ class Sema:
         self.result.constructor_calls[id(call)] = cls
         return cls
 
+    def _value_names(self, locals_: Dict[str, T.Type]) -> List[str]:
+        """Names a bare identifier could refer to here (for did-you-mean)."""
+        return [*locals_, *self.const_map, *self._from_env,
+                *self._module_funcs(self.current_module)]
+
+    def _module_funcs(self, module: str) -> List[str]:
+        return [name for (mod, name) in self.result.functions if mod == module and "." not in name]
+
+    @staticmethod
+    def _members(cls: T.ClassType) -> List[str]:
+        return [*(f for f, _ in cls.fields), *cls.methods]
+
     def _field_of(self, obj_ty: T.Type, field: str, line: int, col: int) -> Tuple[T.ClassType, T.Type]:
         """Look up `field` on a record type, or raise a diagnostic."""
         if not isinstance(obj_ty, T.ClassType):
@@ -1750,6 +1777,7 @@ class Sema:
             raise CompileError(Diagnostic(
                 self.filename, line, col, len(field),
                 f"{obj_ty} has no field `{field}`",
+                help=did_you_mean(field, [f for f, _ in obj_ty.fields]),
             ))
         return obj_ty, obj_ty.fields[idx][1]
 
@@ -1806,6 +1834,7 @@ class Sema:
             raise CompileError(Diagnostic(
                 self.filename, stmt.line, stmt.col, len(stmt.name),
                 f"undefined variable: {stmt.name}",
+                help=did_you_mean(stmt.name, self._value_names(locals_)),
             ))
         untyped = (
             isinstance(value, (A.NoneExpr, A.OkExpr, A.ErrExpr))
@@ -1981,6 +2010,7 @@ class Sema:
                 raise CompileError(Diagnostic(
                     self.filename, line, col, max(1, len(what)),
                     f"argument {i} of `{what}`: expected `{pty}`, found `{at}`",
+                    help=conversion_hint(pty, at),
                 ))
         return callee_ty.ret
 
@@ -2001,6 +2031,7 @@ class Sema:
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
                     f"argument {i + 1} of `{call.callee}`: expected `{pty}`, found `{at}`",
+                    help=conversion_hint(pty, at),
                 ))
         return sig.return_type
 
