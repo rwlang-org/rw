@@ -83,8 +83,10 @@ def _call(port: int, method: str, target: str, body: bytes = b"", extra: str = "
         ("/", 200, "text/html; charset=utf-8", b"<h1>Hello from rw</h1>\n"),
         ("/hello/rw", 200, "text/plain; charset=utf-8", b"hello, rw\n"),
         ("/users/7/posts/42", 200, "text/plain; charset=utf-8", b"user 7 post 42\n"),
-        ("/search?q=rw&page=2", 200, "application/json", b'{"q": "rw", "page": "2"}\n'),
-        ("/search", 200, "application/json", b'{"q": "", "page": ""}\n'),
+        ("/search?q=rw&page=2", 200, "application/json", b'{"q":"rw","page":"2"}\n'),
+        ("/search", 200, "application/json", b'{"q":"","page":""}\n'),
+        # A raw quote in the query is escaped in the JSON body.
+        ('/search?q=a"b', 200, "application/json", b'{"q":"a\\"b","page":""}\n'),
         ("/nope", 404, "text/html; charset=utf-8", b"<p>no page at /nope</p>\n"),
         ("/hello/", 404, "text/html; charset=utf-8", b"<p>no page at /hello/</p>\n"),
     ],

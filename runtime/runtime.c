@@ -167,6 +167,49 @@ int64_t rw_str_cmp(rw_str a, rw_str b) {
     return a.len < b.len ? -1 : 1;
 }
 
+static rw_str str_alloc(int64_t len, char **buf);
+
+/* spec 58 */
+int64_t rw_byte_at(rw_str s, int64_t i) {
+    if (i < 0 || i >= s.len) return -1;
+    return (int64_t)(unsigned char)s.ptr[i];
+}
+
+rw_str rw_chr(int64_t cp) {
+    if (cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;
+    char buf[4];
+    int n;
+    if (cp < 0x80) { buf[0] = (char)cp; n = 1; }
+    else if (cp < 0x800) { buf[0] = (char)(0xC0 | (cp >> 6)); buf[1] = (char)(0x80 | (cp & 0x3F)); n = 2; }
+    else if (cp < 0x10000) {
+        buf[0] = (char)(0xE0 | (cp >> 12)); buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[2] = (char)(0x80 | (cp & 0x3F)); n = 3;
+    } else {
+        buf[0] = (char)(0xF0 | (cp >> 18)); buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); buf[3] = (char)(0x80 | (cp & 0x3F)); n = 4;
+    }
+    char *p;
+    rw_str out = str_alloc(n, &p);
+    if (p) memcpy(p, buf, (size_t)n);
+    return out;
+}
+
+void rw_str_to_float(rw_option_float *out, rw_str s) {
+    out->tag = 0;
+    out->payload = 0.0;
+    if (s.len <= 0 || s.len > 512) return;
+    char c0 = s.ptr[0];
+    if (c0 == ' ' || c0 == '\t' || c0 == '\n' || c0 == '\r' || c0 == '\v' || c0 == '\f') return;
+    char buf[513];
+    memcpy(buf, s.ptr, (size_t)s.len);
+    buf[s.len] = '\0';
+    char *end = NULL;
+    double v = strtod(buf, &end);
+    if (end != buf + s.len) return;   /* trailing junk, or nothing parsed */
+    out->tag = 1;
+    out->payload = v;
+}
+
 void rw_str_to_int(rw_option_int *out, rw_str s) {
     out->tag = 0;
     out->payload = 0;

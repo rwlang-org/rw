@@ -1,5 +1,6 @@
 # A web application built on examples/web.rw.
 import web
+import json as js
 from web import App, Request, Response, text, html, json, param, query, header, set_header
 
 def index(req: Request) -> Response:
@@ -11,8 +12,10 @@ def hello(req: Request) -> Response:
 def post_of_user(req: Request) -> Response:
     return text(200, "user " + param(req, "id") + " post " + param(req, "post") + "\n")
 
+# Values are escaped by the json module (spec 58), so a quote in ?q= is safe.
 def search(req: Request) -> Response:
-    return json(200, "{\"q\": \"" + query(req, "q") + "\", \"page\": \"" + query(req, "page") + "\"}\n")
+    body: js.Value = js.object().set("q", js.from_str(query(req, "q"))).set("page", js.from_str(query(req, "page")))
+    return json(200, body.dump() + "\n")
 
 def agent(req: Request) -> Response:
     return text(200, header(req, "user-agent") + "\n")
