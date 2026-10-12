@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -131,6 +132,12 @@ def test_sigterm_finishes_inflight_request_then_exits(web_server):
     assert data.startswith(b"HTTP/1.1 200")
     assert data.endswith(b"hello, inflight\n")
     assert proc.wait(timeout=10) == 0
+    # The access log goes through log.Logger (spec 60): unbuffered, so it
+    # is complete even though the process just exited.
+    time.sleep(0.2)
+    out = b"".join(proc.rest_of_stdout).decode()
+    assert re.search(r"Z INFO web: SIGTERM, shutting down\n", out), out
+    assert re.search(r"Z INFO web: GET /hello/inflight 200\n", out), out
 
 
 def test_sigint_idle_server_exits_cleanly(web_server):

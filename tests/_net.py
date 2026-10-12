@@ -30,7 +30,7 @@ def start_announced(argv: list[str], env: dict | None = None, timeout: float = 1
     """Start a server built from `listen_on_port_zero` source and return
     (proc, port) once it has announced its address. The rest of its stdout
     is drained in the background so a chatty server never blocks on a full
-    pipe."""
+    pipe; it is kept in `proc.rest_of_stdout` (a list of byte chunks)."""
     import selectors
     import threading
 
@@ -52,5 +52,11 @@ def start_announced(argv: list[str], env: dict | None = None, timeout: float = 1
     sel.close()
     addr = line.decode().strip()
     assert addr.startswith("tcp://127.0.0.1:"), addr
-    threading.Thread(target=lambda: proc.stdout.read(), daemon=True).start()
+    proc.rest_of_stdout = []
+
+    def drain() -> None:
+        while chunk := proc.stdout.read1(65536):
+            proc.rest_of_stdout.append(chunk)
+
+    threading.Thread(target=drain, daemon=True).start()
     return proc, int(addr.rsplit(":", 1)[1])

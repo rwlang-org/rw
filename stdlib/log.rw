@@ -1,0 +1,134 @@
+# Leveled logging (spec 60).
+#
+#   import log
+#   lg = log.new(2)                          # 1 = stdout, 2 = stderr, or any handle
+#   lg.prefix = "api"
+#   lg.set_level("debug")
+#   lg.info("listening" + log.kv("addr", "127.0.0.1:8080"))
+#   # 2026-10-13T01:02:03.456Z INFO api: listening addr=127.0.0.1:8080
+#
+# Each record is one write of one line, guarded by a mutex, so lines from
+# concurrent fibers never interleave. Output bypasses print's stdio buffer:
+# mixing print and a logger on the same stream may reorder lines.
+
+DEBUG: int = 10
+INFO: int = 20
+WARN: int = 30
+ERROR: int = 40
+
+class Logger:
+    fd: int            # where lines go
+    level: int         # records below this are dropped
+    prefix: string     # printed as "<prefix>: " when not empty
+    timestamps: bool   # start each line with a UTC ISO-8601 time
+    mu: Mutex
+
+    def enabled(self, level: int) -> bool:
+        return level >= self.level
+
+    # Set the threshold by name: "debug", "info", "warn", or "error".
+    # Returns false (and changes nothing) for an unknown name.
+    def set_level(self, name: string) -> bool:
+        n = level_of(name)
+        if n < 0:
+            return false
+        self.level = n
+        return true
+
+    def log(self, level: int, msg: string) -> void:
+        if level < self.level:
+            return
+        line = ""
+        if self.timestamps:
+            line = iso8601(time_ms()) + " "
+        line = line + level_name(level)
+        if self.prefix != "":
+            line = line + " " + self.prefix + ":"
+        line = line + " " + msg + "\n"
+        mutex_lock(self.mu)
+        write_all(self.fd, bytes_from_str(line))
+        mutex_unlock(self.mu)
+
+    def debug(self, msg: string) -> void:
+        self.log(DEBUG, msg)
+
+    def info(self, msg: string) -> void:
+        self.log(INFO, msg)
+
+    def warn(self, msg: string) -> void:
+        self.log(WARN, msg)
+
+    def error(self, msg: string) -> void:
+        self.log(ERROR, msg)
+
+# A logger writing to handle `fd` at level INFO, with timestamps.
+def new(fd: int) -> Logger:
+    return Logger(fd, INFO, "", true, mutex_new())
+
+# A logger appending to the file at `p`, or None if it cannot be opened.
+def to_file(p: string) -> Option[Logger]:
+    fd = open(p, "a")
+    if fd < 0:
+        return None
+    return Some(new(fd))
+
+def level_of(name: string) -> int:
+    n = str_lower(name)
+    if n == "debug":
+        return DEBUG
+    if n == "info":
+        return INFO
+    if n == "warn" or n == "warning":
+        return WARN
+    if n == "error":
+        return ERROR
+    return -1
+
+def level_name(level: int) -> string:
+    if level >= ERROR:
+        return "ERROR"
+    if level >= WARN:
+        return "WARN"
+    if level >= INFO:
+        return "INFO"
+    return "DEBUG"
+
+# " key=value", quoting the value when it is empty or contains a space,
+# quote, "=" or a control character, so lines stay machine-splittable.
+def kv(key: string, value: string) -> string:
+    plain = len(value) > 0
+    for n in range(0, len(value)):
+        c = byte_at(value, n)
+        if c <= 32 or c == 34 or c == 61 or c == 127:
+            plain = false
+    if plain:
+        return " " + key + "=" + value
+    return " " + key + "=\"" + str_replace(str_replace(value, "\\", "\\\\"), "\"", "\\\"") + "\""
+
+def pad(n: int, width: int) -> string:
+    s = str(n)
+    while len(s) < width:
+        s = "0" + s
+    return s
+
+# Unix time in ms as "YYYY-MM-DDTHH:MM:SS.mmmZ" (UTC). Days to a civil date
+# follows Howard Hinnant's days_from_civil inverse.
+def iso8601(ms: int) -> string:
+    days = ms / 86400000
+    rem = ms % 86400000
+    if rem < 0:
+        rem += 86400000
+        days -= 1
+    z = days + 719468
+    era = (z if z >= 0 else z - 146096) / 146097
+    doe = z - era * 146097
+    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    y = yoe + era * 400
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    mp = (5 * doy + 2) / 153
+    d = doy - (153 * mp + 2) / 5 + 1
+    m = mp + 3 if mp < 10 else mp - 9
+    if m <= 2:
+        y += 1
+    secs = rem / 1000
+    return pad(y, 4) + "-" + pad(m, 2) + "-" + pad(d, 2) + "T" + pad(secs / 3600, 2) + ":" + pad(secs / 60 % 60, 2) + ":" + pad(secs % 60, 2) + "." + pad(rem % 1000, 3) + "Z"

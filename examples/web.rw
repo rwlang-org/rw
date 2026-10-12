@@ -12,6 +12,7 @@
 #
 # See docs/web-framework.md for the full API.
 import bufio
+import log
 
 class Header:
     name: string
@@ -39,6 +40,8 @@ class App:
     routes: List[Route]
     not_found: Callable[[Request], Response]
     log: bool
+    # Access log and server messages (spec 60); stdout by default.
+    logger: log.Logger
     # Per-connection read/write timeout in ms (spec 53); 0 disables it.
     timeout_ms: int
 
@@ -143,7 +146,9 @@ def default_not_found(req: Request) -> Response:
     return text(404, "not found: " + req.path + "\n")
 
 def new_app() -> App:
-    return App(list_new(), default_not_found, true, 10000)
+    lg: log.Logger = log.new(1)
+    lg.prefix = "web"
+    return App(list_new(), default_not_found, true, lg, 10000)
 
 def route(app: App, method: string, pattern: string, handler: Callable[[Request], Response]) -> App:
     app.routes = list_push(app.routes, Route(method, pattern, handler))
@@ -297,7 +302,7 @@ def handle_conn(app: App, fd: int) -> int:
         res = dispatch(app, req)
     write_all(fd, bytes_from_str(serialize(res)))
     if app.log:
-        print(req.method + " " + req.path + " " + str_from_int(res.status))
+        app.logger.info(req.method + " " + req.path + " " + str_from_int(res.status))
     return linger_close(fd)
 
 # Connections being served, so shutdown can wait for them (spec 57).
@@ -322,7 +327,7 @@ def serve_conn(app: App, fd: int, f: Inflight) -> int:
 def stop_on_signal(app: App, listen_fd: int) -> int:
     sig: string = signal_wait(["SIGINT", "SIGTERM"])
     if app.log:
-        print("web: " + sig + ", shutting down")
+        app.logger.info(sig + ", shutting down")
     close(listen_fd)
     return 0
 
@@ -333,7 +338,7 @@ def stop_on_signal(app: App, listen_fd: int) -> int:
 def serve(app: App, port: int) -> int:
     listen_fd: int = tcp_listen(port)
     if listen_fd < 0:
-        print("web: cannot listen on port " + str_from_int(port))
+        app.logger.error("cannot listen on port " + str_from_int(port))
         return 1
     f: Inflight = Inflight(0, mutex_new())
     spawn stop_on_signal(app, listen_fd)
