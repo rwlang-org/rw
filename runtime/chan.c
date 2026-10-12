@@ -15,6 +15,7 @@
  */
 
 #include "chan.h"
+#include "rwgc.h"
 #include "fiber/sched.h"
 
 #include <pthread.h>
@@ -64,14 +65,12 @@ rw_chan *rw_chan_new(int64_t capacity, int64_t elem_size) {
         fputs("rw: chan_new: negative capacity\n", stderr);
         abort();
     }
-    rw_chan *c = (rw_chan *)calloc(1, sizeof *c);
-    if (!c) { fputs("rw: out of memory (channel)\n", stderr); abort(); }
+    rw_chan *c = (rw_chan *)rw_gc_alloc(sizeof *c);   /* zero-filled (spec 67) */
     pthread_mutex_init(&c->mu, NULL);
     c->cap = capacity;
     c->elem_size = elem_size;
     if (capacity > 0) {
-        c->buf = (char *)malloc((size_t)(capacity * elem_size));
-        if (!c->buf) { fputs("rw: out of memory (channel)\n", stderr); abort(); }
+        c->buf = (char *)rw_gc_alloc((size_t)(capacity * elem_size));
     }
     return c;
 }
@@ -201,8 +200,7 @@ struct rw_mutex {
 };
 
 rw_mutex *rw_mutex_new(void) {
-    rw_mutex *m = (rw_mutex *)calloc(1, sizeof *m);
-    if (!m) { fputs("rw: out of memory (mutex)\n", stderr); abort(); }
+    rw_mutex *m = (rw_mutex *)rw_gc_alloc(sizeof *m);
     pthread_mutex_init(&m->mu, NULL);
     return m;
 }

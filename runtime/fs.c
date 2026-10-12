@@ -6,6 +6,7 @@
  */
 
 #include "runtime.h"
+#include "rwgc.h"
 #include "aio.h"
 
 #include <dirent.h>
@@ -100,13 +101,13 @@ static void do_read_dir(void *arg) {
     DIR *d = opendir(r->path);
     if (!d) { r->err = errno; return; }
     int64_t n = 0, cap = 16;
-    rw_str *items = (rw_str *)malloc((size_t)cap * sizeof(rw_str));
+    rw_str *items = (rw_str *)rw_gc_alloc((size_t)cap * sizeof(rw_str));
     struct dirent *e;
     while (items && (e = readdir(d)) != NULL) {
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
         if (n == cap) {
             cap *= 2;
-            rw_str *grown = (rw_str *)realloc(items, (size_t)cap * sizeof(rw_str));
+            rw_str *grown = (rw_str *)rw_gc_realloc(items, (size_t)cap * sizeof(rw_str));
             if (!grown) break;
             items = grown;
         }

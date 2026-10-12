@@ -38,6 +38,7 @@
  */
 
 #include "sched.h"
+#include "../rwgc.h"
 #include "fiber.h"
 #include "park.h"
 #include "runq.h"
@@ -138,6 +139,9 @@ struct rw_fiber_handle {
     /* Position in the global completion order, set just before DONE is
      * published (spec 45: await_any returns the first future to finish). */
     uint64_t         finish_seq;
+    /* Membership in the list of live fibers walked by the GC hook (spec 67). */
+    struct rw_fiber_handle *all_prev;
+    struct rw_fiber_handle *all_next;
     /* errno of the last I/O builtin this fiber ran (spec 51). Kept on the
      * fiber, not the thread, because a fiber migrates between Ms. */
     int              last_error;
@@ -195,6 +199,10 @@ typedef struct rw_M {
      * the fiber's ctx, so no waker can see the fiber before then. */
     void           (*park_commit)(rw_fiber_handle *, void *);
     void            *park_arg;
+    /* GC registration (spec 67): the collector's handle for this thread and
+     * the base (highest address) of its own pthread stack. */
+    void            *gc_thread;
+    void            *stack_base;
 } rw_M;
 
 #define RW_MAX_WORKERS 64
@@ -409,7 +417,9 @@ void rw_sched_yield(void) {
     if (!m) return;
     rw_fiber_handle *me = m->current;
     if (!me) return;
+    rw_gc_switch_begin(m->gc_thread, m->stack_base);
     rw_fiber_swap(&me->ctx, &m->sched_ctx);
+    rw_gc_switch_end();
 }
 
 /* Called by compiled code at a safe point when rw_preempt_flag != 0
@@ -488,7 +498,9 @@ void rw_sched_park_commit(void (*commit)(rw_fiber_handle *, void *), void *arg) 
                           memory_order_relaxed);
     m->park_commit = commit;
     m->park_arg = arg;
+    rw_gc_switch_begin(m->gc_thread, m->stack_base);
     rw_fiber_swap(&me->ctx, &m->sched_ctx);
+    rw_gc_switch_end();
 }
 
 static void free_handle(rw_fiber_handle *h);
@@ -501,9 +513,15 @@ static void free_handle(rw_fiber_handle *h);
  * the inbound rw_fiber_swap returns into this loop. Re-enqueuing
  * earlier would let a stealer pick up the fiber while its ctx is
  * still being written. */
+/* Highest address of a fiber's usable stack (what the GC calls its base). */
+static void *fiber_stack_top(rw_fiber_handle *g) {
+    return (char *)g->region + rw_guard_size() + RW_FIBER_STACK_USABLE;
+}
+
 static void *worker_main(void *arg) {
     rw_M *m = (rw_M *)arg;
     tls_m = m;
+    m->gc_thread = rw_gc_register_thread(&m->stack_base);
     for (;;) {
         rw_fiber_handle *g = find_runnable(m);
         if (!g) break;
@@ -512,7 +530,9 @@ static void *worker_main(void *arg) {
         m->current = g;
         atomic_fetch_add_explicit(&m->tick, 1, memory_order_relaxed);
         atomic_store_explicit(&m->running, 1, memory_order_relaxed);
+        rw_gc_switch_begin(m->gc_thread, fiber_stack_top(g));
         rw_fiber_swap(&m->sched_ctx, &g->ctx);
+        rw_gc_switch_end();
         atomic_store_explicit(&m->running, 0, memory_order_relaxed);
         /* A request meant for g is void once g has left this M (it parked,
          * finished, or yielded at a safe point that already cleared it). */
@@ -566,6 +586,7 @@ static void *worker_main(void *arg) {
         m->preempted = 0;
     }
     tls_m = NULL;
+    rw_gc_unregister_thread();
     return NULL;
 }
 
@@ -632,7 +653,8 @@ static void finalize_fiber(rw_fiber_handle *h) {
 
     rw_M *m = tls_m;
     m->finished = h;
-    rw_fiber_swap(&h->ctx, &m->sched_ctx);
+    rw_gc_switch_begin(m->gc_thread, m->stack_base);
+    rw_fiber_swap(&h->ctx, &m->sched_ctx);   /* never returns */
 }
 
 /* The fiber's entry point. Calls user fn, stores result, marks DONE,
@@ -645,6 +667,7 @@ static void finalize_fiber(rw_fiber_handle *h) {
  * happens-before that read. */
 #define DEFINE_TRAMP(NAME, RETTY, FIELD)                                    \
     static void fiber_entry_##NAME(void *arg) {                             \
+        rw_gc_switch_end();  /* pairs with worker_main's switch_begin */    \
         rw_fiber_handle *h = (rw_fiber_handle *)arg;                        \
         RETTY (*fn)(void *) = (RETTY (*)(void *))h->user_fn;                \
         h->result.FIELD = fn(h->user_arg);                                  \
@@ -660,6 +683,7 @@ DEFINE_TRAMP(str,  rw_str,  s)
 
 /* void has no field; specialize manually. */
 static void fiber_entry_void(void *arg) {
+    rw_gc_switch_end();
     rw_fiber_handle *h = (rw_fiber_handle *)arg;
     void (*fn)(void *) = (void (*)(void *))h->user_fn;
     fn(h->user_arg);
@@ -667,12 +691,60 @@ static void fiber_entry_void(void *arg) {
     abort();
 }
 
+/* ---- live fibers for the GC (spec 67) ---- */
+
+static pthread_mutex_t  g_all_mu = PTHREAD_MUTEX_INITIALIZER;
+static rw_fiber_handle *g_all = NULL;
+
+/* Changes happen inside rw_gc_enter/leave, so the list is never half
+ * linked while the world is stopped and the hook below walks it. */
+static void track_fiber(rw_fiber_handle *h) {
+    rw_gc_enter();
+    pthread_mutex_lock(&g_all_mu);
+    h->all_prev = NULL;
+    h->all_next = g_all;
+    if (g_all) g_all->all_prev = h;
+    g_all = h;
+    pthread_mutex_unlock(&g_all_mu);
+    rw_gc_leave();
+}
+
+static void untrack_fiber(rw_fiber_handle *h) {
+    rw_gc_enter();
+    pthread_mutex_lock(&g_all_mu);
+    if (h->all_prev) h->all_prev->all_next = h->all_next; else g_all = h->all_next;
+    if (h->all_next) h->all_next->all_prev = h->all_prev;
+    pthread_mutex_unlock(&g_all_mu);
+    rw_gc_leave();
+}
+
+static void *saved_sp(rw_fiber_handle *h) {
+#if defined(__aarch64__)
+    return (void *)(uintptr_t)h->ctx.regs[12];
+#else
+    return (void *)(uintptr_t)h->ctx.regs[6];
+#endif
+}
+
+/* GC hook, world stopped: push the live part of every unfinished fiber's
+ * stack. For a fiber that is running, the saved sp is stale but still
+ * inside its stack, so the extra range is merely conservative; the GC also
+ * scans it through the thread's stack bottom (rw_gc_switch_begin). */
+static void push_fiber_stacks(void) {
+    for (rw_fiber_handle *h = g_all; h; h = h->all_next) {
+        if (atomic_load_explicit(&h->state, memory_order_relaxed) == RW_FIBER_DONE) continue;
+        rw_gc_push_range(saved_sp(h), fiber_stack_top(h));
+    }
+}
+
 static rw_fiber_handle *spawn_common(rw_result_kind kind,
                                      void *user_fn,
                                      void *user_arg,
                                      void (*tramp)(void *)) {
-    rw_fiber_handle *h = (rw_fiber_handle *)calloc(1, sizeof(*h));
-    if (!h) rw_die("calloc fiber handle");
+    /* Uncollectable GC memory (spec 67): never freed by the collector, but
+     * scanned, so the result, the argument block, and the registers saved
+     * in ctx keep their referents alive. Zero-filled. */
+    rw_fiber_handle *h = (rw_fiber_handle *)rw_gc_alloc_uncollectable(sizeof(*h));
     h->kind = kind;
     h->user_fn = user_fn;
     h->user_arg = user_arg;
@@ -703,6 +775,7 @@ static rw_fiber_handle *spawn_common(rw_result_kind kind,
     h->region = region;
     void *stack_lo = (char *)region + rw_guard_size();
     rw_fiber_ctx_init(&h->ctx, stack_lo, RW_FIBER_STACK_USABLE, tramp, h);
+    track_fiber(h);
     enqueue_ready(h);
     return h;
 }
@@ -724,12 +797,13 @@ rw_fiber_handle *rw_sched_spawn_void(void    (*fn)(void *), void *arg) {
 }
 
 static void free_handle(rw_fiber_handle *h) {
+    untrack_fiber(h);
     pthread_mutex_destroy(&h->join_mu);
     pthread_cond_destroy(&h->join_cv);
     if (h->region) {
         munmap(h->region, rw_region_size());
     }
-    free(h);
+    rw_gc_free(h);
     atomic_fetch_sub_explicit(&g_live_fibers, 1, memory_order_relaxed);
 }
 
@@ -819,6 +893,10 @@ static int parse_workers(void) {
 }
 
 void rw_sched_init(void) {
+    /* The collector first: it must be initialized on the main thread
+     * before any worker registers with it (spec 67). */
+    rw_gc_init();
+    rw_gc_set_fiber_roots(push_fiber_stacks);
     long ps = sysconf(_SC_PAGESIZE);
     if (ps <= 0) ps = 4096;  /* fallback */
     /* Round usable stack up to a page boundary so the layout stays clean. */

@@ -13,6 +13,7 @@
 #include "aio.h"
 #include "fiber/sched.h"
 #include "runtime.h"
+#include "rwgc.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -74,12 +75,11 @@ static rw_aio_task *queue_pop(void) {
 
 static void run_task(rw_aio_task *t) {
     if (t->op == RW_AIO_READ) {
-        char *buf = (char *)malloc((size_t)t->max);
-        if (!buf) { t->out->len = 0; t->out->ptr = NULL; return; }
+        char *buf = (char *)rw_gc_alloc_atomic((size_t)t->max);
         ssize_t n = read((int)t->fd, buf, (size_t)t->max);
         t->err = n < 0 ? rw_errno : 0;
         if (n > 0) { t->out->len = n; t->out->ptr = buf; }
-        else       { free(buf); t->out->len = 0; t->out->ptr = NULL; }
+        else       { rw_gc_free(buf); t->out->len = 0; t->out->ptr = NULL; }
     } else if (t->op == RW_AIO_CALL) {
         t->fn(t->arg);
     } else { /* RW_AIO_WRITE */
@@ -91,9 +91,12 @@ static void run_task(rw_aio_task *t) {
 
 static void *worker_main(void *arg) {
     (void)arg;
+    /* Tasks allocate rw values (read buffers, directory listings), so the
+     * pool threads are known to the collector (spec 67). */
+    rw_gc_register_thread(NULL);
     for (;;) {
         rw_aio_task *t = queue_pop();
-        if (t == NULL) return NULL;   /* shutdown */
+        if (t == NULL) { rw_gc_unregister_thread(); return NULL; }   /* shutdown */
         run_task(t);
         /* Result store above happens-before this enqueue; the woken
          * fiber reads the result after resuming. Same edge as netpoller. */
@@ -140,11 +143,10 @@ void rw_aio_read(rw_str *out, int64_t fd, int64_t max) {
     if (max <= 0) { out->len = 0; out->ptr = NULL; return; }
     rw_fiber_handle *me = rw_sched_current_fiber();
     if (!me) {
-        char *buf = (char *)malloc((size_t)max);
-        if (!buf) { out->len = 0; out->ptr = NULL; return; }
+        char *buf = (char *)rw_gc_alloc_atomic((size_t)max);
         ssize_t n = read((int)fd, buf, (size_t)max);
         if (n > 0) { out->len = n; out->ptr = buf; }
-        else       { free(buf); out->len = 0; out->ptr = NULL; }
+        else       { rw_gc_free(buf); out->len = 0; out->ptr = NULL; }
         return;
     }
     rw_aio_task t;

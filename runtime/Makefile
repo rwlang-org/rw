@@ -1,6 +1,10 @@
 CC      ?= cc
 AR      ?= ar
 CFLAGS  ?= -O2 -Wall -Wextra -fPIC -std=c11 -D_GNU_SOURCE
+
+# Boehm GC (spec 67): headers from the bdw-gc install (see scripts/gc-prefix.sh).
+GC_PREFIX ?= $(shell ../scripts/gc-prefix.sh)
+CFLAGS  += -I$(GC_PREFIX)/include
 ASFLAGS ?= -O2 -Wall -Wextra -fPIC
 
 LIB     := librw.a
@@ -29,7 +33,7 @@ else
   $(error unsupported OS: $(UNAME_S))
 endif
 
-OBJS := runtime.o io.o aio.o timer.o chan.o signal.o fs.o process.o \
+OBJS := runtime.o io.o aio.o timer.o chan.o signal.o fs.o process.o gc.o \
         fiber/fiber.o fiber/sched.o fiber/runq.o fiber/park.o \
         net/netpoller.o net/tcp.o net/addr.o $(NET_PLATFORM_O) \
         $(FIBER_ASM)

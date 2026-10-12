@@ -10,7 +10,12 @@
 | **uv** | Manage Python deps and runner | `brew install uv` or the official installer | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | **clang** | Link LLVM IR to native binaries | Xcode Command Line Tools (`xcode-select --install`) | `sudo apt install clang` |
 | **make** + **cc** | Build the C runtime `librw.a` | Xcode Command Line Tools | `sudo apt install build-essential` |
+| **Boehm GC** | Garbage collector linked into every program | `brew install bdw-gc` | `sudo apt install libgc-dev` |
 | Python 3.12 | The compiler itself | Fetched automatically by uv | Fetched automatically by uv |
+
+The GC is found through `pkg-config bdw-gc`, `brew --prefix bdw-gc`, or the
+usual prefixes (`scripts/gc-prefix.sh`); set `RW_GC_PREFIX` to point at a
+custom install.
 
 Python is pinned to 3.12 via `.python-version`. `uv sync` downloads it
 automatically, so you do not need a system Python.

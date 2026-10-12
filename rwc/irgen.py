@@ -225,6 +225,9 @@ class IRGen:
             "rw_proc_start")
         self._rw_proc_wait = ir.Function(m, ir.FunctionType(I64, [I64]), "rw_proc_wait")
         self._rw_proc_kill = ir.Function(m, ir.FunctionType(I64, [I64, RW_STR_TY]), "rw_proc_kill")
+        # garbage collector (spec 67)
+        self._rw_gc_collect = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_gc_collect")
+        self._rw_gc_heap_size = ir.Function(m, ir.FunctionType(I64, []), "rw_gc_heap_size")
         # I/O errors (spec 51)
         self._rw_last_error = ir.Function(m, ir.FunctionType(I64, []), "rw_last_error")
         self._rw_error_name = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_error_name")
@@ -328,9 +331,9 @@ class IRGen:
         # lifecycle
         self._rw_init = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_init")
         self._rw_shutdown = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_shutdown")
-        # malloc/free
-        self._malloc = ir.Function(m, ir.FunctionType(I8P, [I64]), "malloc")
-        self._free = ir.Function(m, ir.FunctionType(ir.VoidType(), [I8P]), "free")
+        # Records and spawn argument blocks live on the GC heap (spec 67).
+        self._malloc = ir.Function(m, ir.FunctionType(I8P, [I64]), "rw_gc_alloc")
+        self._free = ir.Function(m, ir.FunctionType(ir.VoidType(), [I8P]), "rw_gc_free")
         # spawn / await: declared lazily as needed
         self._spawn_funcs: Dict[str, ir.Function] = {}
         self._await_funcs: Dict[str, ir.Function] = {}
@@ -1479,6 +1482,8 @@ class IRGen:
             "fs_remove": self._rw_fs_remove,
             "fs_mkdir": self._rw_fs_mkdir,
             "proc_wait": self._rw_proc_wait,
+            "gc_collect": self._rw_gc_collect,
+            "gc_heap_size": self._rw_gc_heap_size,
             "proc_kill": self._rw_proc_kill,
             "error_name": self._rw_error_name,
             "error_message": self._rw_error_message,

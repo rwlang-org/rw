@@ -102,6 +102,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "byte_at", "chr", "str_to_float", "str_from_byte",
     "fs_kind", "fs_size", "fs_mtime_ms", "fs_read_dir", "fs_rename", "fs_remove", "fs_mkdir",
     "proc_start", "proc_wait", "proc_kill",
+    "gc_collect", "gc_heap_size",
 })
 
 _DICT_BUILTINS = frozenset({
@@ -198,6 +199,9 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
     "proc_start": ((T.list_of(T.STRING),), T.list_of(T.INT)),
     "proc_wait": ((T.INT,), T.INT),
     "proc_kill": ((T.INT, T.STRING), T.INT),
+    # spec 67
+    "gc_collect": ((), T.VOID),
+    "gc_heap_size": ((), T.INT),
 }
 
 
