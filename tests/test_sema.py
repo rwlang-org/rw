@@ -2137,3 +2137,38 @@ def test_constant_errors(src, msg):
 def test_dict_literal_errors(body, msg):
     e = err("def main() -> int:\n" + body + "    return 0\n")
     assert msg in e.diagnostic.message
+
+
+# ----- tuples (spec 37) -----
+
+def test_tuples_ok():
+    check(
+        "class P:\n    pos: tuple[int, int]\n\n"
+        "def divmod_(a: int, b: int) -> tuple[int, int]:\n    return a / b, a % b\n\n"
+        "def main() -> int:\n"
+        "    q, r = divmod_(17, 5)\n"
+        '    pair = ("ann", 31)\n'
+        "    name, age = pair\n"
+        "    age, _ = (age + 1, 0)\n"
+        '    s: string = pair[0] + name\n'
+        "    n: int = pair[-1] + q + r + age\n"
+        "    ps = [P((1, 2))]\n"
+        "    d = {\"k\": (1.5, true)}\n"
+        "    return n + ps[0].pos[1]\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ("    a, b = (1, 2, 3)\n", "cannot unpack a tuple of 3 into 2 names"),
+        ("    a, b = 5\n", "cannot unpack `int`"),
+        ("    t = (1, 2)\n    print(t[2])\n", "tuple index 2 out of range"),
+        ("    t = (1, 2)\n    i = 0\n    print(t[i])\n", "tuple index must be an integer literal"),
+        ('    a = 1\n    a, b = ("x", 2)\n', "type mismatch in assignment to `a`"),
+        ("    t: tuple[int, int] = (1, \"a\")\n", "type mismatch"),
+    ],
+)
+def test_tuple_errors(body, msg):
+    e = err("def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message

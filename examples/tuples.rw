@@ -1,0 +1,55 @@
+class Line:
+    start: tuple[int, int]
+    end: tuple[int, int]
+
+def divmod_(a: int, b: int) -> tuple[int, int]:
+    return a / b, a % b
+
+def min_max(xs: List[int]) -> tuple[int, int]:
+    lo = xs[0]
+    hi = xs[0]
+    for x in xs:
+        if x < lo:
+            lo = x
+        if x > hi:
+            hi = x
+    return lo, hi
+
+def parse_header(line: string) -> tuple[string, string]:
+    i = str_find(line, ":")
+    return str_strip(line[:i]), str_strip(line[i + 1:])
+
+def main() -> int:
+    q, r = divmod_(17, 5)
+    print(f"q={q} r={r}")
+    lo, hi = min_max([4, -2, 9, 3])
+    print(f"{lo}..{hi}")
+    name, value = parse_header("Content-Type:  text/plain ")
+    print(f"[{name}] [{value}]")
+
+    pair = ("ann", 31)
+    print(f"{pair[0]} is {pair[-1]}")
+    _, age = pair
+    print(age + 1)
+
+    # Swap through a tuple.
+    a = 1
+    b = 2
+    a, b = b, a
+    print(f"a={a} b={b}")
+
+    # Tuples inside records, lists, and dicts.
+    ln = Line((0, 0), (3, 4))
+    dx = ln.end[0] - ln.start[0]
+    dy = ln.end[1] - ln.start[1]
+    print(dx * dx + dy * dy)
+    points = [(1, 2.5), (2, 0.5)]
+    total = 0.0
+    for p in points:
+        total += float(p[0]) * p[1]
+    print(total)
+    scores = {"ann": (90, true), "bob": (40, false)}
+    for who in scores:
+        s, passed = scores[who]
+        print(f"{who}: {s} {passed}")
+    return 0
