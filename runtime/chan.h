@@ -15,3 +15,13 @@ void     rw_chan_close(rw_chan *c);
 int64_t  rw_chan_len  (rw_chan *c);                      /* buffered values */
 
 #endif
+
+/* Mutex (spec 46): a fiber-aware lock. A fiber that must wait parks (its
+ * worker runs other fibers); a non-fiber thread waits on a condition
+ * variable. Waiters acquire it in FIFO order. */
+typedef struct rw_mutex rw_mutex;
+
+rw_mutex *rw_mutex_new   (void);
+void      rw_mutex_lock  (rw_mutex *m);
+void      rw_mutex_unlock(rw_mutex *m);   /* aborts if not locked */
+int8_t    rw_mutex_try_lock(rw_mutex *m);
