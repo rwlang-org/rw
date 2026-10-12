@@ -141,6 +141,20 @@ class IRGen:
         self._rw_sleep_ms = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_sleep_ms")
         self._rw_time_ms = ir.Function(m, ir.FunctionType(I64, []), "rw_time_ms")
         self._rw_mono_ns = ir.Function(m, ir.FunctionType(I64, []), "rw_mono_ns")
+        # OS API (spec 40)
+        self._rw_set_args = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [I32, I8P.as_pointer()]), "rw_set_args")
+        self._rw_os_args = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [RW_LIST_INT_TY.as_pointer()]), "rw_os_args")
+        self._opt_str_ty = llvm_type_of(T.option_of(T.STRING))
+        self._rw_os_getenv = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [self._opt_str_ty.as_pointer(), RW_STR_TY]),
+            "rw_os_getenv")
+        self._rw_os_setenv = ir.Function(
+            m, ir.FunctionType(I8, [RW_STR_TY, RW_STR_TY]), "rw_os_setenv")
+        self._rw_os_exit = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_os_exit")
+        self._rw_os_getcwd = ir.Function(m, ir.FunctionType(RW_STR_TY, []), "rw_os_getcwd")
+        self._rw_os_chdir = ir.Function(m, ir.FunctionType(I8, [RW_STR_TY]), "rw_os_chdir")
         # string builtins (spec 28); split/join take the list by pointer.
         s2s = ir.FunctionType(RW_STR_TY, [RW_STR_TY])
         self._rw_str_strip = ir.Function(m, s2s, "rw_str_strip")
@@ -320,10 +334,11 @@ class IRGen:
 
     # ---------- C main shim ----------
     def _emit_c_main(self) -> None:
-        fty = ir.FunctionType(I32, [])
+        fty = ir.FunctionType(I32, [I32, I8P.as_pointer()])
         main = ir.Function(self.mod, fty, "main")
         bb = main.append_basic_block("entry")
         b = ir.IRBuilder(bb)
+        b.call(self._rw_set_args, list(main.args))  # for os_args() (spec 40)
         b.call(self._rw_init, [])
         r = b.call(self.funcs[(None, "main")], [])
         b.call(self._rw_shutdown, [])
@@ -1138,6 +1153,14 @@ class IRGen:
             return self._emit_expr(call.args[0], ctx)
         if call.callee in ("dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values"):
             return self._emit_dict_builtin(call, ctx)
+        if call.callee == "os_args":
+            out = ctx.alloca(RW_LIST_INT_TY)
+            ctx.builder.call(self._rw_os_args, [out])
+            return ctx.builder.load(out)
+        if call.callee == "os_getenv":
+            out = ctx.alloca(self._opt_str_ty)
+            ctx.builder.call(self._rw_os_getenv, [out, self._emit_expr(call.args[0], ctx)])
+            return ctx.builder.load(out)
         if call.callee == "str_split":
             sv, sep = (self._emit_expr(a, ctx) for a in call.args)
             out_slot = ctx.alloca(RW_LIST_INT_TY)
@@ -1163,6 +1186,10 @@ class IRGen:
             "sleep": self._rw_sleep_ms,
             "time_ms": self._rw_time_ms,
             "mono_ns": self._rw_mono_ns,
+            "os_setenv": self._rw_os_setenv,
+            "os_exit": self._rw_os_exit,
+            "os_getcwd": self._rw_os_getcwd,
+            "os_chdir": self._rw_os_chdir,
         }
         if call.callee in direct:
             fn = direct[call.callee]

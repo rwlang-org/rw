@@ -645,6 +645,76 @@ static void dict_collect(rw_list *out, rw_dict *d, int keys) {
 void rw_dict_keys(rw_list *out, rw_dict *d) { dict_collect(out, d, 1); }
 void rw_dict_values(rw_list *out, rw_dict *d) { dict_collect(out, d, 0); }
 
+/* ---------- OS API (spec 40) ---------- */
+
+#include <unistd.h>
+
+static int32_t g_argc = 0;
+static char  **g_argv = NULL;
+
+void rw_set_args(int32_t argc, char **argv) {
+    g_argc = argc;
+    g_argv = argv;
+}
+
+/* A NUL-terminated copy of s for C APIs (caller frees). */
+static char *cstr_dup(rw_str s) {
+    char *p = (char *)malloc((size_t)s.len + 1);
+    if (!p) { fputs("rw: out of memory\n", stderr); abort(); }
+    if (s.len > 0) memcpy(p, s.ptr, (size_t)s.len);
+    p[s.len] = '\0';
+    return p;
+}
+
+void rw_os_args(rw_list *out) {
+    out->len = 0;
+    out->cap = 0;
+    out->data = NULL;
+    if (g_argc <= 0) return;
+    rw_str *items = (rw_str *)malloc((size_t)g_argc * sizeof(rw_str));
+    if (!items) return;
+    for (int32_t i = 0; i < g_argc; i++) {
+        items[i] = rw_str_from_cstr(g_argv[i], (int64_t)strlen(g_argv[i]));
+    }
+    out->len = g_argc;
+    out->cap = g_argc;
+    out->data = (char *)items;
+}
+
+void rw_os_getenv(rw_option_str *out, rw_str name) {
+    char *n = cstr_dup(name);
+    const char *v = getenv(n);
+    free(n);
+    out->tag = v ? 1 : 0;
+    out->value = v ? rw_str_from_cstr(v, (int64_t)strlen(v)) : rw_str_from_cstr("", 0);
+}
+
+int8_t rw_os_setenv(rw_str name, rw_str value) {
+    char *n = cstr_dup(name), *v = cstr_dup(value);
+    int rc = setenv(n, v, 1);
+    free(n);
+    free(v);
+    return rc == 0 ? 1 : 0;
+}
+
+void rw_os_exit(int64_t code) {
+    fflush(NULL);
+    exit((int)code);
+}
+
+rw_str rw_os_getcwd(void) {
+    char buf[4096];
+    if (!getcwd(buf, sizeof buf)) return rw_str_from_cstr("", 0);
+    return rw_str_from_cstr(buf, (int64_t)strlen(buf));
+}
+
+int8_t rw_os_chdir(rw_str path) {
+    char *p = cstr_dup(path);
+    int rc = chdir(p);
+    free(p);
+    return rc == 0 ? 1 : 0;
+}
+
 /* ---------- lifecycle ---------- */
 
 void rw_init(void) {
