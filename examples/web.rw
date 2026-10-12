@@ -173,12 +173,16 @@ def reason(status: int) -> string:
         return "Not Found"
     if status == 405:
         return "Method Not Allowed"
+    if status == 408:
+        return "Request Timeout"
     if status == 413:
         return "Content Too Large"
     if status == 431:
         return "Request Header Fields Too Large"
     if status == 500:
         return "Internal Server Error"
+    if status == 501:
+        return "Not Implemented"
     return "Unknown"
 
 # ---------- application and routing ----------
@@ -401,16 +405,76 @@ def read_request(r: bufio.Reader) -> Request:
         if c > 0:
             headers = list_push(headers, Header(str_strip(str_slice(h, 0, c)), str_strip(str_slice(h, c + 1, len(h)))))
     body: string = ""
-    match str_to_int(lookup(headers, "Content-Length")):
-        case Some(n):
-            if n > max_body_bytes():
-                return bad_request("too-large")
-            body = str_from_bytes(r.read_exact(n))
-            if len(body) < n:
-                return bad_request("bad")
-        case None:
-            body = ""
+    te: string = str_lower(lookup(headers, "Transfer-Encoding"))
+    if te == "chunked":
+        match read_chunked(r):
+            case Ok(b):
+                body = b
+            case Err(why):
+                return bad_request(why)
+    elif te != "":
+        return bad_request("unsupported-encoding")
+    else:
+        match str_to_int(lookup(headers, "Content-Length")):
+            case Some(n):
+                if n < 0 or n > max_body_bytes():
+                    return bad_request("too-large" if n > 0 else "bad")
+                body = str_from_bytes(r.read_exact(n))
+                if len(body) < n:
+                    return bad_request("bad")
+            case None:
+                if lookup(headers, "Content-Length") != "":
+                    return bad_request("bad")
+                body = ""
     return Request(list_at(parts, 0), path, query_s, headers, list_new(), body, version)
+
+# A hexadecimal chunk size; -1 if `s` is empty, not hex, or too long.
+def parse_hex(s: string) -> int:
+    if len(s) == 0 or len(s) > 15:
+        return -1
+    n: int = 0
+    for i in range(0, len(s)):
+        d: int = url.hex_value(byte_at(s, i))
+        if d < 0:
+            return -1
+        n = n * 16 + d
+    return n
+
+# A `Transfer-Encoding: chunked` body (spec 65): size lines in hex (chunk
+# extensions after ";" ignored), each chunk followed by CRLF, a zero-size
+# chunk, then optional trailer lines up to an empty line.
+def read_chunked(r: bufio.Reader) -> Result[string, string]:
+    body: string = ""
+    while true:
+        line: string = r.read_until("\n", 1024)
+        if not str_ends_with(line, "\n"):
+            return Err("bad")
+        size_s: string = str_strip(line)
+        semi: int = str_find(size_s, ";")
+        if semi >= 0:
+            size_s = str_strip(str_slice(size_s, 0, semi))
+        size: int = parse_hex(size_s)
+        if size < 0:
+            return Err("bad")
+        if size == 0:
+            break
+        if len(body) + size > max_body_bytes():
+            return Err("too-large")
+        chunk: Bytes = r.read_exact(size)
+        if len(chunk) < size:
+            return Err("bad")
+        body = body + str_from_bytes(chunk)
+        if str_strip(r.read_until("\n", 2)) != "":
+            return Err("bad")
+    trailer_bytes: int = 0
+    while true:
+        t: string = r.read_until("\n", max_header_bytes() - trailer_bytes + 1)
+        trailer_bytes += len(t)
+        if not str_ends_with(t, "\n"):
+            return Err("too-large" if trailer_bytes > max_header_bytes() else "bad")
+        if str_strip(t) == "":
+            return Ok(body)
+    return Ok(body)
 
 # The response as bytes on the wire. A HEAD response carries the headers of
 # the GET response (Content-Length included) but no body.
@@ -483,12 +547,9 @@ def inflight_add(f: Inflight, d: int) -> int:
     return n
 
 # Whether the client lets the connection stay open (spec 64): HTTP/1.1
-# unless it sent "Connection: close", HTTP/1.0 only with "keep-alive". A
-# chunked request body cannot be skipped reliably, so it ends the connection.
+# unless it sent "Connection: close", HTTP/1.0 only with "keep-alive".
 def wants_keep_alive(req: Request) -> bool:
     c: string = str_lower(header(req, "Connection"))
-    if header(req, "Transfer-Encoding") != "":
-        return false
     if req.version == "HTTP/1.1":
         return not str_contains(c, "close")
     return str_contains(c, "keep-alive")
@@ -530,6 +591,8 @@ def serve_conn(app: App, fd: int, f: Inflight) -> int:
             res = text(413, "request too large\n")
         elif req.method == "" and req.path == "timeout":
             res = text(408, "request timeout\n")
+        elif req.method == "" and req.path == "unsupported-encoding":
+            res = text(501, "transfer encoding not supported\n")
         elif req.method != "":
             res = respond(app, req)
         served += 1

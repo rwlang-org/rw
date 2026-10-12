@@ -111,12 +111,11 @@ The framework adds `Content-Length` and `Connection` (`keep-alive` or `close`) t
   client sends `Connection: close`; HTTP/1.0 only with
   `Connection: keep-alive`. Pipelined requests are answered in order. An idle
   connection is closed after `app.keepalive_ms` (default 5000; 0 means one
-  request per connection), after 1000 requests, after any error response, and
-  when the request has a `Transfer-Encoding` body
+  request per connection), after 1000 requests, and after any error response
 - Requests are read with the stdlib buffered reader (`bufio`, spec 54)
 - The request head may be up to 64 KiB (`413` above that); the body is read
-  according to `Content-Length`, up to 1 MiB (`413` above that). Chunked
-  request bodies are not supported
+  according to `Content-Length` or `Transfer-Encoding: chunked` (spec 65), up
+  to 1 MiB (`413` above that). Other transfer encodings get `501`
 - A malformed request line gets `400 Bad Request`
 - Each connection has a read and write timeout (`app.timeout_ms`, default
   10000; 0 disables it). A client that sends part of a request and then
@@ -135,6 +134,6 @@ The framework adds `Content-Length` and `Connection` (`keep-alive` or `close`) t
 
 ## Not supported yet
 
-TLS, chunked transfer encoding, compression, and templates. Strings and
+TLS, chunked responses (streaming), compression, and templates. Strings and
 lists allocated while handling a request are not freed (memory management,
 #67).
