@@ -197,6 +197,14 @@ int64_t rw_open      (rw_str addr, rw_str mode);
 rw_str  rw_local_addr(int64_t fd);
 rw_str  rw_peer_addr (int64_t fd);
 
+/* Datagrams (spec 69): one recv_from result. */
+typedef struct {
+    rw_str data;
+    rw_str addr;   /* "udp://host:port" of the sender, "" on error */
+} rw_datagram;
+void    rw_recv_from(rw_datagram *out, int64_t fd, int64_t max);
+int64_t rw_send_to  (int64_t fd, rw_str data, rw_str addr);
+
 /* Timeouts (spec 53). */
 int64_t rw_dial_timeout     (rw_str addr, int64_t ms);
 void    rw_set_read_timeout (int64_t fd, int64_t ms);

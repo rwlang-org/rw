@@ -234,6 +234,11 @@ class IRGen:
             m, ir.FunctionType(ir.VoidType(), [I8, I8, RW_STR_TY]), "rw_assert_eq_fail_bool")
         self._rw_assert_eq_fail_str = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [RW_STR_TY, RW_STR_TY, RW_STR_TY]), "rw_assert_eq_fail_str")
+        # datagrams (spec 69)
+        self._datagram_ty = llvm_type_of(T.TupleType([T.BYTES, T.STRING]))
+        self._rw_recv_from = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [self._datagram_ty.as_pointer(), I64, I64]), "rw_recv_from")
+        self._rw_send_to = ir.Function(m, ir.FunctionType(I64, [I64, RW_STR_TY, RW_STR_TY]), "rw_send_to")
         # garbage collector (spec 67)
         self._rw_gc_collect = ir.Function(m, ir.FunctionType(ir.VoidType(), []), "rw_gc_collect")
         self._rw_gc_heap_size = ir.Function(m, ir.FunctionType(I64, []), "rw_gc_heap_size")
@@ -1419,6 +1424,11 @@ class IRGen:
             out_slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.call(self._rw_str_split, [out_slot, sv, sep])
             return ctx.builder.load(out_slot)
+        if call.callee == "recv_from":
+            fd, mx = (self._emit_expr(a, ctx) for a in call.args)
+            out = ctx.alloca(self._datagram_ty)
+            ctx.builder.call(self._rw_recv_from, [out, fd, mx])
+            return ctx.builder.load(out)
         if call.callee == "fs_read_dir":
             out_slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.call(self._rw_fs_read_dir, [out_slot, self._emit_expr(call.args[0], ctx)])
@@ -1494,6 +1504,7 @@ class IRGen:
             "fs_mkdir": self._rw_fs_mkdir,
             "proc_wait": self._rw_proc_wait,
             "gc_collect": self._rw_gc_collect,
+            "send_to": self._rw_send_to,
             "gc_heap_size": self._rw_gc_heap_size,
             "proc_kill": self._rw_proc_kill,
             "error_name": self._rw_error_name,

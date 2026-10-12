@@ -52,7 +52,7 @@ def start_announced(argv: list[str], env: dict | None = None, timeout: float = 1
         line += b
     sel.close()
     addr = line.decode().strip()
-    assert addr.startswith("tcp://127.0.0.1:"), addr
+    assert addr.startswith(("tcp://127.0.0.1:", "udp://127.0.0.1:")), addr
     proc.rest_of_stdout = []
 
     def drain() -> None:

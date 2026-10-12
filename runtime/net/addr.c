@@ -15,6 +15,7 @@
 #include "../aio.h"
 #include "../fiber/sched.h"
 #include "../runtime.h"
+#include "../rwgc.h"
 #include "../timer.h"
 
 #include <arpa/inet.h>
@@ -34,10 +35,11 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-typedef enum { ADDR_BAD, ADDR_TCP, ADDR_UNIX, ADDR_FILE } addr_kind;
+typedef enum { ADDR_BAD, ADDR_INET, ADDR_UNIX, ADDR_FILE } addr_kind;
 
 typedef struct {
     addr_kind kind;
+    int socktype;     /* inet: SOCK_STREAM (tcp://) or SOCK_DGRAM (udp://) */
     char host[256];   /* tcp: host without brackets ("" = any) */
     char port[16];    /* tcp */
     char path[1024];  /* unix / file */
@@ -70,7 +72,8 @@ static void parse_addr(rw_str addr, int allow_bare_path, parsed_addr *out) {
         out->kind = is_unix ? ADDR_UNIX : ADDR_FILE;
         return;
     }
-    if (has_prefix(addr, "tcp://")) {
+    if (has_prefix(addr, "tcp://") || has_prefix(addr, "udp://")) {
+        out->socktype = has_prefix(addr, "udp://") ? SOCK_DGRAM : SOCK_STREAM;
         const char *p = addr.ptr + 6;
         const char *end = addr.ptr + addr.len;
         const char *host, *host_end, *colon;
@@ -94,7 +97,7 @@ static void parse_addr(rw_str addr, int allow_bare_path, parsed_addr *out) {
         if (copy_cstr(out->host, sizeof out->host, host, (size_t)(host_end - host)) != 0) return;
         if (copy_cstr(out->port, sizeof out->port, port, plen) != 0) return;
         if (atoi(out->port) > 65535) return;
-        out->kind = ADDR_TCP;
+        out->kind = ADDR_INET;
         return;
     }
     if (allow_bare_path && !memchr(addr.ptr, ':', (size_t)addr.len) &&
@@ -110,6 +113,7 @@ typedef struct {
     const char *host;
     const char *port;
     int passive;
+    int socktype;
     struct addrinfo *res;
     int rc;
 } resolve_req;
@@ -118,15 +122,15 @@ static void do_resolve(void *arg) {
     resolve_req *r = (resolve_req *)arg;
     struct addrinfo hints;
     memset(&hints, 0, sizeof hints);
-    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_socktype = r->socktype;
     hints.ai_family = AF_UNSPEC;
     if (r->passive) hints.ai_flags = AI_PASSIVE;
     hints.ai_flags |= AI_NUMERICSERV;
     r->rc = getaddrinfo(r->host, r->port, &hints, &r->res);
 }
 
-static struct addrinfo *resolve(const char *host, const char *port, int passive) {
-    resolve_req r = { host, port, passive, NULL, 0 };
+static struct addrinfo *resolve(const char *host, const char *port, int passive, int socktype) {
+    resolve_req r = { host, port, passive, socktype, NULL, 0 };
     rw_aio_call(do_resolve, &r);
     if (r.rc != 0) { rw_errno = RW_ENOHOST; return NULL; }
     return r.res;
@@ -187,9 +191,9 @@ static void no_sigpipe(int fd) {
 static int64_t dial_impl(rw_str addr, int64_t deadline_ns) {
     parsed_addr pa;
     parse_addr(addr, 0, &pa);
-    if (pa.kind == ADDR_TCP) {
+    if (pa.kind == ADDR_INET) {
         if (pa.host[0] == '\0') return -1;
-        struct addrinfo *res = resolve(pa.host, pa.port, 0);
+        struct addrinfo *res = resolve(pa.host, pa.port, 0, pa.socktype);
         if (!res) return -1;
         int fd = -1;
         for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
@@ -219,15 +223,21 @@ static int64_t dial_impl(rw_str addr, int64_t deadline_ns) {
 
 /* ---- listen / accept ---- */
 
+/* Stream sockets bind and listen; a datagram socket (udp://, spec 69) only
+ * binds, and is nonblocking so recv_from / send_to take the netpoller path. */
 static int bind_listen(int fd, const struct sockaddr *sa, socklen_t len) {
-    if (bind(fd, sa, len) != 0 || listen(fd, 128) != 0) return -1;
-    return 0;
+    int type = SOCK_STREAM;
+    socklen_t tl = sizeof type;
+    getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &tl);
+    if (bind(fd, sa, len) != 0) return -1;
+    if (type == SOCK_DGRAM) return rw_set_nonblocking(fd) == 0 ? 0 : -1;
+    return listen(fd, 128) != 0 ? -1 : 0;
 }
 
 static int64_t listen_impl(rw_str addr) {
     parsed_addr pa;
     parse_addr(addr, 0, &pa);
-    if (pa.kind == ADDR_TCP) {
+    if (pa.kind == ADDR_INET) {
         int one = 1;
         if (pa.host[0] == '\0') {
             /* "tcp://:port" listens on every IPv4 interface, like tcp_listen. */
@@ -236,13 +246,13 @@ static int64_t listen_impl(rw_str addr) {
             sin.sin_family = AF_INET;
             sin.sin_addr.s_addr = htonl(INADDR_ANY);
             sin.sin_port = htons((uint16_t)atoi(pa.port));
-            int fd = socket(AF_INET, SOCK_STREAM, 0);
+            int fd = socket(AF_INET, pa.socktype, 0);
             if (fd < 0) return -1;
             setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
             if (bind_listen(fd, (struct sockaddr *)&sin, sizeof sin) != 0) { close_keep_errno(fd); return -1; }
             return fd;
         }
-        struct addrinfo *res = resolve(pa.host, pa.port, 1);
+        struct addrinfo *res = resolve(pa.host, pa.port, 1, pa.socktype);
         if (!res) return -1;
         int fd = -1;
         for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
@@ -311,17 +321,25 @@ int64_t rw_open(rw_str addr, rw_str mode) {
 
 /* ---- addresses ---- */
 
-static rw_str format_sockaddr(const struct sockaddr_storage *ss, socklen_t len) {
+/* `scheme` is "tcp" or "udp"; Unix sockets always print as unix://. */
+static const char *scheme_of(int fd) {
+    int type = SOCK_STREAM;
+    socklen_t tl = sizeof type;
+    getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &tl);
+    return type == SOCK_DGRAM ? "udp" : "tcp";
+}
+
+static rw_str format_sockaddr(const struct sockaddr_storage *ss, socklen_t len, const char *scheme) {
     char buf[1100];
     char host[INET6_ADDRSTRLEN];
     if (ss->ss_family == AF_INET) {
         const struct sockaddr_in *s = (const struct sockaddr_in *)ss;
         inet_ntop(AF_INET, &s->sin_addr, host, sizeof host);
-        snprintf(buf, sizeof buf, "tcp://%s:%u", host, ntohs(s->sin_port));
+        snprintf(buf, sizeof buf, "%s://%s:%u", scheme, host, ntohs(s->sin_port));
     } else if (ss->ss_family == AF_INET6) {
         const struct sockaddr_in6 *s = (const struct sockaddr_in6 *)ss;
         inet_ntop(AF_INET6, &s->sin6_addr, host, sizeof host);
-        snprintf(buf, sizeof buf, "tcp://[%s]:%u", host, ntohs(s->sin6_port));
+        snprintf(buf, sizeof buf, "%s://[%s]:%u", scheme, host, ntohs(s->sin6_port));
     } else if (ss->ss_family == AF_UNIX) {
         const struct sockaddr_un *s = (const struct sockaddr_un *)ss;
         size_t off = offsetof(struct sockaddr_un, sun_path);
@@ -338,7 +356,7 @@ rw_str rw_local_addr(int64_t fd) {
     socklen_t len = sizeof ss;
     memset(&ss, 0, sizeof ss);
     if (getsockname((int)fd, (struct sockaddr *)&ss, &len) != 0) return rw_str_from_cstr("", 0);
-    return format_sockaddr(&ss, len);
+    return format_sockaddr(&ss, len, scheme_of((int)fd));
 }
 
 rw_str rw_peer_addr(int64_t fd) {
@@ -346,7 +364,7 @@ rw_str rw_peer_addr(int64_t fd) {
     socklen_t len = sizeof ss;
     memset(&ss, 0, sizeof ss);
     if (getpeername((int)fd, (struct sockaddr *)&ss, &len) != 0) return rw_str_from_cstr("", 0);
-    return format_sockaddr(&ss, len);
+    return format_sockaddr(&ss, len, scheme_of((int)fd));
 }
 
 /* ---- socket operations (spec 56) ---- */
@@ -379,4 +397,72 @@ int64_t rw_set_keepalive(int64_t fd, int8_t on) {
 int64_t rw_set_backlog(int64_t fd, int64_t n) {
     if (n < 1) { rw_set_last_error(EINVAL); return -1; }
     return report(listen((int)fd, (int)(n > 65535 ? 65535 : n)));
+}
+
+/* ---- datagrams (spec 69) ---- */
+
+void rw_recv_from(rw_datagram *out, int64_t fd, int64_t max) {
+    out->data = rw_str_from_cstr("", 0);
+    out->addr = rw_str_from_cstr("", 0);
+    if (max <= 0) { rw_set_last_error(EINVAL); return; }
+    char *buf = (char *)rw_gc_alloc_atomic((size_t)max);
+    int64_t deadline = -1;
+    for (;;) {
+        struct sockaddr_storage ss;
+        socklen_t len = sizeof ss;
+        ssize_t n = recvfrom((int)fd, buf, (size_t)max, 0, (struct sockaddr *)&ss, &len);
+        if (n >= 0) {   /* an empty datagram is a datagram too */
+            out->data.ptr = buf;
+            out->data.len = n;
+            out->addr = format_sockaddr(&ss, len, "udp");
+            rw_set_last_error(0);
+            return;
+        }
+        if (rw_errno == EINTR) continue;
+        if (rw_errno == EAGAIN || rw_errno == EWOULDBLOCK) {
+            if (deadline < 0) deadline = rw_net_deadline((int)fd, RW_NET_READ);
+            int r = rw_net_block((int)fd, RW_NET_READ, deadline);
+            if (r) { rw_set_last_error(RW_NET_ERRNO(r)); return; }
+            continue;
+        }
+        rw_set_last_error(rw_errno);
+        return;
+    }
+}
+
+int64_t rw_send_to(int64_t fd, rw_str data, rw_str addr) {
+    parsed_addr pa;
+    parse_addr(addr, 0, &pa);
+    if (pa.kind != ADDR_INET || pa.socktype != SOCK_DGRAM || pa.host[0] == '\0') {
+        rw_set_last_error(EINVAL);
+        return -1;
+    }
+    struct addrinfo *res = resolve(pa.host, pa.port, 0, SOCK_DGRAM);
+    if (!res) { rw_set_last_error(rw_errno); return -1; }
+    /* The first address whose family matches the socket. */
+    struct sockaddr_storage local;
+    socklen_t ll = sizeof local;
+    memset(&local, 0, sizeof local);
+    getsockname((int)fd, (struct sockaddr *)&local, &ll);
+    struct addrinfo *ai = res;
+    for (struct addrinfo *a = res; a; a = a->ai_next) {
+        if (a->ai_family == local.ss_family) { ai = a; break; }
+    }
+    int64_t deadline = -1;
+    int64_t result = -1;
+    for (;;) {
+        ssize_t n = sendto((int)fd, data.ptr, (size_t)data.len, 0, ai->ai_addr, ai->ai_addrlen);
+        if (n >= 0) { result = n; rw_set_last_error(0); break; }
+        if (rw_errno == EINTR) continue;
+        if (rw_errno == EAGAIN || rw_errno == EWOULDBLOCK) {
+            if (deadline < 0) deadline = rw_net_deadline((int)fd, RW_NET_WRITE);
+            int r = rw_net_block((int)fd, RW_NET_WRITE, deadline);
+            if (r) { rw_set_last_error(RW_NET_ERRNO(r)); break; }
+            continue;
+        }
+        rw_set_last_error(rw_errno);
+        break;
+    }
+    freeaddrinfo(res);
+    return result;
 }

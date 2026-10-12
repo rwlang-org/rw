@@ -1,0 +1,34 @@
+# UDP with dial / listen / recv_from / send_to (spec 69).
+
+def echo_server(srv: int, n: int) -> int:
+    for i in range(0, n):
+        data, sender = recv_from(srv, 2048)
+        send_to(srv, bytes_from_str("echo:" + str_from_bytes(data)), sender)
+    return n
+
+def main() -> int:
+    srv = listen("udp://127.0.0.1:0")
+    addr = local_addr(srv)
+    print(str_starts_with(addr, "udp://127.0.0.1:"))
+    served = spawn echo_server(srv, 3)
+
+    # A connected socket: write sends one datagram, read receives one.
+    c = dial(addr)
+    print(str_starts_with(peer_addr(c), "udp://127.0.0.1:"))
+    for word in ["a", "bb", ""]:
+        write(c, bytes_from_str(word))
+        print("[" + str_from_bytes(read(c, 100)) + "]")
+    print(await served)
+
+    # Errors.
+    print(send_to(srv, bytes_from_str("x"), "tcp://127.0.0.1:9"))
+    print(error_name(last_error()))
+    set_read_timeout(srv, 50)
+    data, sender = recv_from(srv, 100)
+    print(len(data))
+    print(sender == "")
+    print(error_name(last_error()))
+    print(accept(srv))
+    close(c)
+    close(srv)
+    return 0
