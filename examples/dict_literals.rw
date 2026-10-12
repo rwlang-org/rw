@@ -1,0 +1,22 @@
+class Route:
+    method: string
+    path: string
+
+def main() -> int:
+    ages = {"ann": 31, "bob": 25}
+    ages["cy"] = 40
+    for name in ages:
+        print(f"{name}: {ages[name]}")
+    codes: Dict[int, string] = {200: "OK", 404: "Not Found"}
+    print(codes[404])
+    empty: Dict[string, int] = {}
+    print(len(empty))
+    routes = {"index": Route("GET", "/"), "echo": Route("POST", "/echo")}
+    print(routes["echo"].path)
+    nested: Dict[string, List[int]] = {"a": [1, 2], "b": []}
+    print(len(nested["a"]) + len(nested["b"]))
+    # A later duplicate key overwrites the earlier value, as in Python.
+    dup = {"k": 1, "k": 2}
+    print(len(dup))
+    print(dup["k"])
+    return 0

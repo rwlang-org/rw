@@ -2119,3 +2119,21 @@ def test_method_on_imported_class(tmp_path):
 )
 def test_constant_errors(src, msg):
     assert msg in err(src).diagnostic.message
+
+
+# ----- dict literals (spec 36) -----
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ("    d = {}\n", "cannot infer the type of `d`"),
+        ("    print(len({}))\n", "cannot infer the type of {}"),
+        ('    d = {1.5: "a"}\n', "Dict keys must be int or string"),
+        ('    d = {"a": 1, "b": "x"}\n', "dict value 2 must be int"),
+        ('    d = {"a": 1, 2: 3}\n', "dict key 2 must be string"),
+        ('    d: Dict[string, string] = {"a": 1}\n', "type mismatch"),
+    ],
+)
+def test_dict_literal_errors(body, msg):
+    e = err("def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message

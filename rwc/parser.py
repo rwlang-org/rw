@@ -1077,6 +1077,20 @@ class Parser:
         if t.kind in (TokenKind.KW_INT, TokenKind.KW_FLOAT) and self.peek(1).kind == TokenKind.LPAREN:
             self.i += 1
             return A.Name(t.value, t.line, t.col)
+        if t.kind == TokenKind.LBRACE:
+            # Dict literal `{k: v, ...}` (spec 36).
+            self.i += 1
+            keys: List[A.Expr] = []
+            values: List[A.Expr] = []
+            if self.cur.kind != TokenKind.RBRACE:
+                while True:
+                    keys.append(self.parse_expr())
+                    self.eat(TokenKind.COLON, "':' between a dict key and its value")
+                    values.append(self.parse_expr())
+                    if not self.match(TokenKind.COMMA):
+                        break
+            self.eat(TokenKind.RBRACE, "'}' to close the dict")
+            return A.DictLit(keys, values, t.line, t.col)
         if t.kind == TokenKind.LBRACK:
             # List literal `[e1, ..., en]` (spec 29).
             self.i += 1

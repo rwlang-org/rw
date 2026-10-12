@@ -805,7 +805,9 @@ class Sema:
             assert isinstance(expr, A.Call)
             if expr.args:
                 self._hint_expected(expr.args[0], expected, locals_)
-        elif isinstance(expected, T.DictType) and self._is_builtin_call(expr, "dict_new", locals_):
+        elif isinstance(expected, T.DictType) and (
+            self._is_builtin_call(expr, "dict_new", locals_) or isinstance(expr, A.DictLit)
+        ):
             self._type_hints[id(expr)] = expected
         elif isinstance(expected, T.OptionType) and isinstance(expr, (A.NoneExpr, A.SomeExpr)):
             self._type_hints[id(expr)] = expected
@@ -990,6 +992,33 @@ class Sema:
                         f"list element {i} must be {first}, found `{et}`",
                     ))
             return T.list_of(first)
+        if isinstance(expr, A.DictLit):
+            hint = self._type_hints.get(id(expr))
+            dhint = hint if isinstance(hint, T.DictType) else None
+            if not expr.keys:
+                if dhint is None:
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 2,
+                        "cannot infer the type of {}; give the variable a Dict type",
+                    ))
+                return dhint
+            kt = self._check_expr(fn, expr.keys[0], locals_)
+            if kt is not T.INT and kt is not T.STRING:
+                raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
+                                              f"Dict keys must be int or string, found `{kt}`"))
+            vt = (self._check_expr_expect(fn, expr.values[0], locals_, dhint.value) if dhint
+                  else self._check_expr(fn, expr.values[0], locals_))
+            if vt is T.VOID:
+                raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
+                                              "Dict values cannot be void"))
+            for i, (k, v) in enumerate(zip(expr.keys[1:], expr.values[1:], strict=True), start=2):
+                if self._check_expr(fn, k, locals_) != kt:
+                    raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
+                                                  f"dict key {i} must be {kt}"))
+                if self._check_expr_expect(fn, v, locals_, vt) != vt:
+                    raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
+                                                  f"dict value {i} must be {vt}"))
+            return T.DictType(kt, vt)
         if isinstance(expr, A.Index):
             obj_ty = self._check_expr(fn, expr.obj, locals_)
             if isinstance(obj_ty, T.DictType):
@@ -1511,6 +1540,7 @@ class Sema:
             or (isinstance(value, A.ListLit) and not value.elems)
             or self._is_builtin_call(value, "list_new", locals_)
             or self._is_builtin_call(value, "dict_new", locals_)
+            or (isinstance(value, A.DictLit) and not value.keys)
         )
         if untyped:
             raise CompileError(Diagnostic(

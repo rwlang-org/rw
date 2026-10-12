@@ -201,6 +201,15 @@ class ListLit:
 
 
 @dataclass
+class DictLit:
+    """`{k1: v1, ..., kn: vn}` (spec 36)."""
+    keys: List["Expr"]
+    values: List["Expr"]
+    line: int
+    col: int
+
+
+@dataclass
 class Index:
     """`obj[index]` on a list or a string (spec 29)."""
     obj: "Expr"
@@ -243,7 +252,7 @@ Expr = Union[
     UnaryOp, BinOp, IfExpr, Call, SpawnExpr, AwaitExpr,
     SomeExpr, NoneExpr,
     OkExpr, ErrExpr,
-    FieldAccess, CallValue, ListLit, Index, Slice,
+    FieldAccess, CallValue, ListLit, Index, Slice, DictLit,
 ]
 
 
