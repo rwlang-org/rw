@@ -1,0 +1,17 @@
+# Like Python, several loops may reuse the same variable name.
+def main() -> int:
+    total = 0
+    for i in range(0, 3):
+        total += i
+    for i in range(10, 13):
+        total += i
+    print(total)
+    names = ["a", "b"]
+    for n in names:
+        print(n)
+    for n in ["c"]:
+        print(n)
+    i = 100
+    for i in range(0, 2):
+        print(i)
+    return 0

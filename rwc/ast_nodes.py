@@ -292,6 +292,9 @@ class VarDecl:
     value: Expr
     line: int
     col: int
+    # True for the loop variable a range-for desugars to. Like Python, a loop
+    # may reuse a variable that already exists with the same type.
+    implicit: bool = False
 
 
 @dataclass

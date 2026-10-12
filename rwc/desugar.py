@@ -76,7 +76,7 @@ class _Desugarer:
         # __stop = <stop>; __step = <step>; <var> = <start>
         out.append(A.VarDecl(stop_name, self._int_type(ln, col), f.stop, ln, col))
         out.append(A.VarDecl(step_name, self._int_type(ln, col), f.step, ln, col))
-        out.append(A.VarDecl(f.var, self._int_type(ln, col), f.start, ln, col))
+        out.append(A.VarDecl(f.var, self._int_type(ln, col), f.start, ln, col, implicit=True))
 
         step_pos = A.BinOp(">", A.Name(step_name, ln, col), A.IntLit(0, ln, col), ln, col)
         step_neg = A.BinOp("<", A.Name(step_name, ln, col), A.IntLit(0, ln, col), ln, col)

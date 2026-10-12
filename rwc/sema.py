@@ -594,7 +594,13 @@ class Sema:
         ret_ty: T.Type,
     ) -> bool:
         if isinstance(stmt, A.VarDecl):
-            if stmt.name in locals_:
+            if stmt.name in locals_ and not (stmt.implicit and locals_[stmt.name] is T.INT):
+                if stmt.implicit:
+                    raise CompileError(Diagnostic(
+                        self.filename, stmt.line, stmt.col, len(stmt.name),
+                        f"loop variable `{stmt.name}` is already declared as "
+                        f"`{locals_[stmt.name]}`, not int",
+                    ))
                 raise CompileError(Diagnostic(
                     self.filename, stmt.line, stmt.col, len(stmt.name),
                     f"variable `{stmt.name}` already declared",
@@ -760,10 +766,11 @@ class Sema:
                     self.filename, stmt.line, stmt.col, 3,
                     f"cannot iterate over `{it_ty}`",
                 ))
-            if stmt.var in locals_:
+            if stmt.var in locals_ and locals_[stmt.var] != elem:
                 raise CompileError(Diagnostic(
                     self.filename, stmt.line, stmt.col, 3,
-                    f"variable `{stmt.var}` already declared",
+                    f"loop variable `{stmt.var}` is already declared as "
+                    f"`{locals_[stmt.var]}`, not `{elem}`",
                 ))
             self.result.foreach_types[id(stmt)] = elem
             body_locals = dict(locals_)
