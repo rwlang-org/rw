@@ -17,3 +17,8 @@ hello, world 123
 HELLO, WORLD 123
 contains ok
 ends_with ok
+[pad  ]
+[  pad]
+3
+-1
+3

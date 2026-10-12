@@ -92,6 +92,9 @@ void    rw_list_at  (void *elem_out, const rw_list *l, int64_t i, int64_t elem_s
 void    rw_str_split    (rw_list *out, rw_str s, rw_str sep);
 rw_str  rw_str_join     (const rw_list *parts, rw_str sep);
 rw_str  rw_str_strip    (rw_str s);
+rw_str  rw_str_lstrip   (rw_str s);   /* spec 55 */
+rw_str  rw_str_rstrip   (rw_str s);
+int64_t rw_str_rfind    (rw_str s, rw_str sub);
 rw_str  rw_str_replace  (rw_str s, rw_str old, rw_str new_);
 rw_str  rw_str_lower    (rw_str s);
 rw_str  rw_str_upper    (rw_str s);

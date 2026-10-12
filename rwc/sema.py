@@ -85,6 +85,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "int", "float", "str",
     "str_split", "str_join", "str_strip", "str_replace", "str_lower", "str_upper",
     "str_contains", "str_ends_with",
+    "str_lstrip", "str_rstrip", "str_rfind",
     "dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values",
     "sleep", "time_ms", "mono_ns",
     "rand_int", "rand_float", "rand_seed", "rand_bytes",
@@ -126,6 +127,10 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
     "str_upper": ((T.STRING,), T.STRING),
     "str_contains": ((T.STRING, T.STRING), T.BOOL),
     "str_ends_with": ((T.STRING, T.STRING), T.BOOL),
+    # spec 55
+    "str_lstrip": ((T.STRING,), T.STRING),
+    "str_rstrip": ((T.STRING,), T.STRING),
+    "str_rfind": ((T.STRING, T.STRING), T.INT),
     # spec 39
     "sleep": ((T.INT,), T.VOID),
     "time_ms": ((), T.INT),
