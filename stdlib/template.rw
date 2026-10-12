@@ -1,0 +1,191 @@
+# Mustache-style templates over json.Value data (spec 66).
+#
+#   import json
+#   import template
+#
+#   match template.compile("<h1>{{title}}</h1><ul>{{#items}}<li>{{name}}</li>{{/items}}</ul>"):
+#       case Ok(t):
+#           print(t.render(data))          # data: a json.Value object
+#       case Err(msg):
+#           print(msg)                     # "unclosed section 'items' at line 1, column 21"
+#
+# Tags: {{name}} (HTML-escaped), {{{name}}} and {{& name}} (raw), {{a.b.c}}
+# (dotted lookup), {{.}} (the current item), {{#name}}...{{/name}}
+# (section), {{^name}}...{{/name}} (inverted section), {{! comment }}.
+import json
+
+# kind: "text", "var", "raw", "section", "inverted"
+class Node:
+    kind: string
+    text: string        # literal text, or the tag's name
+    children: List[Node]
+
+class Template:
+    nodes: List[Node]
+
+    def render(self, data: json.Value) -> string:
+        stack: List[json.Value] = [data]
+        return render_nodes(self.nodes, stack)
+
+# ---------- compiling ----------
+
+class Parser:
+    src: string
+    pos: int
+    err: string
+
+    def fail(self, msg: string, at: int) -> void:
+        if self.err != "":
+            return
+        line = 1
+        col = 1
+        for n in range(0, at):
+            if byte_at(self.src, n) == 10:
+                line += 1
+                col = 1
+            else:
+                col += 1
+        self.err = f"{msg} at line {line}, column {col}"
+
+    # Nodes up to the end of input, or up to {{/closing}} when closing != "".
+    def nodes(self, closing: string, opened_at: int) -> List[Node]:
+        out: List[Node] = []
+        while self.err == "":
+            open = str_find(str_slice(self.src, self.pos, len(self.src)), "{{")
+            if open < 0:
+                if self.pos < len(self.src):
+                    out = list_push(out, Node("text", str_slice(self.src, self.pos, len(self.src)), []))
+                self.pos = len(self.src)
+                if closing != "":
+                    self.fail(f"unclosed section '{closing}'", opened_at)
+                return out
+            start = self.pos + open
+            if start > self.pos:
+                out = list_push(out, Node("text", str_slice(self.src, self.pos, start), []))
+            triple = str_starts_with(str_slice(self.src, start, start + 3), "{{{")
+            close_tag = "}}}" if triple else "}}"
+            body_at = start + (3 if triple else 2)
+            end = str_find(str_slice(self.src, body_at, len(self.src)), close_tag)
+            if end < 0:
+                self.fail("unclosed tag", start)
+                return out
+            inner = str_strip(str_slice(self.src, body_at, body_at + end))
+            self.pos = body_at + end + len(close_tag)
+            if triple:
+                out = list_push(out, Node("raw", inner, []))
+                continue
+            sigil = str_slice(inner, 0, 1)
+            name = str_strip(str_slice(inner, 1, len(inner)))
+            if sigil == "!":
+                continue
+            if sigil == "&":
+                out = list_push(out, Node("raw", name, []))
+            elif sigil == "#" or sigil == "^":
+                kids = self.nodes(name, start)
+                out = list_push(out, Node("section" if sigil == "#" else "inverted", name, kids))
+            elif sigil == "/":
+                if name != closing:
+                    if closing == "":
+                        self.fail(f"unexpected closing tag '{name}'", start)
+                    else:
+                        self.fail(f"'{name}' closes section '{closing}'", start)
+                return out
+            else:
+                if inner == "":
+                    self.fail("empty tag", start)
+                    return out
+                out = list_push(out, Node("var", inner, []))
+        return out
+
+def compile(src: string) -> Result[Template, string]:
+    p = Parser(src, 0, "")
+    nodes = p.nodes("", 0)
+    if p.err != "":
+        return Err(p.err)
+    return Ok(Template(nodes))
+
+# Compile and render in one go.
+def render(src: string, data: json.Value) -> Result[string, string]:
+    match compile(src):
+        case Ok(t):
+            return Ok(t.render(data))
+        case Err(msg):
+            return Err(msg)
+
+# ---------- rendering ----------
+
+def escape_html(s: string) -> string:
+    if str_find(s, "&") < 0 and str_find(s, "<") < 0 and str_find(s, ">") < 0 and str_find(s, "\"") < 0 and str_find(s, "'") < 0:
+        return s
+    return str_replace(str_replace(str_replace(str_replace(str_replace(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), "\"", "&quot;"), "'", "&#39;")
+
+# Strings as they are, numbers and booleans as text, null as "", arrays and
+# objects as JSON.
+def to_text(v: json.Value) -> string:
+    if v.kind == "string":
+        return v.s
+    if v.kind == "null":
+        return ""
+    return v.dump()
+
+def truthy(v: json.Value) -> bool:
+    if v.kind == "null":
+        return false
+    if v.kind == "bool":
+        return v.b
+    if v.kind == "string":
+        return v.s != ""
+    if v.kind == "array":
+        return v.size() > 0
+    return true
+
+# Resolve a (dotted) name against the context stack, innermost first: the
+# first segment picks the nearest context that has it; the rest walk down.
+def lookup(stack: List[json.Value], name: string) -> Option[json.Value]:
+    if name == ".":
+        return Some(stack[-1])
+    parts = str_split(name, ".")
+    k = len(stack) - 1
+    while k >= 0:
+        match stack[k].get(parts[0]):
+            case Some(v):
+                cur = v
+                for n in range(1, len(parts)):
+                    match cur.get(parts[n]):
+                        case Some(next):
+                            cur = next
+                        case None:
+                            return None
+                return Some(cur)
+            case None:
+                k -= 1
+    return None
+
+def render_nodes(nodes: List[Node], stack: List[json.Value]) -> string:
+    parts: List[string] = []
+    for node in nodes:
+        if node.kind == "text":
+            parts = list_push(parts, node.text)
+        elif node.kind == "var" or node.kind == "raw":
+            match lookup(stack, node.text):
+                case Some(v):
+                    t = to_text(v)
+                    parts = list_push(parts, escape_html(t) if node.kind == "var" else t)
+                case None:
+                    parts = list_push(parts, "")
+        else:
+            value = json.null()
+            match lookup(stack, node.text):
+                case Some(v):
+                    value = v
+                case None:
+                    value = json.null()
+            if node.kind == "inverted":
+                if not truthy(value):
+                    parts = list_push(parts, render_nodes(node.children, stack))
+            elif value.kind == "array":
+                for item in value.items:
+                    parts = list_push(parts, render_nodes(node.children, list_push(stack, item)))
+            elif truthy(value):
+                parts = list_push(parts, render_nodes(node.children, list_push(stack, value)))
+    return str_join(parts, "")

@@ -1,6 +1,7 @@
 # A web application built on examples/web.rw.
 import web
 import json as js
+import template
 import url
 from web import App, Request, Response, text, html, json, param, query, header, set_header
 
@@ -51,6 +52,22 @@ def powered_by(req: Request, res: Response) -> Response:
 def admin(req: Request) -> Response:
     return text(200, "admin area\n")
 
+# An HTML page from a template (spec 66); values are HTML-escaped.
+PAGE: string = "<h1>Hello, {{name}}</h1>{{#tags}}<span>{{.}}</span>{{/tags}}{{^tags}}<p>no tags</p>{{/tags}}\n"
+
+def page(req: Request) -> Response:
+    data: js.Value = js.object().set("name", js.from_str(param(req, "name")))
+    tags: js.Value = js.array([])
+    for t in str_split(query(req, "tags"), ","):
+        if t != "":
+            tags.push(js.from_str(t))
+    data.set("tags", tags)
+    match template.render(PAGE, data):
+        case Ok(body):
+            return html(200, body)
+        case Err(msg):
+            return text(500, msg + "\n")
+
 def old(req: Request) -> Response:
     return web.redirect("/")
 
@@ -69,6 +86,7 @@ def main() -> int:
     web.get(app, "/whoami", whoami)
     web.get(app, "/old", old)
     web.get(app, "/admin", admin)
+    web.get(app, "/page/:name", page)
     web.before(app, require_token)
     web.after(app, powered_by)
     # Static files: examples/public by default (run from the repository root).

@@ -1,0 +1,29 @@
+# Mustache-style templates with the standard library (spec 66).
+import json
+import template
+
+def show(src: string, data: string) -> void:
+    match json.parse(data):
+        case Ok(v):
+            match template.render(src, v):
+                case Ok(out):
+                    print("[" + out + "]")
+                case Err(msg):
+                    print("error: " + msg)
+        case Err(msg):
+            print("bad data: " + msg)
+
+def main() -> int:
+    show("Hello, {{name}}!", "{\"name\": \"<rw> & co\"}")
+    show("{{{name}}} {{& name}}", "{\"name\": \"<b>\"}")
+    show("{{#items}}<li>{{name}}={{price}}</li>{{/items}}", "{\"items\": [{\"name\": \"a\", \"price\": 1}, {\"name\": \"b\", \"price\": 2.5}]}")
+    show("{{#items}}{{.}},{{/items}}{{^items}}none{{/items}}", "{\"items\": []}")
+    show("{{#tags}}{{.}} {{/tags}}", "{\"tags\": [\"x\", \"y\"]}")
+    show("{{user.profile.city}} / {{user.missing.x}} / {{nothing}}", "{\"user\": {\"profile\": {\"city\": \"Tokyo\"}}}")
+    show("{{#user}}{{name}} in {{site}}{{/user}}", "{\"site\": \"rw.dev\", \"user\": {\"name\": \"ann\"}}")
+    show("{{#flag}}on{{/flag}}{{^flag}}off{{/flag}} {{! hidden }}{{n}}", "{\"flag\": false, \"n\": 3}")
+    show("{{#a}}x", "{}")
+    show("{{/a}}", "{}")
+    show("{{#a}}{{/b}}", "{}")
+    show("ok {{name", "{}")
+    return 0
