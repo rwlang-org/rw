@@ -28,7 +28,8 @@ def server():
     (td / "web.rw").write_text(listen_on_port_zero((EXAMPLES / "web.rw").read_text()))
     src = (EXAMPLES / "web_app.rw").read_text()
     # A short per-connection timeout so the slow-client tests run quickly.
-    src = src.replace("return web.serve(app, 8080)", "app.timeout_ms = 300\n    return web.serve(app, 8080)", 1)
+    src = src.replace("return web.serve(app, 8080)",
+                      "app.timeout_ms = 300\n    app.keepalive_ms = 600\n    return web.serve(app, 8080)", 1)
     assert "app.timeout_ms = 300" in src
     (td / "web_app.rw").write_text(src)
     out = td / "web_app"
@@ -80,7 +81,7 @@ def _parse(resp: bytes) -> tuple[int, dict[str, str], bytes]:
 
 
 def _call(port: int, method: str, target: str, body: bytes = b"", extra: str = "") -> tuple[int, dict[str, str], bytes]:
-    head = f"{method} {target} HTTP/1.1\r\nHost: x\r\n{extra}"
+    head = f"{method} {target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n{extra}"
     if body:
         head += f"Content-Length: {len(body)}\r\n"
     return _parse(_request(port, head.encode() + b"\r\n" + body))
@@ -186,11 +187,11 @@ def test_static_never_leaves_root(server, target):
 
 
 def test_head_has_headers_but_no_body(server):
-    resp = _request(server, b"HEAD /static/index.html HTTP/1.1\r\nHost: x\r\n\r\n")
+    resp = _request(server, b"HEAD /static/index.html HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
     status, headers, body = _parse(resp)
     assert (status, body) == (200, b"")
     assert headers["content-length"] == str(len(b"<h1>home</h1>\n"))
-    status, headers, body = _parse(_request(server, b"HEAD /hello/x HTTP/1.1\r\nHost: x\r\n\r\n"))
+    status, headers, body = _parse(_request(server, b"HEAD /hello/x HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"))
     assert (status, body, headers["content-length"]) == (200, b"", str(len(b"hello, x\n")))
 
 
@@ -270,7 +271,7 @@ def test_concurrent_requests(server):
     socks = [socket.create_connection(("127.0.0.1", server), timeout=3.0) for _ in range(20)]
     try:
         for i, s in enumerate(socks):
-            s.sendall(f"GET /hello/c{i} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+            s.sendall(f"GET /hello/c{i} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n".encode())
         for i, s in enumerate(socks):
             data = b""
             while part := s.recv(4096):
@@ -279,3 +280,65 @@ def test_concurrent_requests(server):
     finally:
         for s in socks:
             s.close()
+
+
+# ---------- keep-alive (spec 64) ----------
+
+def _read_response(f) -> tuple[int, dict[str, str], bytes]:
+    """One response from a socket file, using Content-Length."""
+    status_line = f.readline()
+    if not status_line:
+        raise EOFError
+    headers = {}
+    while (line := f.readline()) not in (b"\r\n", b""):
+        k, v = line.decode().rstrip("\r\n").split(": ", 1)
+        headers[k.lower()] = v
+    body = f.read(int(headers.get("content-length", "0")))
+    return int(status_line.split()[1]), headers, body
+
+
+def test_keep_alive_serves_several_requests(server):
+    with socket.create_connection(("127.0.0.1", server), timeout=5) as s:
+        f = s.makefile("rb")
+        for name in ["a", "b", "c"]:
+            s.sendall(f"GET /hello/{name} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+            status, headers, body = _read_response(f)
+            assert (status, body, headers["connection"]) == (200, f"hello, {name}\n".encode(), "keep-alive")
+        s.sendall(b"GET /hello/last HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        status, headers, body = _read_response(f)
+        assert (body, headers["connection"]) == (b"hello, last\n", "close")
+        assert f.read() == b""  # the server closed
+
+
+def test_pipelined_requests(server):
+    with socket.create_connection(("127.0.0.1", server), timeout=5) as s:
+        s.sendall(b"GET /hello/p1 HTTP/1.1\r\nHost: x\r\n\r\n"
+                  b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\nabc"
+                  b"GET /hello/p3 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        f = s.makefile("rb")
+        got = [_read_response(f)[::2] for _ in range(3)]
+    assert got == [(200, b"hello, p1\n"), (201, b"abc"), (200, b"hello, p3\n")]
+
+
+def test_http10_closes_unless_asked(server):
+    status, headers, body = _parse(_request(server, b"GET /hello/old HTTP/1.0\r\n\r\n"))
+    assert (status, headers["connection"]) == (200, "close")
+    with socket.create_connection(("127.0.0.1", server), timeout=5) as s:
+        f = s.makefile("rb")
+        s.sendall(b"GET /hello/k HTTP/1.0\r\nConnection: keep-alive\r\n\r\n")
+        assert _read_response(f)[1]["connection"] == "keep-alive"
+
+
+def test_idle_keep_alive_connection_is_closed(server):
+    with socket.create_connection(("127.0.0.1", server), timeout=5) as s:
+        f = s.makefile("rb")
+        s.sendall(b"GET /hello/idle HTTP/1.1\r\nHost: x\r\n\r\n")
+        _read_response(f)
+        t0 = time.monotonic()
+        assert f.read() == b""  # closed after keepalive_ms (600 ms in this fixture)
+        assert 0.4 < time.monotonic() - t0 < 4
+
+
+def test_bad_version_is_400(server):
+    assert _parse(_request(server, b"GET / HTTP/2.0\r\n\r\n"))[0] == 400
+

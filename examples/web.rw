@@ -28,6 +28,7 @@ class Request:
     headers: List[Header]
     params: List[Header]
     body: string
+    version: string    # "HTTP/1.1" or "HTTP/1.0"
 
 class Response:
     status: int
@@ -57,6 +58,9 @@ class App:
     logger: log.Logger
     # Per-connection read/write timeout in ms (spec 53); 0 disables it.
     timeout_ms: int
+    # How long an idle keep-alive connection waits for its next request
+    # (spec 64); 0 closes every connection after one response.
+    keepalive_ms: int
 
 # Result of matching a route pattern against a path.
 class Match:
@@ -185,7 +189,7 @@ def default_not_found(req: Request) -> Response:
 def new_app() -> App:
     lg: log.Logger = log.new(1)
     lg.prefix = "web"
-    return App(list_new(), default_not_found, [], [], [], true, lg, 10000)
+    return App(list_new(), default_not_found, [], [], [], true, lg, 10000, 5000)
 
 def route(app: App, method: string, pattern: string, handler: Callable[[Request], Response]) -> App:
     app.routes = list_push(app.routes, Route(method, pattern, handler))
@@ -356,10 +360,11 @@ def max_body_bytes() -> int:
 
 def bad_request(why: string) -> Request:
     # method "" marks a request that could not be read; path says why.
-    return Request("", why, "", list_new(), list_new(), "")
+    return Request("", why, "", list_new(), list_new(), "", "")
 
-def read_request(fd: int) -> Request:
-    r: bufio.Reader = bufio.reader(fd)
+# Read one request from the connection's reader; bytes after it (a
+# pipelined request) stay buffered for the next call.
+def read_request(r: bufio.Reader) -> Request:
     lines: List[string] = []
     size: int = 0
     while true:
@@ -382,6 +387,9 @@ def read_request(fd: int) -> Request:
     parts: List[string] = str_split(list_at(lines, 0), " ")
     if len(parts) != 3:
         return bad_request("bad")
+    version: string = list_at(parts, 2)
+    if version != "HTTP/1.1" and version != "HTTP/1.0":
+        return bad_request("bad")
     target: string = list_at(parts, 1)
     q: int = str_find(target, "?")
     path: string = target if q < 0 else str_slice(target, 0, q)
@@ -402,17 +410,17 @@ def read_request(fd: int) -> Request:
                 return bad_request("bad")
         case None:
             body = ""
-    return Request(list_at(parts, 0), path, query_s, headers, list_new(), body)
+    return Request(list_at(parts, 0), path, query_s, headers, list_new(), body, version)
 
 # The response as bytes on the wire. A HEAD response carries the headers of
 # the GET response (Content-Length included) but no body.
-def serialize(res: Response, head_only: bool = false) -> string:
+def serialize(res: Response, head_only: bool = false, keep_alive: bool = false) -> string:
     out: string = "HTTP/1.1 " + str_from_int(res.status) + " " + reason(res.status) + "\r\n"
     for i in range(0, len(res.headers)):
         h: Header = list_at(res.headers, i)
         out = out + h.name + ": " + h.value + "\r\n"
     out = out + "Content-Length: " + str_from_int(len(res.body)) + "\r\n"
-    out = out + "Connection: close\r\n\r\n"
+    out = out + ("Connection: keep-alive\r\n\r\n" if keep_alive else "Connection: close\r\n\r\n")
     if head_only:
         return out
     return out + res.body
@@ -461,28 +469,11 @@ def respond(app: App, req: Request) -> Response:
         res = hook(req, res)
     return res
 
-def handle_conn(app: App, fd: int) -> int:
-    set_read_timeout(fd, app.timeout_ms)
-    set_write_timeout(fd, app.timeout_ms)
-    req: Request = read_request(fd)
-    if req.method == "" and req.path == "eof":
-        return close(fd)
-    res: Response = text(400, "bad request\n")
-    if req.method == "" and req.path == "too-large":
-        res = text(413, "request too large\n")
-    elif req.method == "" and req.path == "timeout":
-        res = text(408, "request timeout\n")
-    elif req.method != "":
-        res = respond(app, req)
-    write_all(fd, bytes_from_str(serialize(res, req.method == "HEAD")))
-    if app.log:
-        app.logger.info(req.method + " " + req.path + " " + str_from_int(res.status))
-    return linger_close(fd)
-
 # Connections being served, so shutdown can wait for them (spec 57).
 class Inflight:
     count: int
     mu: Mutex
+    stopping: bool   # set on SIGINT / SIGTERM: finish, then close
 
 def inflight_add(f: Inflight, d: int) -> int:
     mutex_lock(f.mu)
@@ -491,17 +482,74 @@ def inflight_add(f: Inflight, d: int) -> int:
     mutex_unlock(f.mu)
     return n
 
+# Whether the client lets the connection stay open (spec 64): HTTP/1.1
+# unless it sent "Connection: close", HTTP/1.0 only with "keep-alive". A
+# chunked request body cannot be skipped reliably, so it ends the connection.
+def wants_keep_alive(req: Request) -> bool:
+    c: string = str_lower(header(req, "Connection"))
+    if header(req, "Transfer-Encoding") != "":
+        return false
+    if req.version == "HTTP/1.1":
+        return not str_contains(c, "close")
+    return str_contains(c, "keep-alive")
+
+# Wait up to app.keepalive_ms for the first byte of the next request. Waits
+# in short slices so a shutdown (f.stopping) is noticed quickly. False if
+# the client closed, the time ran out, or the server is stopping.
+def await_next(app: App, r: bufio.Reader, fd: int, f: Inflight) -> bool:
+    waited: int = 0
+    while waited < app.keepalive_ms:
+        if r.buffered() > 0:
+            return true
+        if f.stopping:
+            return false
+        set_read_timeout(fd, 200)
+        if r.fill():
+            return true
+        if error_name(r.err) != "ETIMEDOUT":
+            return false
+        r.eof = false   # a timeout is not the end of the stream
+        r.err = 0
+        waited += 200
+    return false
+
+# One connection: requests in a loop while both sides keep it alive.
 def serve_conn(app: App, fd: int, f: Inflight) -> int:
-    handle_conn(app, fd)
+    r: bufio.Reader = bufio.reader(fd)
+    served: int = 0
+    while true:
+        if served > 0 and not await_next(app, r, fd, f):
+            break
+        set_read_timeout(fd, app.timeout_ms)
+        set_write_timeout(fd, app.timeout_ms)
+        req: Request = read_request(r)
+        if req.method == "" and req.path == "eof":
+            break
+        res: Response = text(400, "bad request\n")
+        if req.method == "" and req.path == "too-large":
+            res = text(413, "request too large\n")
+        elif req.method == "" and req.path == "timeout":
+            res = text(408, "request timeout\n")
+        elif req.method != "":
+            res = respond(app, req)
+        served += 1
+        keep: bool = req.method != "" and app.keepalive_ms > 0 and served < 1000 and not f.stopping and wants_keep_alive(req)
+        write_all(fd, bytes_from_str(serialize(res, req.method == "HEAD", keep)))
+        if app.log:
+            app.logger.info(req.method + " " + req.path + " " + str_from_int(res.status))
+        if not keep:
+            break
+    linger_close(fd)
     inflight_add(f, -1)
     return 0
 
 # On SIGINT / SIGTERM, close the listener: the accept loop in serve() then
 # gets EBADF and stops taking new connections.
-def stop_on_signal(app: App, listen_fd: int) -> int:
+def stop_on_signal(app: App, listen_fd: int, f: Inflight) -> int:
     sig: string = signal_wait(["SIGINT", "SIGTERM"])
     if app.log:
         app.logger.info(sig + ", shutting down")
+    f.stopping = true   # idle keep-alive connections close at once
     close(listen_fd)
     return 0
 
@@ -514,8 +562,8 @@ def serve(app: App, port: int) -> int:
     if listen_fd < 0:
         app.logger.error("cannot listen on port " + str_from_int(port))
         return 1
-    f: Inflight = Inflight(0, mutex_new())
-    spawn stop_on_signal(app, listen_fd)
+    f: Inflight = Inflight(0, mutex_new(), false)
+    spawn stop_on_signal(app, listen_fd, f)
     while true:
         client: int = tcp_accept(listen_fd)
         if client < 0:

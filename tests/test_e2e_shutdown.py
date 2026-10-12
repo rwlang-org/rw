@@ -140,6 +140,21 @@ def test_sigterm_finishes_inflight_request_then_exits(web_server):
     assert re.search(r"Z INFO web: GET /hello/inflight 200\n", out), out
 
 
+def test_sigterm_closes_idle_keep_alive_connections(web_server):
+    proc, port = web_server
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        s.sendall(b"GET /hello/ka HTTP/1.1\r\nHost: x\r\n\r\n")
+        f = s.makefile("rb")
+        while f.readline() not in (b"\r\n", b""):
+            pass
+        f.read(len(b"hello, ka\n"))
+        t0 = time.monotonic()
+        proc.send_signal(signal.SIGTERM)
+        assert f.read() == b""   # the idle connection is closed promptly
+        assert time.monotonic() - t0 < 2
+    assert proc.wait(timeout=10) == 0
+
+
 def test_sigint_idle_server_exits_cleanly(web_server):
     proc, _ = web_server
     proc.send_signal(signal.SIGINT)
