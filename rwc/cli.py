@@ -9,7 +9,7 @@ from typing import Optional
 
 from . import __version__
 from .diagnostics import CompileError
-from .driver import compile_source, emit_ast, emit_ir, run_executable
+from .driver import check_source, compile_source, emit_ast, emit_ir, run_executable
 from .lexer import LexerError
 from .parser import ParserError
 
@@ -83,6 +83,23 @@ def cmd_emit_ir(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check(args: argparse.Namespace) -> int:
+    """Type-check each file without generating code (spec 48)."""
+    status = 0
+    for name in args.inputs:
+        src_path = Path(name)
+        source = _read_source(src_path)
+        try:
+            check_source(source, filename=str(src_path))
+        except CompileError as e:
+            _report(e, source, src_path)
+            status = 1
+            continue
+        if not args.quiet:
+            print(f"{src_path}: ok")
+    return status
+
+
 def cmd_emit_ast(args: argparse.Namespace) -> int:
     src_path = Path(args.input)
     source = _read_source(src_path)
@@ -141,6 +158,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_ir.add_argument("input")
     p_ir.add_argument("--unchecked", action="store_true", help=unchecked_help)
     p_ir.set_defaults(func=cmd_emit_ir)
+
+    p_check = sub.add_parser("check", help="type-check without generating code")
+    p_check.add_argument("inputs", nargs="+")
+    p_check.add_argument("-q", "--quiet", action="store_true", help="print nothing for files that pass")
+    p_check.set_defaults(func=cmd_check)
 
     p_ast = sub.add_parser("emit-ast", help="print parsed AST")
     p_ast.add_argument("input")

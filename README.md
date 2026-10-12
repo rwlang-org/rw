@@ -23,6 +23,7 @@ contains the compiler, the C runtime, and the language specs.
 uv sync --extra dev
 make -C runtime
 uv run rwc run examples/hello.rw
+uv run rwc check examples/hello.rw   # type-check only, no codegen
 ```
 
 For installation prerequisites and detailed setup, see [INSTALL.md](INSTALL.md).
