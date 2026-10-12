@@ -1,0 +1,446 @@
+# JSON values, parsing, and serialization (spec 58).
+#
+#   import json
+#
+#   match json.parse("{\"name\": \"rw\", \"tags\": [1, 2]}"):
+#       case Ok(v):
+#           match v.get("name"):
+#               case Some(n):
+#                   print(n.as_str_or(""))
+#               case None:
+#                   print("no name")
+#       case Err(msg):
+#           print(msg)            # e.g. "expected ',' or '}' at line 1, column 14"
+#
+#   obj = json.object()
+#   obj.set("ok", json.from_bool(true))
+#   print(obj.dump())              # {"ok":true}
+
+# Nesting deeper than this is rejected instead of overflowing the stack.
+MAX_DEPTH: int = 512
+
+# A JSON value. `kind` is one of "null", "bool", "int", "float", "string",
+# "array", "object"; only the matching field is meaningful. Objects keep
+# their keys in insertion order. Values are references: set / push modify
+# the value in place.
+class Value:
+    kind: string
+    b: bool
+    i: int
+    f: float
+    s: string
+    items: List[Value]
+    keys: List[string]
+
+    # Object member `key`, or None (also for non-objects).
+    def get(self, key: string) -> Option[Value]:
+        if self.kind != "object":
+            return None
+        for n in range(0, len(self.keys)):
+            if self.keys[n] == key:
+                return Some(self.items[n])
+        return None
+
+    # Array element `n`, or None (also for non-arrays).
+    def at(self, n: int) -> Option[Value]:
+        if self.kind != "array" or n < 0 or n >= len(self.items):
+            return None
+        return Some(self.items[n])
+
+    # Number of array elements or object members; 0 for scalars.
+    def size(self) -> int:
+        if self.kind == "array" or self.kind == "object":
+            return len(self.items)
+        return 0
+
+    # Set object member `key` (replacing an existing one). Returns self.
+    def set(self, key: string, v: Value) -> Value:
+        for n in range(0, len(self.keys)):
+            if self.keys[n] == key:
+                items: List[Value] = []
+                for m in range(0, len(self.items)):
+                    items = list_push(items, v if m == n else self.items[m])
+                self.items = items
+                return self
+        self.keys = list_push(self.keys, key)
+        self.items = list_push(self.items, v)
+        return self
+
+    # Append to an array. Returns self.
+    def push(self, v: Value) -> Value:
+        self.items = list_push(self.items, v)
+        return self
+
+    def as_str(self) -> Option[string]:
+        if self.kind == "string":
+            return Some(self.s)
+        return None
+
+    def as_int(self) -> Option[int]:
+        if self.kind == "int":
+            return Some(self.i)
+        return None
+
+    # Any number, as a float.
+    def as_float(self) -> Option[float]:
+        if self.kind == "float":
+            return Some(self.f)
+        if self.kind == "int":
+            return Some(float(self.i))
+        return None
+
+    def as_bool(self) -> Option[bool]:
+        if self.kind == "bool":
+            return Some(self.b)
+        return None
+
+    def as_str_or(self, fallback: string) -> string:
+        return self.s if self.kind == "string" else fallback
+
+    def as_int_or(self, fallback: int) -> int:
+        return self.i if self.kind == "int" else fallback
+
+    def is_null(self) -> bool:
+        return self.kind == "null"
+
+    # Compact JSON text.
+    def dump(self) -> string:
+        return dump(self)
+
+# ---------- constructors ----------
+
+def make(kind: string) -> Value:
+    return Value(kind, false, 0, 0.0, "", [], [])
+
+def null() -> Value:
+    return make("null")
+
+def from_bool(b: bool) -> Value:
+    v = make("bool")
+    v.b = b
+    return v
+
+def from_int(i: int) -> Value:
+    v = make("int")
+    v.i = i
+    return v
+
+def from_float(f: float) -> Value:
+    v = make("float")
+    v.f = f
+    return v
+
+def from_str(s: string) -> Value:
+    v = make("string")
+    v.s = s
+    return v
+
+def array(items: List[Value]) -> Value:
+    v = make("array")
+    v.items = items
+    return v
+
+def object() -> Value:
+    return make("object")
+
+# ---------- serialization ----------
+
+def hex4(n: int) -> string:
+    digits = "0123456789abcdef"
+    out = ""
+    for k in range(0, 4):
+        d = (n >> (12 - 4 * k)) & 15
+        out = out + str_slice(digits, d, d + 1)
+    return out
+
+# `s` as a JSON string literal. Bytes >= 0x80 pass through, so UTF-8 text
+# stays readable.
+def quote(s: string) -> string:
+    out = "\""
+    start = 0
+    for n in range(0, len(s)):
+        c = byte_at(s, n)
+        esc = ""
+        if c == 34:
+            esc = "\\\""
+        elif c == 92:
+            esc = "\\\\"
+        elif c == 10:
+            esc = "\\n"
+        elif c == 13:
+            esc = "\\r"
+        elif c == 9:
+            esc = "\\t"
+        elif c < 32:
+            esc = "\\u" + hex4(c)
+        if esc != "":
+            out = out + str_slice(s, start, n) + esc
+            start = n + 1
+    return out + str_slice(s, start, len(s)) + "\""
+
+def dump(v: Value) -> string:
+    if v.kind == "null":
+        return "null"
+    if v.kind == "bool":
+        return "true" if v.b else "false"
+    if v.kind == "int":
+        return str(v.i)
+    if v.kind == "float":
+        # JSON has no NaN or infinity.
+        if v.f != v.f or v.f > 1.7976931348623157e308 or v.f < -1.7976931348623157e308:
+            return "null"
+        return str(v.f)
+    if v.kind == "string":
+        return quote(v.s)
+    parts: List[string] = []
+    if v.kind == "array":
+        for item in v.items:
+            parts = list_push(parts, dump(item))
+        return "[" + str_join(parts, ",") + "]"
+    for n in range(0, len(v.keys)):
+        parts = list_push(parts, quote(v.keys[n]) + ":" + dump(v.items[n]))
+    return "{" + str_join(parts, ",") + "}"
+
+# ---------- parsing ----------
+
+class Parser:
+    text: string
+    pos: int
+    depth: int
+    err: string
+
+    # Record the first error, with its position; returns a placeholder.
+    def fail(self, msg: string) -> Value:
+        if self.err == "":
+            line = 1
+            col = 1
+            for n in range(0, self.pos):
+                if byte_at(self.text, n) == 10:
+                    line += 1
+                    col = 1
+                else:
+                    col += 1
+            self.err = f"{msg} at line {line}, column {col}"
+        return null()
+
+    def peek(self) -> int:
+        return byte_at(self.text, self.pos)
+
+    def skip_ws(self) -> void:
+        c = self.peek()
+        while c == 32 or c == 9 or c == 10 or c == 13:
+            self.pos += 1
+            c = self.peek()
+
+    def value(self) -> Value:
+        self.skip_ws()
+        c = self.peek()
+        if c == 123:
+            return self.container(false)
+        if c == 91:
+            return self.container(true)
+        if c == 34:
+            return from_str(self.string_lit())
+        if c == 116:
+            return self.word("true", from_bool(true))
+        if c == 102:
+            return self.word("false", from_bool(false))
+        if c == 110:
+            return self.word("null", null())
+        if c == 45 or (c >= 48 and c <= 57):
+            return self.number()
+        if c < 0:
+            return self.fail("unexpected end of input")
+        return self.fail("unexpected character")
+
+    def word(self, w: string, v: Value) -> Value:
+        if str_slice(self.text, self.pos, self.pos + len(w)) != w:
+            return self.fail("invalid literal")
+        self.pos += len(w)
+        return v
+
+    def digits(self) -> int:
+        start = self.pos
+        c = self.peek()
+        while c >= 48 and c <= 57:
+            self.pos += 1
+            c = self.peek()
+        return self.pos - start
+
+    def number(self) -> Value:
+        start = self.pos
+        integral = true
+        if self.peek() == 45:
+            self.pos += 1
+        if self.peek() == 48:
+            self.pos += 1
+        elif self.digits() == 0:
+            return self.fail("invalid number")
+        if self.peek() == 46:
+            integral = false
+            self.pos += 1
+            if self.digits() == 0:
+                return self.fail("invalid number")
+        c = self.peek()
+        if c == 101 or c == 69:
+            integral = false
+            self.pos += 1
+            c = self.peek()
+            if c == 43 or c == 45:
+                self.pos += 1
+            if self.digits() == 0:
+                return self.fail("invalid number")
+        text = str_slice(self.text, start, self.pos)
+        if integral:
+            match str_to_int(text):
+                case Some(n):
+                    return from_int(n)
+                case None:
+                    integral = false  # beyond int64: read it as a float
+        match str_to_float(text):
+            case Some(f):
+                return from_float(f)
+            case None:
+                return self.fail("invalid number")
+
+    def hex_digit(self) -> int:
+        c = self.peek()
+        self.pos += 1
+        if c >= 48 and c <= 57:
+            return c - 48
+        if c >= 97 and c <= 102:
+            return c - 87
+        if c >= 65 and c <= 70:
+            return c - 55
+        return -1
+
+    def hex4(self) -> int:
+        n = 0
+        for k in range(0, 4):
+            d = self.hex_digit()
+            if d < 0:
+                return -1
+            n = n * 16 + d
+        return n
+
+    # The string literal at pos (pos is at the opening quote).
+    def string_lit(self) -> string:
+        self.pos += 1
+        out = ""
+        while true:
+            start = self.pos
+            c = self.peek()
+            while c >= 32 and c != 34 and c != 92:
+                self.pos += 1
+                c = self.peek()
+            out = out + str_slice(self.text, start, self.pos)
+            if c == 34:
+                self.pos += 1
+                return out
+            if c < 0:
+                self.fail("unterminated string")
+                return ""
+            if c < 32:
+                self.fail("control character in string")
+                return ""
+            # backslash escape
+            self.pos += 1
+            e = self.peek()
+            self.pos += 1
+            if e == 34:
+                out = out + "\""
+            elif e == 92:
+                out = out + "\\"
+            elif e == 47:
+                out = out + "/"
+            elif e == 98:
+                out = out + chr(8)
+            elif e == 102:
+                out = out + chr(12)
+            elif e == 110:
+                out = out + "\n"
+            elif e == 114:
+                out = out + "\r"
+            elif e == 116:
+                out = out + "\t"
+            elif e == 117:
+                cp = self.hex4()
+                if cp < 0:
+                    self.fail("invalid \\u escape")
+                    return ""
+                # A surrogate pair encodes one code point above U+FFFF.
+                if cp >= 0xD800 and cp <= 0xDBFF and self.peek() == 92 and byte_at(self.text, self.pos + 1) == 117:
+                    save = self.pos
+                    self.pos += 2
+                    lo = self.hex4()
+                    if lo >= 0xDC00 and lo <= 0xDFFF:
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)
+                    else:
+                        self.pos = save
+                out = out + chr(cp)
+            else:
+                self.pos -= 1
+                self.fail("invalid escape")
+                return ""
+        return out
+
+    # An array (is_array) or object; pos is at the opening bracket.
+    def container(self, is_array: bool) -> Value:
+        close = 93 if is_array else 125
+        self.depth += 1
+        if self.depth > MAX_DEPTH:
+            return self.fail("nesting too deep")
+        self.pos += 1
+        v = array([]) if is_array else object()
+        self.skip_ws()
+        if self.peek() == close:
+            self.pos += 1
+            self.depth -= 1
+            return v
+        while true:
+            if not is_array:
+                self.skip_ws()
+                if self.peek() != 34:
+                    return self.fail("expected a string key")
+                key = self.string_lit()
+                if self.err != "":
+                    return v
+                self.skip_ws()
+                if self.peek() != 58:
+                    return self.fail("expected ':'")
+                self.pos += 1
+                item = self.value()
+                if self.err != "":
+                    return v
+                v.keys = list_push(v.keys, key)
+                v.items = list_push(v.items, item)
+            else:
+                item = self.value()
+                if self.err != "":
+                    return v
+                v.items = list_push(v.items, item)
+            self.skip_ws()
+            c = self.peek()
+            if c == 44:
+                self.pos += 1
+            elif c == close:
+                self.pos += 1
+                self.depth -= 1
+                return v
+            elif is_array:
+                return self.fail("expected ',' or ']'")
+            else:
+                return self.fail("expected ',' or '}'")
+        return v
+
+# Parse a complete JSON document. Errors carry the line and column.
+def parse(text: string) -> Result[Value, string]:
+    p = Parser(text, 0, 0, "")
+    v = p.value()
+    if p.err == "":
+        p.skip_ws()
+        if p.pos < len(text):
+            p.fail("unexpected trailing characters")
+    if p.err != "":
+        return Err(p.err)
+    return Ok(v)

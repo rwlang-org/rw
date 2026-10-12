@@ -31,4 +31,19 @@ def main() -> int:
     print(str_rfind("a/b/c", "/"))
     print(str_rfind("a/b/c", "x"))
     print(str_rfind("abc", ""))
+    # spec 58
+    print(byte_at("Az", 0))
+    print(byte_at("Az", 2))
+    print(chr(72) + chr(0x3042) + chr(0x1F600))
+    print(len(chr(0x1F600)))
+    match str_to_float("-2.5e1"):
+        case Some(f):
+            print(f)
+        case None:
+            print("none")
+    match str_to_float(" 1"):
+        case Some(f):
+            print(f)
+        case None:
+            print("none")
     return 0

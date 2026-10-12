@@ -202,6 +202,12 @@ class IRGen:
         # signals (spec 57)
         self._rw_signal_wait = ir.Function(
             m, ir.FunctionType(RW_STR_TY, [RW_LIST_INT_TY.as_pointer()]), "rw_signal_wait")
+        # bytes and code points (spec 58)
+        self._rw_byte_at = ir.Function(m, ir.FunctionType(I64, [RW_STR_TY, I64]), "rw_byte_at")
+        self._rw_chr = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_chr")
+        self._opt_float_ty = llvm_type_of(T.option_of(T.FLOAT))
+        self._rw_str_to_float = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [self._opt_float_ty.as_pointer(), RW_STR_TY]), "rw_str_to_float")
         # I/O errors (spec 51)
         self._rw_last_error = ir.Function(m, ir.FunctionType(I64, []), "rw_last_error")
         self._rw_error_name = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_error_name")
@@ -1369,6 +1375,10 @@ class IRGen:
             out = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.call(self._rw_os_args, [out])
             return ctx.builder.load(out)
+        if call.callee == "str_to_float":
+            out = ctx.alloca(self._opt_float_ty)
+            ctx.builder.call(self._rw_str_to_float, [out, self._emit_expr(call.args[0], ctx)])
+            return ctx.builder.load(out)
         if call.callee == "os_getenv":
             out = ctx.alloca(self._opt_str_ty)
             ctx.builder.call(self._rw_os_getenv, [out, self._emit_expr(call.args[0], ctx)])
@@ -1432,6 +1442,8 @@ class IRGen:
             "set_nodelay": self._rw_set_nodelay,
             "set_keepalive": self._rw_set_keepalive,
             "set_backlog": self._rw_set_backlog,
+            "byte_at": self._rw_byte_at,
+            "chr": self._rw_chr,
             "error_name": self._rw_error_name,
             "error_message": self._rw_error_message,
         }

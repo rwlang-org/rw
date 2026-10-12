@@ -1,0 +1,53 @@
+# JSON with the standard library module (spec 58).
+import json
+
+def show(text: string) -> void:
+    match json.parse(text):
+        case Ok(v):
+            print(v.dump())
+        case Err(msg):
+            print("error: " + msg)
+
+def main() -> int:
+    show("{\"name\": \"rw\", \"tags\": [1, 2.5, true, null], \"nested\": {\"a\": \"x\\ny\\u00e9\\ud83d\\ude00\"}}")
+    show("[1, 2,]")
+    show("{\"a\" 1}")
+    show("  -0.5e2 ")
+    show("\"unterminated")
+    obj = json.object()
+    obj.set("ok", json.from_bool(true)).set("n", json.from_int(3))
+    obj.set("ok", json.from_str("replaced \"q\""))
+    print(obj.dump())
+    print(obj.size())
+
+    # Reading fields out of a parsed document.
+    match json.parse("{\"user\": {\"id\": 42, \"name\": \"ann\"}, \"scores\": [3, 4.5]}"):
+        case Ok(doc):
+            match doc.get("user"):
+                case Some(u):
+                    match u.get("id"):
+                        case Some(id):
+                            print(id.as_int_or(-1))
+                        case None:
+                            print("no id")
+                case None:
+                    print("no user")
+            match doc.get("scores"):
+                case Some(sc):
+                    total = 0.0
+                    for k in range(0, sc.size()):
+                        match sc.at(k):
+                            case Some(x):
+                                match x.as_float():
+                                    case Some(f):
+                                        total += f
+                                    case None:
+                                        total += 0.0
+                            case None:
+                                total += 0.0
+                    print(total)
+                case None:
+                    print("no scores")
+        case Err(msg):
+            print(msg)
+    return 0

@@ -143,6 +143,17 @@ void    rw_rand_seed (int64_t seed);
 rw_str  rw_rand_bytes(int64_t n);                /* OS CSPRNG */
 
 /* List[int]: range-checked accessor returning Option[int]. */
+/* Option[float]: {tag, payload} like rw_option_int (spec 30). */
+typedef struct {
+    int64_t tag;
+    double  payload;
+} rw_option_float;
+
+/* Bytes and code points (spec 58). */
+int64_t rw_byte_at     (rw_str s, int64_t i);           /* 0..255, or -1 */
+rw_str  rw_chr         (int64_t cp);                    /* UTF-8 encoding */
+void    rw_str_to_float(rw_option_float *out, rw_str s);
+
 void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i);
 
 /* TCP API (runtime/net/tcp.c). */
