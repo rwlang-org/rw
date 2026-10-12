@@ -1,0 +1,62 @@
+class Counter:
+    count: int
+
+    def inc(self, by: int) -> int:
+        self.count += by
+        return self.count
+
+    def reset(self) -> void:
+        self.count = 0
+
+    def double(self) -> int:
+        return self.inc(self.count)
+
+class Stack:
+    items: List[string]
+
+    def push(self, s: string) -> Stack:
+        self.items = list_push(self.items, s)
+        return self
+
+    def size(self) -> int:
+        return len(self.items)
+
+    def top(self) -> Option[string]:
+        if len(self.items) == 0:
+            return None
+        return Some(self.items[-1])
+
+    def describe(self) -> string:
+        return "Stack(" + str_join(self.items, ", ") + ")"
+
+class Holder:
+    c: Counter
+
+def make() -> Counter:
+    return Counter(10)
+
+def main() -> int:
+    c = Counter(0)
+    c.inc(2)
+    c.inc(3)
+    print(c.count)
+    print(c.double())
+    c.reset()
+    print(c.count)
+
+    h = Holder(c)
+    h.c.inc(7)
+    print(c.count)
+    print(make().double())
+    print([Counter(1), Counter(2)][1].inc(40))
+
+    s = Stack([])
+    s.push("a").push("b").push("c")
+    print(s.size())
+    print(s.describe())
+    match s.top():
+        case Some(t):
+            print(t)
+        case None:
+            print("empty")
+    return 0

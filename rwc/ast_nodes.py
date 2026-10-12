@@ -435,11 +435,15 @@ class FieldDecl:
 
 @dataclass
 class ClassDef:
-    """A record type: `class Name:` with typed fields (spec 20)."""
+    """A record type: `class Name:` with typed fields (spec 20) and methods
+    (spec 33). Each method is also lowered to a module-level FuncDef named
+    `Name.method` whose first parameter is `self: Name`."""
     name: str
     fields: List[FieldDecl]
     line: int
     col: int
+    methods: List[str] = field(default_factory=list)
+    method_defs: List["FuncDef"] = field(default_factory=list)
 
 
 @dataclass

@@ -61,6 +61,8 @@ class SemaResult:
     # per statement because sibling blocks may declare one name with
     # different types.
     decl_types: Dict[int, T.Type] = field(default_factory=dict)
+    # Method calls (spec 33): id(Call | CallValue) -> the method's function key.
+    method_calls: Dict[int, FuncKey] = field(default_factory=dict)
 
 
 # Names of builtin functions. Spawning a builtin is an error, and a qualified
@@ -293,6 +295,13 @@ class Sema:
                             f"field `{fdecl.name}` cannot be void",
                         ))
                     cls.fields.append((fdecl.name, fty))
+                for m in cdef.methods:
+                    if cls.field_index(m) is not None:
+                        raise CompileError(Diagnostic(
+                            self.filename, cdef.line, cdef.col, len(cdef.name),
+                            f"`{m}` is both a field and a method of {cdef.name}",
+                        ))
+                    cls.methods[m] = (mod_name, f"{cdef.name}.{m}")
 
         # First pass: collect signatures across all modules, keyed by
         # (module, name). Same-named functions in different modules coexist.
@@ -930,6 +939,22 @@ class Sema:
                     raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
                                                   "slice bounds must be int"))
             return obj_ty
+        if isinstance(expr, A.CallValue) and isinstance(expr.callee, A.FieldAccess):
+            # `e.m(...)`: a method call if e's class has a method m (spec 33).
+            recv = expr.callee
+            recv_ty = self._check_expr(fn, recv.obj, locals_)
+            if isinstance(recv_ty, T.ClassType) and recv.field in recv_ty.methods:
+                return self._check_method_call(fn, id(expr), recv_ty, recv.field, expr.args,
+                                               expr.line, expr.col, locals_)
+            if isinstance(recv_ty, T.ClassType) and recv_ty.field_index(recv.field) is None:
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, len(recv.field),
+                    f"{recv_ty} has no field or method `{recv.field}`",
+                ))
+            _, fty = self._field_of(recv_ty, recv.field, recv.line, recv.col)
+            self.result.expr_types[id(recv)] = fty
+            return self._check_fn_value_call(fn, fty, expr.args, "function value",
+                                             expr.line, expr.col, locals_)
         if isinstance(expr, A.CallValue):
             callee_ty = self._check_expr(fn, expr.callee, locals_)
             return self._check_fn_value_call(fn, callee_ty, expr.args, "function value",
@@ -1038,8 +1063,18 @@ class Sema:
         # Calls through function values (spec 21) come first: locals shadow
         # functions, builtins, and import qualifiers.
         if call.module is not None and call.module in locals_:
+            recv_ty = locals_[call.module]
+            if isinstance(recv_ty, T.ClassType) and call.callee in recv_ty.methods:
+                # `x.m(...)`: a method call (spec 33).
+                return self._check_method_call(fn, id(call), recv_ty, call.callee, call.args,
+                                               call.line, call.col, locals_)
+            if isinstance(recv_ty, T.ClassType) and recv_ty.field_index(call.callee) is None:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"{recv_ty} has no field or method `{call.callee}`",
+                ))
             # `r.f(...)`: call the function stored in field f of record r.
-            cls, fty = self._field_of(locals_[call.module], call.callee, call.line, call.col)
+            cls, fty = self._field_of(recv_ty, call.callee, call.line, call.col)
             self.result.field_fn_calls[id(call)] = cls
             return self._check_fn_value_call(fn, fty, call.args, call.callee,
                                              call.line, call.col, locals_)
@@ -1492,6 +1527,17 @@ class Sema:
         if isinstance(hint, T.ResultType):
             return hint
         return T.result_of(at, T.INT) if isinstance(expr, A.OkExpr) else T.result_of(T.INT, at)
+
+    def _check_method_call(self, fn: A.FuncDef, call_id: int, cls: T.ClassType, name: str,
+                           args: List[A.Expr], line: int, col: int,
+                           locals_: Dict[str, T.Type]) -> T.Type:
+        """Check `recv.name(args)` against the method's parameters after
+        `self` (spec 33)."""
+        key = cls.methods[name]
+        sig = self.result.functions[key]
+        self.result.method_calls[call_id] = key
+        ftype = T.FunctionType([pt for _, pt in sig.params[1:]], sig.return_type)
+        return self._check_fn_value_call(fn, ftype, args, name, line, col, locals_)
 
     def _func_value_type(self, key: FuncKey) -> T.FunctionType:
         sig = self.result.functions[key]

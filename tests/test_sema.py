@@ -1746,7 +1746,7 @@ def test_function_values_ok():
         ("    h: Callable[[Request], int] = hello\n", "type mismatch"),
         ("    h: Callable[[Request], Response] = hello\n    h(1)\n", "argument 1"),
         ("    h: Callable[[Request], Response] = hello\n    h()\n", "expects 1 argument"),
-        ('    rt: Route = Route("/", hello)\n    rt.nope(Request("/"))\n', "Route has no field `nope`"),
+        ('    rt: Route = Route("/", hello)\n    rt.nope(Request("/"))\n', "Route has no field or method `nope`"),
         ('    rt: Route = Route("/", hello)\n    rt.path(Request("/"))\n', "`string` is not callable"),
         ("    n: int = 1\n    n.f(1)\n", "`int` has no fields"),
         ("    h: Callable[[Request], Response] = hello\n    print(h == h)\n", "cannot compare"),
@@ -2053,3 +2053,54 @@ def test_local_inference_ok():
 def test_local_inference_errors(body, msg):
     e = err("def main() -> int:\n" + body + "    return 0\n")
     assert msg in e.diagnostic.message
+
+
+# ----- methods (spec 33) -----
+
+METHODS_PRELUDE = (
+    "class Counter:\n    count: int\n\n"
+    "    def inc(self, by: int) -> int:\n        self.count += by\n        return self.count\n\n"
+    "    def double(self) -> int:\n        return self.inc(self.count)\n\n"
+    "class Box:\n    c: Counter\n\n"
+    "def make() -> Counter:\n    return Counter(1)\n\n"
+)
+
+
+def test_methods_ok():
+    check(
+        METHODS_PRELUDE
+        + "def main() -> int:\n"
+        "    c = Counter(0)\n"
+        "    c.inc(2)\n"
+        "    b = Box(c)\n"
+        "    n = b.c.inc(1) + make().double() + [c][0].inc(1)\n"
+        "    return n + c.double()\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ("    c = Counter(0)\n    c.nope()\n", "Counter has no field or method `nope`"),
+        ('    c = Counter(0)\n    c.inc("a")\n', "argument 1 of `inc`"),
+        ("    c = Counter(0)\n    c.inc()\n", "`inc` expects 1 argument(s), got 0"),
+        ("    c = Counter(0)\n    f: Future[int] = spawn c.double()\n", "cannot spawn"),
+    ],
+)
+def test_method_errors(body, msg):
+    e = err(METHODS_PRELUDE + "def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message
+
+
+def test_field_and_method_with_same_name_is_error():
+    e = err("class C:\n    x: int\n\n    def x(self) -> int:\n        return 1\n\ndef main() -> int:\n    return 0\n")
+    assert "both a field and a method" in e.diagnostic.message
+
+
+def test_method_on_imported_class(tmp_path):
+    _check_program(
+        tmp_path,
+        "from lib import Counter\nimport lib\n\n"
+        "def main() -> int:\n    c = Counter(1)\n    d = lib.Counter(2)\n    return c.inc(1) + d.inc(2)\n",
+        lib="class Counter:\n    n: int\n\n    def inc(self, by: int) -> int:\n        self.n += by\n        return self.n\n",
+    )

@@ -145,7 +145,9 @@ class Parser:
             elif self.cur.kind == TokenKind.KW_TYPE:
                 mod.type_aliases.append(self.parse_type_alias())
             elif self.cur.kind == TokenKind.KW_CLASS:
-                mod.classes.append(self.parse_class_def())
+                cdef = self.parse_class_def()
+                mod.classes.append(cdef)
+                mod.functions.extend(cdef.method_defs)
             else:
                 raise ParserError(
                     "expected 'import', 'def', 'type', or 'class' at module level",
@@ -205,9 +207,16 @@ class Parser:
         self.eat(TokenKind.NEWLINE)
         self.eat(TokenKind.INDENT, "indented block of fields")
         fields: List[A.FieldDecl] = []
+        methods: List[str] = []
+        method_defs: List[A.FuncDef] = []
         while self.cur.kind != TokenKind.DEDENT:
             if self.cur.kind == TokenKind.NEWLINE:
                 self.i += 1
+                continue
+            if self.cur.kind == TokenKind.KW_DEF:
+                fdef = self._parse_method(name_tok.value)
+                methods.append(fdef.name.split(".", 1)[1])
+                method_defs.append(fdef)
                 continue
             f_tok = self.eat(TokenKind.IDENT, "field name")
             self.eat(TokenKind.COLON, "':' after field name")
@@ -215,7 +224,35 @@ class Parser:
             self.eat(TokenKind.NEWLINE)
             fields.append(A.FieldDecl(f_tok.value, ty, f_tok.line, f_tok.col))
         self.eat(TokenKind.DEDENT)
-        return A.ClassDef(name_tok.value, fields, kw.line, kw.col)
+        return A.ClassDef(name_tok.value, fields, kw.line, kw.col,
+                          methods=methods, method_defs=method_defs)
+
+    def _parse_method(self, class_name: str) -> A.FuncDef:
+        """`def m(self, params) -> R:` in a class body, lowered to a function
+        `Class.m` with `self: Class` as its first parameter (spec 33)."""
+        kw = self.eat(TokenKind.KW_DEF, "'def'")
+        name_tok = self.eat(TokenKind.IDENT, "method name")
+        self.eat(TokenKind.LPAREN, "'('")
+        self_tok = self.cur
+        if not (self_tok.kind == TokenKind.IDENT and self_tok.value == "self"):
+            raise ParserError(
+                "a method's first parameter must be `self`",
+                self_tok.line, self_tok.col, max(1, len(self_tok.value)),
+            )
+        self.i += 1
+        params: List[A.Param] = [A.Param(
+            "self", A.TypeName(class_name, self_tok.line, self_tok.col),
+            self_tok.line, self_tok.col,
+        )]
+        while self.match(TokenKind.COMMA):
+            params.append(self.parse_param())
+        self.eat(TokenKind.RPAREN, "')'")
+        self.eat(TokenKind.ARROW, "'->' after parameter list")
+        ret_ty = self.parse_type()
+        self.eat(TokenKind.COLON, "':' to start method body")
+        self.eat(TokenKind.NEWLINE)
+        body = self.parse_block()
+        return A.FuncDef(f"{class_name}.{name_tok.value}", params, ret_ty, body, kw.line, kw.col)
 
     # ------- function definitions -------
     def parse_func_def(self) -> A.FuncDef:
