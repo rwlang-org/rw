@@ -76,12 +76,14 @@ def compile_source(
     output: Optional[Path] = None,
     *,
     target_triple: Optional[str] = None,
+    checked: bool = True,
 ) -> CompileResult:
-    """Compile a single rw source string to a native executable."""
+    """Compile a single rw source string to a native executable. `checked`
+    keeps the run-time checks for integer division (spec 42)."""
     try:
         program = load_program(source, filename)
         sema = analyze_program(program, filename=filename)
-        llmod = irgen_generate(program, sema)
+        llmod = irgen_generate(program, sema, checked)
     except LexerError as e:
         raise CompileError(Diagnostic(filename, e.line, e.col, e.length, e.message)) from e
     except ParserError as e:
@@ -126,11 +128,11 @@ def compile_source(
     return CompileResult(output=Path(output), ir_text=ir_text)
 
 
-def emit_ir(source: str, filename: str) -> str:
+def emit_ir(source: str, filename: str, checked: bool = True) -> str:
     """Generate LLVM IR text for a source string without invoking the linker."""
     program = load_program(source, filename)
     sema = analyze_program(program, filename=filename)
-    llmod = irgen_generate(program, sema)
+    llmod = irgen_generate(program, sema, checked)
     llmod.triple = llvm_binding.get_default_triple()
     return str(llmod)
 

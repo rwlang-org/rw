@@ -39,7 +39,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     source = _read_source(src_path)
     out_path = Path(args.output) if args.output else src_path.with_suffix("")
     try:
-        compile_source(source, filename=str(src_path), output=out_path)
+        compile_source(source, filename=str(src_path), output=out_path,
+                       checked=not args.unchecked)
     except CompileError as e:
         _report(e, source, src_path)
         return 1
@@ -54,7 +55,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / src_path.stem
         try:
-            compile_source(source, filename=str(src_path), output=out)
+            compile_source(source, filename=str(src_path), output=out,
+                           checked=not args.unchecked)
         except CompileError as e:
             _report(e, source, src_path)
             return 1
@@ -65,7 +67,7 @@ def cmd_emit_ir(args: argparse.Namespace) -> int:
     src_path = Path(args.input)
     source = _read_source(src_path)
     try:
-        text = emit_ir(source, filename=str(src_path))
+        text = emit_ir(source, filename=str(src_path), checked=not args.unchecked)
     except (LexerError, ParserError) as e:
         # Wrap into CompileError for uniform reporting.
         from .diagnostics import Diagnostic
@@ -126,14 +128,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_build = sub.add_parser("build", help="compile .rw to a native executable")
     p_build.add_argument("input")
     p_build.add_argument("-o", "--output", default=None)
+    unchecked_help = "omit run-time checks for integer division (spec 42)"
+    p_build.add_argument("--unchecked", action="store_true", help=unchecked_help)
     p_build.set_defaults(func=cmd_build)
 
     p_run = sub.add_parser("run", help="compile and run a .rw file")
     p_run.add_argument("input")
+    p_run.add_argument("--unchecked", action="store_true", help=unchecked_help)
     p_run.set_defaults(func=cmd_run)
 
     p_ir = sub.add_parser("emit-ir", help="print generated LLVM IR")
     p_ir.add_argument("input")
+    p_ir.add_argument("--unchecked", action="store_true", help=unchecked_help)
     p_ir.set_defaults(func=cmd_emit_ir)
 
     p_ast = sub.add_parser("emit-ast", help="print parsed AST")
