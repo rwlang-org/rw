@@ -666,3 +666,20 @@ def test_parse_tuples():
     assert isinstance(decl.value, A.TupleLit)
     assert isinstance(unpack, A.TupleAssign) and unpack.names == ["a", "_"]
     assert isinstance(paren.value, A.IntLit)
+
+
+# ----- value match (spec 38) -----
+
+def test_parse_value_match():
+    mod = parse_src(
+        "def main() -> int:\n    match m:\n"
+        '        case "GET" | "HEAD":\n            print(1)\n'
+        "        case -1:\n            print(2)\n"
+        "        case other:\n            print(3)\n"
+        "    return 0\n"
+    )
+    vm = mod.functions[0].body[0]
+    assert isinstance(vm, A.ValueMatch) and len(vm.arms) == 3
+    assert [p.value for p in vm.arms[0].patterns] == ["GET", "HEAD"]
+    assert vm.arms[1].patterns[0].value == -1
+    assert vm.arms[2].patterns == [] and vm.arms[2].bind == "other"

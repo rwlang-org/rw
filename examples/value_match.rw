@@ -1,0 +1,46 @@
+def describe(method: string) -> string:
+    match method:
+        case "GET" | "HEAD":
+            return "read"
+        case "POST" | "PUT" | "PATCH":
+            return "write"
+        case "DELETE":
+            return "delete"
+        case other:
+            return "unknown: " + other
+
+def sign(n: int) -> int:
+    match n:
+        case 0:
+            return 0
+        case _:
+            return -1 if n < 0 else 1
+
+def main() -> int:
+    for m in ["GET", "PUT", "DELETE", "TRACE", "HEAD"]:
+        print(describe(m))
+    print(sign(-5) + sign(0) * 10 + sign(7) * 100)
+    for code in [200, 301, 404, 500, -1]:
+        match code:
+            case 200:
+                print("ok")
+            case 301 | 302:
+                print("redirect")
+            case 404:
+                print("not found")
+            case -1:
+                print("negative")
+            case n:
+                print(f"status {n}")
+    flag = false
+    match flag:
+        case true:
+            print("on")
+        case false:
+            print("off")
+    # No arm matches: nothing runs, as in Python.
+    match 42:
+        case 1:
+            print("never")
+    print("done")
+    return 0

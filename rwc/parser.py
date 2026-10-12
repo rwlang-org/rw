@@ -581,7 +581,7 @@ class Parser:
         body = self.parse_block()
         return A.For(var_tok.value, start, stop, step, body, kw.line, kw.col)
 
-    def parse_match(self) -> A.MatchStmt:
+    def parse_match(self) -> A.Stmt:
         kw = self.eat(TokenKind.KW_MATCH)
         target = self.parse_expr()
         self.eat(TokenKind.COLON, "':' after match target")
@@ -590,6 +590,11 @@ class Parser:
         # block. We can't use parse_block here because parse_block calls
         # parse_stmt on each line and `case` is not a statement.
         self.eat(TokenKind.INDENT, "indented match body")
+        self.skip_newlines()
+        if self.cur.kind == TokenKind.KW_CASE and self.peek(1).kind not in (
+            TokenKind.KW_SOME, TokenKind.KW_NONE, TokenKind.KW_OK, TokenKind.KW_ERR,
+        ):
+            return self._parse_value_match(kw, target)
 
         style: Optional[str] = None  # "option" or "result"
         some_var: Optional[str] = None
@@ -728,6 +733,51 @@ class Parser:
         TokenKind.PIPE_ASSIGN: "|",
         TokenKind.CARET_ASSIGN: "^",
     }
+
+    def _parse_value_match(self, kw: Token, target: A.Expr) -> A.ValueMatch:
+        """Arms with literal / `_` / binding patterns (spec 38); the match
+        body's INDENT is already consumed."""
+        arms: List[A.MatchArm] = []
+        while self.cur.kind != TokenKind.DEDENT:
+            if self.cur.kind == TokenKind.NEWLINE:
+                self.i += 1
+                continue
+            case_tok = self.eat(TokenKind.KW_CASE, "`case` arm in match body")
+            patterns: List[A.Expr] = []
+            bind: Optional[str] = None
+            t = self.cur
+            if t.kind == TokenKind.IDENT:
+                self.i += 1
+                bind = None if t.value == "_" else t.value
+            else:
+                patterns.append(self._parse_literal_pattern())
+                while self.match(TokenKind.PIPE):
+                    patterns.append(self._parse_literal_pattern())
+            self.eat(TokenKind.COLON, "':' after case pattern")
+            self.eat(TokenKind.NEWLINE)
+            body = self.parse_block()
+            arms.append(A.MatchArm(patterns, bind, body, case_tok.line, case_tok.col))
+        self.eat(TokenKind.DEDENT)
+        return A.ValueMatch(target, arms, kw.line, kw.col)
+
+    def _parse_literal_pattern(self) -> A.Expr:
+        t = self.cur
+        if t.kind == TokenKind.INT:
+            self.i += 1
+            return A.IntLit(int(t.value, 0), t.line, t.col)
+        if t.kind == TokenKind.MINUS and self.peek(1).kind == TokenKind.INT:
+            self.i += 2
+            return A.IntLit(-int(self.toks[self.i - 1].value, 0), t.line, t.col)
+        if t.kind == TokenKind.STRING:
+            self.i += 1
+            return A.StringLit(t.value, t.line, t.col)
+        if t.kind in (TokenKind.KW_TRUE, TokenKind.KW_FALSE):
+            self.i += 1
+            return A.BoolLit(t.kind == TokenKind.KW_TRUE, t.line, t.col)
+        raise ParserError(
+            "case pattern must be an int, string, or bool literal, `_`, or a name",
+            t.line, t.col, max(1, len(t.value)),
+        )
 
     def parse_var_decl(self) -> A.VarDecl:
         name_tok = self.eat(TokenKind.IDENT)

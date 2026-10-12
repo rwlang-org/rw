@@ -387,6 +387,27 @@ class MatchStmt:
 
 
 @dataclass
+class MatchArm:
+    """One `case` of a ValueMatch. `patterns` are literals joined by `|`;
+    when empty the arm is a catch-all, binding the value to `bind` unless
+    it is `_` (bind is None)."""
+    patterns: List[Expr]
+    bind: Optional[str]
+    body: List["Stmt"]
+    line: int
+    col: int
+
+
+@dataclass
+class ValueMatch:
+    """`match e:` with literal / `_` / binding patterns (spec 38)."""
+    target: Expr
+    arms: List[MatchArm]
+    line: int
+    col: int
+
+
+@dataclass
 class FieldAssign:
     """`obj.field = value` on a record (spec 20)."""
     obj: Expr
@@ -417,7 +438,7 @@ class TupleAssign:
 
 Stmt = Union[
     VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt, Break, Continue, Assert,
-    FieldAssign, ForEach, IndexAssign, TupleAssign,
+    FieldAssign, ForEach, IndexAssign, TupleAssign, ValueMatch,
 ]
 
 
