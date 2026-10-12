@@ -54,8 +54,9 @@ static void read_impl(rw_str *out, int64_t fd, int64_t max) {
             /* Fibers park on the netpoller; the main thread polls. The read
              * timeout (spec 53) bounds the whole call. */
             if (deadline < 0) deadline = rw_net_deadline((int)fd, RW_NET_READ);
-            if (rw_net_block((int)fd, RW_NET_READ, deadline)) {
-                free(buf); out->len = 0; out->ptr = NULL; rw_errno = ETIMEDOUT; return;
+            int r = rw_net_block((int)fd, RW_NET_READ, deadline);
+            if (r) {
+                free(buf); out->len = 0; out->ptr = NULL; rw_errno = RW_NET_ERRNO(r); return;
             }
             continue;
         }
@@ -77,8 +78,9 @@ static int64_t write_impl(int64_t fd, rw_str b, int64_t *deadline) {
         if (n >= 0) return (int64_t)n;
         if (rw_errno == EAGAIN || rw_errno == EWOULDBLOCK) {
             if (*deadline < 0) *deadline = rw_net_deadline((int)fd, RW_NET_WRITE);
-            if (rw_net_block((int)fd, RW_NET_WRITE, *deadline)) {
-                rw_errno = ETIMEDOUT;
+            int r = rw_net_block((int)fd, RW_NET_WRITE, *deadline);
+            if (r) {
+                rw_errno = RW_NET_ERRNO(r);
                 return -1;
             }
             continue;
@@ -123,7 +125,7 @@ int64_t rw_write_all(int64_t fd, rw_str b) {
 }
 
 int64_t rw_close(int64_t fd) {
-    rw_net_reset_fd((int)fd);
+    rw_net_close_fd((int)fd);   /* wake fibers parked on it (spec 57) */
     int rc = close((int)fd);
     rw_set_last_error(rc < 0 ? rw_errno : 0);
     return (int64_t)rc;

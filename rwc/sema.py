@@ -98,6 +98,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "write_all",
     "dial_timeout", "set_read_timeout", "set_write_timeout",
     "shutdown", "set_nodelay", "set_keepalive", "set_backlog",
+    "signal_wait",
 })
 
 _DICT_BUILTINS = frozenset({
@@ -175,6 +176,8 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
     "set_nodelay": ((T.INT, T.BOOL), T.INT),
     "set_keepalive": ((T.INT, T.BOOL), T.INT),
     "set_backlog": ((T.INT, T.INT), T.INT),
+    # spec 57
+    "signal_wait": ((T.list_of(T.STRING),), T.STRING),
 }
 
 

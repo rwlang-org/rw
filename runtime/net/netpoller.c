@@ -74,6 +74,7 @@ typedef struct rw_net_waiter {
     uint64_t               id;
     rw_fiber_handle       *g;         /* NULL until the park commit runs */
     int                    timedout;
+    int                    closed;     /* woken because the fd was closed */
     int                    linked;
     struct rw_net_waiter  *next;
 } rw_net_waiter;
@@ -84,6 +85,7 @@ struct rw_pollfd {
     uint64_t       next_id;
     rw_net_waiter *head[2];
     int64_t        timeout_ms[2];
+    int            closed;   /* closed by rw_close; cleared for a new handle */
 };
 
 #define PD_CHUNK  1024
@@ -185,7 +187,7 @@ typedef struct {
 static void commit_wait(rw_fiber_handle *self, void *arg) {
     wait_ctx *c = (wait_ctx *)arg;
     rw_wait_lock_acquire(&c->pd->lock);
-    if (c->w->timedout || !c->w->linked) {
+    if (c->w->timedout || c->w->closed || !c->w->linked) {
         if (c->w->linked) unlink_waiter(c->pd, c->dir, c->w);
         rw_wait_lock_release(&c->pd->lock);
         rw_sched_enqueue_ready(self);
@@ -209,9 +211,13 @@ int rw_net_wait(int fd, int dir, int64_t deadline_ns) {
     }
     rw_pollfd *pd = pd_get(fd);
     if (!pd) { rw_sched_yield(); return 0; }
-    if (deadline_ns > 0 && deadline_ns <= rw_mono_ns()) return 1;
-    rw_net_waiter w = { 0, NULL, 0, 1, NULL };
+    if (deadline_ns > 0 && deadline_ns <= rw_mono_ns()) return RW_NET_TIMEDOUT;
+    rw_net_waiter w = { 0, NULL, 0, 0, 1, NULL };
     rw_wait_lock_acquire(&pd->lock);
+    if (pd->closed) {
+        rw_wait_lock_release(&pd->lock);
+        return RW_NET_CLOSED;
+    }
     w.id = ++pd->next_id;
     w.next = pd->head[dir];
     pd->head[dir] = &w;
@@ -223,9 +229,49 @@ int rw_net_wait(int fd, int dir, int64_t deadline_ns) {
     rw_sched_park_commit(commit_wait, &c);
     rw_wait_lock_acquire(&pd->lock);
     if (w.linked) unlink_waiter(pd, dir, &w);
-    int timedout = w.timedout;
+    int result = w.closed ? RW_NET_CLOSED : w.timedout ? RW_NET_TIMEDOUT : 0;
     rw_wait_lock_release(&pd->lock);
-    return timedout;
+    return result;
+}
+
+/* Called by rw_close before close(2): wake every fiber parked on fd so it
+ * returns EBADF instead of sleeping forever (the kernel drops the
+ * registration silently on close). Later waits fail at once until the fd
+ * number is reused for a new handle (rw_net_reset_fd). */
+void rw_net_close_fd(int fd) {
+    rw_pollfd *pd = pd_get(fd);
+    if (!pd) return;
+    rw_wait_lock_acquire(&pd->lock);
+    pd->closed = 1;
+    for (int dir = 0; dir < 2; dir++) {
+        rw_net_waiter **pp = &pd->head[dir];
+        while (*pp) {
+            rw_net_waiter *w = *pp;
+            w->closed = 1;
+            if (w->g) {
+                rw_fiber_handle *g = w->g;
+                *pp = w->next;
+                w->linked = 0;
+                w->next = NULL;
+                w->g = NULL;
+                rw_sched_enqueue_ready(g);
+            } else {
+                pp = &w->next;   /* still arming: its commit sees `closed` */
+            }
+        }
+    }
+    rw_wait_lock_release(&pd->lock);
+}
+
+static int pd_is_closed(int fd) {
+    if (fd < 0 || fd >= PD_CHUNK * PD_CHUNKS) return 0;
+    rw_pollfd *chunk = atomic_load_explicit(&g_pd_chunks[fd / PD_CHUNK], memory_order_acquire);
+    if (!chunk) return 0;
+    rw_pollfd *pd = &chunk[fd % PD_CHUNK];
+    rw_wait_lock_acquire(&pd->lock);
+    int closed = pd->closed;
+    rw_wait_lock_release(&pd->lock);
+    return closed;
 }
 
 void rw_net_park_read(int fd)  { (void)rw_net_wait(fd, RW_NET_READ, 0); }
@@ -257,6 +303,7 @@ void rw_net_reset_fd(int fd) {
     rw_pollfd *pd = &chunk[fd % PD_CHUNK];
     rw_wait_lock_acquire(&pd->lock);
     pd->timeout_ms[0] = pd->timeout_ms[1] = 0;
+    pd->closed = 0;
     rw_wait_lock_release(&pd->lock);
 }
 
@@ -265,19 +312,24 @@ int64_t rw_net_deadline(int fd, int dir) {
     return ms > 0 ? rw_mono_ns() + ms * 1000000 : 0;
 }
 
+/* Off-fiber waits poll in slices of at most this long, because closing an
+ * fd from another thread does not wake a poll(2) on it. */
+#define BLOCK_SLICE_MS 50
+
 int rw_net_block(int fd, int dir, int64_t deadline_ns) {
     if (rw_sched_current_fiber()) return rw_net_wait(fd, dir, deadline_ns);
     struct pollfd p = { fd, (short)(dir == RW_NET_READ ? POLLIN : POLLOUT), 0 };
     for (;;) {
-        int ms = -1;
+        if (pd_is_closed(fd)) return RW_NET_CLOSED;
+        int ms = BLOCK_SLICE_MS;
         if (deadline_ns > 0) {
             int64_t left = deadline_ns - rw_mono_ns();
-            if (left <= 0) return 1;
-            ms = (int)((left + 999999) / 1000000);
+            if (left <= 0) return RW_NET_TIMEDOUT;
+            int64_t left_ms = (left + 999999) / 1000000;
+            if (left_ms < ms) ms = (int)left_ms;
         }
         int n = poll(&p, 1, ms);
         if (n > 0) return 0;
-        if (n == 0) return 1;
-        if (errno != EINTR) return 0;
+        if (n < 0 && errno != EINTR) return 0;
     }
 }

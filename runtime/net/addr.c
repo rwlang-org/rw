@@ -145,6 +145,9 @@ static void close_keep_errno(int fd) {
  * ETIMEDOUT. A fiber does a nonblocking connect and parks; the main thread
  * blocks in connect, or in poll when there is a deadline. */
 static int connect_fd(int fd, const struct sockaddr *sa, socklen_t len, int64_t deadline_ns) {
+    /* A fresh socket may reuse the number of a handle closed earlier: drop
+     * that handle's closed mark and timeouts before waiting on it. */
+    rw_net_reset_fd(fd);
     int on_fiber = rw_sched_current_fiber() != NULL;
     if (on_fiber || deadline_ns > 0) rw_set_nonblocking(fd);
     for (;;) {
@@ -154,7 +157,8 @@ static int connect_fd(int fd, const struct sockaddr *sa, socklen_t len, int64_t 
         /* A wake-up can be spurious (spec 53), so wait until the socket is
          * actually writable. */
         for (;;) {
-            if (rw_net_block(fd, RW_NET_WRITE, deadline_ns)) { rw_errno = ETIMEDOUT; return -1; }
+            int r = rw_net_block(fd, RW_NET_WRITE, deadline_ns);
+            if (r) { rw_errno = RW_NET_ERRNO(r); return -1; }
             struct pollfd p = { fd, POLLOUT, 0 };
             if (poll(&p, 1, 0) == 1) break;
         }

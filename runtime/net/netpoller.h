@@ -28,10 +28,19 @@ void rw_net_park_write(int fd);
 #define RW_NET_WRITE 1
 
 /* Park the current fiber until fd may be ready in direction `dir`, or
- * until the monotonic deadline `deadline_ns` (0 = no deadline). Returns 1
- * on timeout, 0 otherwise. A 0 return can be spurious: callers retry the
- * syscall and wait again on EAGAIN. Fiber only. */
+ * until the monotonic deadline `deadline_ns` (0 = no deadline). Returns
+ * RW_NET_TIMEDOUT, RW_NET_CLOSED (the handle was closed: spec 57), or 0.
+ * A 0 return can be spurious: callers retry the syscall and wait again on
+ * EAGAIN. Fiber only. */
+#define RW_NET_TIMEDOUT 1
+#define RW_NET_CLOSED   2
 int rw_net_wait(int fd, int dir, int64_t deadline_ns);
+
+/* Wake every fiber parked on fd with RW_NET_CLOSED; rw_close calls it. */
+void rw_net_close_fd(int fd);
+
+/* errno for a nonzero rw_net_wait / rw_net_block result. */
+#define RW_NET_ERRNO(r) ((r) == RW_NET_CLOSED ? EBADF : ETIMEDOUT)
 
 /* Per-fd timeouts in ms (0 = none), read by the I/O builtins (spec 53).
  * rw_net_reset_fd clears them when a handle is created or closed. */
@@ -43,8 +52,8 @@ void    rw_net_reset_fd(int fd);
 int64_t rw_net_deadline(int fd, int dir);
 
 /* Wait for fd in direction dir until deadline_ns (0 = none): parks a fiber
- * (rw_net_wait), or blocks the calling thread in poll(2) off-fiber. Returns
- * 1 on timeout. */
+ * (rw_net_wait), or blocks the calling thread in poll(2) off-fiber. Same
+ * results as rw_net_wait. */
 int rw_net_block(int fd, int dir, int64_t deadline_ns);
 
 /* Opaque per-fd poll descriptor; the platform files hand it back. */
