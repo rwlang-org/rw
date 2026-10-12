@@ -291,6 +291,14 @@ class Parser:
             return A.TypeResult(ok, err, t.line, t.col)
         # `Callable[[P1, ...], R]` (spec 21). `Callable` is not a keyword; it is
         # only special in type position.
+        # `Dict[K, V]` (spec 31); like Callable, special only in type position.
+        if t.kind == TokenKind.IDENT and t.value == "Dict" and self.peek(1).kind == TokenKind.LBRACK:
+            self.i += 2  # `Dict` `[`
+            key = self.parse_type()
+            self.eat(TokenKind.COMMA, "',' between Dict type arguments")
+            value = self.parse_type()
+            self.eat(TokenKind.RBRACK, "']' to close Dict[...]")
+            return A.TypeDict(key, value, t.line, t.col)
         if t.kind == TokenKind.IDENT and t.value == "Callable" and self.peek(1).kind == TokenKind.LBRACK:
             self.i += 1
             self.eat(TokenKind.LBRACK, "'[' after Callable")
@@ -651,16 +659,41 @@ class Parser:
         self.eat(TokenKind.NEWLINE)
         return A.Assign(name_tok.value, value, name_tok.line, name_tok.col)
 
-    @staticmethod
-    def _is_plain_path(e: A.Expr) -> bool:
-        """A name, or field accesses on a name (no calls)."""
-        while isinstance(e, A.FieldAccess):
+    @classmethod
+    def _is_simple_key(cls, e: A.Expr) -> bool:
+        """A literal or a plain path: safe to evaluate twice."""
+        return isinstance(e, (A.IntLit, A.StringLit, A.BoolLit)) or cls._is_plain_path(e)
+
+    @classmethod
+    def _is_plain_path(cls, e: A.Expr) -> bool:
+        """A name followed by field accesses and indexes with simple keys (no
+        calls): evaluating it twice reads the same thing again."""
+        while isinstance(e, (A.FieldAccess, A.Index)):
+            if isinstance(e, A.Index) and not cls._is_simple_key(e.index):
+                return False
             e = e.obj
         return isinstance(e, A.Name)
 
     def parse_expr_stmt(self) -> A.Stmt:
         t = self.cur
         expr = self.parse_expr()
+        if self.cur.kind in self._COMPOUND_OPS and isinstance(expr, A.Index):
+            # `d[k] OP= e` -> `d[k] = d[k] OP e` (spec 31). Both the object and
+            # the key are evaluated twice, so they must be side-effect free.
+            if not (self._is_plain_path(expr.obj) and self._is_simple_key(expr.index)):
+                raise ParserError(
+                    "invalid compound assignment target", t.line, t.col, max(1, len(t.value)),
+                )
+            op = self._COMPOUND_OPS[self.cur.kind]
+            self.i += 1
+            value = self.parse_expr()
+            self.eat(TokenKind.NEWLINE)
+            current = A.Index(expr.obj, expr.index, expr.line, expr.col)
+            return A.IndexAssign(
+                expr.obj, expr.index,
+                A.BinOp(op, current, value, expr.line, expr.col),
+                expr.line, expr.col,
+            )
         if self.cur.kind in self._COMPOUND_OPS:
             # `a.b.f OP= e` -> `a.b.f = a.b.f OP e` (spec 27). The record path
             # is evaluated twice, so it may only be names and field accesses.
@@ -679,10 +712,15 @@ class Parser:
                 expr.line, expr.col,
             )
         if self.cur.kind == TokenKind.ASSIGN:
-            if isinstance(expr, (A.Index, A.Slice)):
+            if isinstance(expr, A.Index):
+                # `obj[k] = v`: sema accepts it for dicts only (spec 31).
+                self.i += 1  # consume '='
+                value = self.parse_expr()
+                self.eat(TokenKind.NEWLINE)
+                return A.IndexAssign(expr.obj, expr.index, value, expr.line, expr.col)
+            if isinstance(expr, A.Slice):
                 raise ParserError(
-                    "lists and strings are immutable: cannot assign through an index",
-                    t.line, t.col, max(1, len(t.value)),
+                    "cannot assign to a slice", t.line, t.col, max(1, len(t.value)),
                 )
             # `obj.field = value` (spec 20): the only assignable expression.
             if not isinstance(expr, A.FieldAccess):

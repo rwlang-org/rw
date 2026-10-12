@@ -105,6 +105,20 @@ rw_str rw_str_index   (rw_str s, int64_t i);
 rw_str rw_str_slice_py(rw_str s, int64_t start, int64_t stop);
 void   rw_list_slice  (rw_list *out, const rw_list *l, int64_t start, int64_t stop, int64_t elem_size);
 
+/* Dict[K, V] (spec 31): an insertion-ordered hash table. key_kind 0 = int
+ * (int64_t keys), 1 = string (rw_str keys). Keys and values are passed by
+ * pointer; values are val_size bytes. */
+typedef struct rw_dict rw_dict;
+rw_dict *rw_dict_new   (int64_t key_kind, int64_t val_size);
+void     rw_dict_set   (rw_dict *d, const void *key, const void *val);
+int8_t   rw_dict_get   (rw_dict *d, const void *key, void *val_out);
+void     rw_dict_at    (rw_dict *d, const void *key, void *val_out);
+int8_t   rw_dict_has   (rw_dict *d, const void *key);
+int8_t   rw_dict_remove(rw_dict *d, const void *key);
+int64_t  rw_dict_len   (rw_dict *d);
+void     rw_dict_keys  (rw_list *out, rw_dict *d);
+void     rw_dict_values(rw_list *out, rw_dict *d);
+
 /* List[int]: range-checked accessor returning Option[int]. */
 void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i);
 

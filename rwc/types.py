@@ -127,6 +127,16 @@ def result_of(ok: Type, err: Type) -> ResultType:
     return RESULT_INT_INT if ok is INT and err is INT else ResultType(ok, err)
 
 
+class DictType(Type):
+    """`Dict[K, V]` (spec 31): a reference to a heap hash table. K is int or
+    string. Compared structurally."""
+
+    def __init__(self, key: Type, value: Type) -> None:
+        self.key = key
+        self.value = value
+        self.name = f"Dict[{key}, {value}]"
+
+
 def is_numeric(t: Type) -> bool:
     return t is INT or t is FLOAT
 

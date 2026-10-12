@@ -59,6 +59,8 @@ def llvm_type_of(t: T.Type) -> ir.Type:
         return I8P  # opaque pointer
     if isinstance(t, T.ClassType):
         return I8P  # pointer to a heap record (spec 20)
+    if isinstance(t, T.DictType):
+        return I8P  # pointer to a heap hash table (spec 31)
     if isinstance(t, T.FunctionType):
         # Pointer to the function's own LLVM type (spec 21).
         return ir.FunctionType(llvm_type_of(t.ret), [llvm_type_of(p) for p in t.params]).as_pointer()
@@ -176,6 +178,20 @@ class IRGen:
             m, ir.FunctionType(ir.VoidType(), [list_ptr, list_ptr, I8P, I64]), "rw_list_push")
         self._rw_list_at = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [I8P, list_ptr, I64, I64]), "rw_list_at")
+        # Dict[K, V] (spec 31): keys and values by pointer.
+        self._rw_dict_new = ir.Function(m, ir.FunctionType(I8P, [I64, I64]), "rw_dict_new")
+        self._rw_dict_set = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [I8P, I8P, I8P]), "rw_dict_set")
+        self._rw_dict_get = ir.Function(m, ir.FunctionType(I8, [I8P, I8P, I8P]), "rw_dict_get")
+        self._rw_dict_at = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [I8P, I8P, I8P]), "rw_dict_at")
+        self._rw_dict_has = ir.Function(m, ir.FunctionType(I8, [I8P, I8P]), "rw_dict_has")
+        self._rw_dict_remove = ir.Function(m, ir.FunctionType(I8, [I8P, I8P]), "rw_dict_remove")
+        self._rw_dict_len = ir.Function(m, ir.FunctionType(I64, [I8P]), "rw_dict_len")
+        self._rw_dict_keys = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [list_ptr, I8P]), "rw_dict_keys")
+        self._rw_dict_values = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [list_ptr, I8P]), "rw_dict_values")
         # Indexing and slicing (spec 29). RW_SLICE_NONE marks a missing bound.
         self._rw_str_index = ir.Function(
             m, ir.FunctionType(RW_STR_TY, [RW_STR_TY, I64]), "rw_str_index")
@@ -357,6 +373,14 @@ class IRGen:
             return
         if isinstance(stmt, A.ForEach):
             self._emit_foreach(stmt, ctx)
+            return
+        if isinstance(stmt, A.IndexAssign):
+            dt = self.sema.expr_types[id(stmt.obj)]
+            assert isinstance(dt, T.DictType)
+            d = self._emit_expr(stmt.obj, ctx)
+            key = self._spill(ctx, self._emit_expr(stmt.index, ctx), dt.key)
+            val = self._spill(ctx, self._emit_expr(stmt.value, ctx), dt.value)
+            b.call(self._rw_dict_set, [d, key, val])
             return
         if isinstance(stmt, A.FieldAssign):
             obj_ty = self.sema.expr_types[id(stmt.obj)]
@@ -578,11 +602,58 @@ class IRGen:
             lst = self._list_push_value(ctx, lst, list_ty, self._emit_expr(e, ctx))
         return lst
 
+    # ---------- Dict[K, V] (spec 31) ----------
+
+    def _spill(self, ctx: "FunctionCtx", value: ir.Value, ty: T.Type) -> ir.Value:
+        """Store value in an entry-block slot and return it as an i8*."""
+        slot = ctx.alloca(llvm_type_of(ty))
+        ctx.builder.store(value, slot)
+        return ctx.builder.bitcast(slot, I8P)
+
+    def _dict_keys_list(self, ctx: "FunctionCtx", d: ir.Value) -> ir.Value:
+        out = ctx.alloca(RW_LIST_INT_TY)
+        ctx.builder.call(self._rw_dict_keys, [out, d])
+        return ctx.builder.load(out)
+
+    def _emit_dict_builtin(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
+        b = ctx.builder
+        if call.callee == "dict_new":
+            dt = self.sema.expr_types[id(call)]
+            assert isinstance(dt, T.DictType)
+            kind = ir.Constant(I64, 0 if dt.key is T.INT else 1)
+            return b.call(self._rw_dict_new, [kind, self._sizeof(llvm_type_of(dt.value), b)])
+        d = self._emit_expr(call.args[0], ctx)
+        dt = self.sema.expr_types[id(call.args[0])]
+        assert isinstance(dt, T.DictType)
+        if call.callee in ("dict_keys", "dict_values"):
+            out = ctx.alloca(RW_LIST_INT_TY)
+            fn = self._rw_dict_keys if call.callee == "dict_keys" else self._rw_dict_values
+            b.call(fn, [out, d])
+            return b.load(out)
+        key = self._spill(ctx, self._emit_expr(call.args[1], ctx), dt.key)
+        if call.callee == "dict_has":
+            return b.call(self._rw_dict_has, [d, key])
+        if call.callee == "dict_remove":
+            return b.call(self._rw_dict_remove, [d, key])
+        # dict_get -> Option[V]: tag = found, value = the copied value (or 0).
+        val_llvm = llvm_type_of(dt.value)
+        val_slot = ctx.alloca(val_llvm)
+        b.store(ir.Constant(val_llvm, None), val_slot)
+        found = b.call(self._rw_dict_get, [d, key, b.bitcast(val_slot, I8P)])
+        opt = ir.Constant(llvm_type_of(T.option_of(dt.value)), None)
+        opt = b.insert_value(opt, b.zext(found, I64), 0)
+        return b.insert_value(opt, b.load(val_slot), 1)
+
     def _emit_index(self, expr: A.Index, ctx: "FunctionCtx") -> ir.Value:
         b = ctx.builder
         obj = self._emit_expr(expr.obj, ctx)
         idx = self._emit_expr(expr.index, ctx)
         obj_ty = self.sema.expr_types[id(expr.obj)]
+        if isinstance(obj_ty, T.DictType):
+            val_slot = ctx.alloca(llvm_type_of(obj_ty.value))
+            b.call(self._rw_dict_at, [obj, self._spill(ctx, idx, obj_ty.key),
+                                      b.bitcast(val_slot, I8P)])
+            return b.load(val_slot)
         if obj_ty is T.STRING:
             return b.call(self._rw_str_index, [obj, idx])
         assert isinstance(obj_ty, T.ListType)
@@ -616,6 +687,10 @@ class IRGen:
         it_ty = self.sema.expr_types[id(stmt.iterable)]
         elem_ty = self.sema.foreach_types[id(stmt)]
         it_val = self._emit_expr(stmt.iterable, ctx)
+        if isinstance(it_ty, T.DictType):
+            # Iterate over a snapshot of the keys (spec 31).
+            it_val = self._dict_keys_list(ctx, it_val)
+            it_ty = T.list_of(it_ty.key)
         it_slot = ctx.alloca(llvm_type_of(it_ty))
         b.store(it_val, it_slot)
         if it_ty is T.STRING:
@@ -950,6 +1025,8 @@ class IRGen:
             arg_ast = call.args[0]
             v = self._emit_expr(arg_ast, ctx)
             aty = self.sema.expr_types[id(arg_ast)]
+            if isinstance(aty, T.DictType):
+                return ctx.builder.call(self._rw_dict_len, [v])
             if isinstance(aty, T.ListType):
                 # rw_list_int_len takes a pointer to a stack copy; it only
                 # reads `len`, so it serves every List[T].
@@ -961,6 +1038,8 @@ class IRGen:
             # Both are noops at the IR level: the value carries the
             # same {len, ptr} layout, only the sema type changes.
             return self._emit_expr(call.args[0], ctx)
+        if call.callee in ("dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values"):
+            return self._emit_dict_builtin(call, ctx)
         if call.callee == "str_split":
             sv, sep = (self._emit_expr(a, ctx) for a in call.args)
             out_slot = ctx.alloca(RW_LIST_INT_TY)

@@ -70,6 +70,11 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "int", "float", "str",
     "str_split", "str_join", "str_strip", "str_replace", "str_lower", "str_upper",
     "str_contains", "str_ends_with",
+    "dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values",
+})
+
+_DICT_BUILTINS = frozenset({
+    "dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values",
 })
 
 # Accepted argument types for the conversion builtins (spec 26).
@@ -174,6 +179,15 @@ class Sema:
                 return self.class_map[ty.name]
             raise CompileError(Diagnostic(self.filename, ty.line, ty.col, len(ty.name),
                                           f"unknown type: {ty.name}"))
+        if isinstance(ty, A.TypeDict):
+            key, value = self._resolve_type(ty.key), self._resolve_type(ty.value)
+            if key is not T.INT and key is not T.STRING:
+                raise CompileError(Diagnostic(self.filename, ty.line, ty.col, 4,
+                                              f"Dict keys must be int or string, found `{key}`"))
+            if value is T.VOID:
+                raise CompileError(Diagnostic(self.filename, ty.line, ty.col, 4,
+                                              "Dict values cannot be void"))
+            return T.DictType(key, value)
         if isinstance(ty, A.TypeOption):
             inner = self._resolve_type(ty.inner)
             if inner is T.VOID:
@@ -511,6 +525,25 @@ class Sema:
             self._check_expr(fn, stmt.expr, locals_)
             return False
 
+        if isinstance(stmt, A.IndexAssign):
+            obj_ty = self._check_expr(fn, stmt.obj, locals_)
+            if isinstance(obj_ty, T.ListType) or obj_ty is T.STRING:
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, 1,
+                    "lists and strings are immutable: cannot assign through an index",
+                ))
+            if not isinstance(obj_ty, T.DictType):
+                raise CompileError(Diagnostic(self.filename, stmt.line, stmt.col, 1,
+                                              f"cannot index `{obj_ty}`"))
+            self._check_dict_key(fn, obj_ty, stmt.index, locals_, stmt.line, stmt.col)
+            val_ty = self._check_expr_expect(fn, stmt.value, locals_, obj_ty.value)
+            if val_ty != obj_ty.value:
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, 1,
+                    f"cannot assign `{val_ty}` to an element of {obj_ty}",
+                ))
+            return False
+
         if isinstance(stmt, A.FieldAssign):
             obj_ty = self._check_expr(fn, stmt.obj, locals_)
             _, fty = self._field_of(obj_ty, stmt.field, stmt.line, stmt.col)
@@ -573,6 +606,8 @@ class Sema:
             it_ty = self._check_expr(fn, stmt.iterable, locals_)
             if isinstance(it_ty, T.ListType):
                 elem: T.Type = it_ty.elem
+            elif isinstance(it_ty, T.DictType):
+                elem = it_ty.key  # iterates over the keys, in insertion order
             elif it_ty is T.STRING:
                 elem = T.STRING
             else:
@@ -695,6 +730,8 @@ class Sema:
             assert isinstance(expr, A.Call)
             if expr.args:
                 self._hint_expected(expr.args[0], expected, locals_)
+        elif isinstance(expected, T.DictType) and self._is_builtin_call(expr, "dict_new", locals_):
+            self._type_hints[id(expr)] = expected
         elif isinstance(expected, T.OptionType) and isinstance(expr, (A.NoneExpr, A.SomeExpr)):
             self._type_hints[id(expr)] = expected
         elif isinstance(expected, T.ResultType) and isinstance(expr, (A.OkExpr, A.ErrExpr)):
@@ -871,6 +908,9 @@ class Sema:
             return T.list_of(first)
         if isinstance(expr, A.Index):
             obj_ty = self._check_expr(fn, expr.obj, locals_)
+            if isinstance(obj_ty, T.DictType):
+                self._check_dict_key(fn, obj_ty, expr.index, locals_, expr.line, expr.col)
+                return obj_ty.value
             if not (isinstance(obj_ty, T.ListType) or obj_ty is T.STRING):
                 raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
                                               f"cannot index `{obj_ty}`"))
@@ -1037,10 +1077,10 @@ class Sema:
                     f"len takes exactly 1 argument, got {len(call.args)}",
                 ))
             at = self._check_expr(fn, call.args[0], locals_)
-            if at is not T.STRING and at is not T.BYTES and not isinstance(at, T.ListType):
+            if at is not T.STRING and at is not T.BYTES and not isinstance(at, (T.ListType, T.DictType)):
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, 3,
-                    f"len argument must be string, Bytes or a List, found `{at}`",
+                    f"len argument must be string, Bytes, a List or a Dict, found `{at}`",
                 ))
             return T.INT
         # Builtin: bytes_from_str(string) -> Bytes.
@@ -1071,6 +1111,8 @@ class Sema:
                     f"str_from_bytes argument must be Bytes, found `{at}`",
                 ))
             return T.STRING
+        if call.callee in _DICT_BUILTINS:
+            return self._check_dict_builtin(fn, call, locals_)
         if call.callee in _CONVERSIONS:
             accepted, ret, names = _CONVERSIONS[call.callee]
             if len(call.args) != 1:
@@ -1342,6 +1384,49 @@ class Sema:
                 f"{obj_ty} has no field `{field}`",
             ))
         return obj_ty, obj_ty.fields[idx][1]
+
+    def _check_dict_builtin(self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]) -> T.Type:
+        """dict_new / dict_get / dict_has / dict_remove / dict_keys / dict_values
+        (spec 31)."""
+        name = call.callee
+        arity = {"dict_new": 0, "dict_keys": 1, "dict_values": 1}.get(name, 2)
+        if len(call.args) != arity:
+            raise CompileError(Diagnostic(
+                self.filename, call.line, call.col, len(name),
+                f"{name} takes {arity} argument{'s' if arity != 1 else ''}, got {len(call.args)}",
+            ))
+        if name == "dict_new":
+            hint = self._type_hints.get(id(call))
+            if not isinstance(hint, T.DictType):
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(name),
+                    "cannot infer the type of dict_new(); give the variable a Dict type",
+                ))
+            return hint
+        dt = self._check_expr(fn, call.args[0], locals_)
+        if not isinstance(dt, T.DictType):
+            raise CompileError(Diagnostic(
+                self.filename, call.line, call.col, len(name),
+                f"{name} argument 1 must be a Dict, found `{dt}`",
+            ))
+        if name == "dict_keys":
+            return T.list_of(dt.key)
+        if name == "dict_values":
+            return T.list_of(dt.value)
+        kt = self._check_expr(fn, call.args[1], locals_)
+        if kt != dt.key:
+            raise CompileError(Diagnostic(
+                self.filename, call.line, call.col, len(name),
+                f"{name} argument 2 must be {dt.key}, found `{kt}`",
+            ))
+        return T.option_of(dt.value) if name == "dict_get" else T.BOOL
+
+    def _check_dict_key(self, fn: A.FuncDef, dt: T.DictType, key: A.Expr,
+                        locals_: Dict[str, T.Type], line: int, col: int) -> None:
+        kt = self._check_expr(fn, key, locals_)
+        if kt != dt.key:
+            raise CompileError(Diagnostic(self.filename, line, col, 1,
+                                          f"{dt} key must be {dt.key}, found `{kt}`"))
 
     def _check_variant(self, fn: A.FuncDef, expr: A.Expr, locals_: Dict[str, T.Type]) -> T.Type:
         """`Some(x)` / `None` / `Ok(x)` / `Err(e)` (spec 30). The expected type,

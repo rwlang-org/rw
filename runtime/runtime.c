@@ -460,6 +460,190 @@ void rw_list_slice(rw_list *out, const rw_list *l, int64_t start, int64_t stop, 
     out->data = data;
 }
 
+/* ---------- Dict[K, V] (spec 31) ----------
+ *
+ * Like CPython's compact dict: `entries` holds {hash, live, key, value} in
+ * insertion order; `index` is an open-addressing table (linear probing,
+ * power-of-two size, load <= 2/3) of entry positions, -1 = empty. Removing
+ * clears `live` and leaves the index slot as a tombstone (probing continues
+ * past it); the table is compacted when `entries` fills up. */
+
+struct rw_dict {
+    int64_t  key_kind;    /* 0 = int64_t, 1 = rw_str */
+    int64_t  key_size;
+    int64_t  val_size;
+    int64_t  entry_size;  /* 16 + key_size + val_size rounded up to 8 */
+    int64_t  len;         /* live entries */
+    int64_t  used;        /* entries in use, live or removed */
+    int64_t  cap;         /* entry capacity */
+    char    *entries;
+    int64_t *index;
+    int64_t  index_cap;   /* power of two */
+};
+
+#define RW_DICT_ENTRY(d, i) ((d)->entries + (i) * (d)->entry_size)
+
+static uint64_t dict_hash(const rw_dict *d, const void *key) {
+    if (d->key_kind == 0) {
+        uint64_t x = (uint64_t)*(const int64_t *)key;  /* splitmix64 */
+        x += 0x9E3779B97F4A7C15ull;
+        x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+        x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+        return x ^ (x >> 31);
+    }
+    const rw_str *s = (const rw_str *)key;  /* FNV-1a */
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (int64_t i = 0; i < s->len; i++) {
+        h ^= (unsigned char)s->ptr[i];
+        h *= 0x100000001B3ull;
+    }
+    return h;
+}
+
+static int dict_key_eq(const rw_dict *d, const void *a, const void *b) {
+    if (d->key_kind == 0) return *(const int64_t *)a == *(const int64_t *)b;
+    return rw_str_eq(*(const rw_str *)a, *(const rw_str *)b);
+}
+
+static char *entry_key(const rw_dict *d, char *e) { (void)d; return e + 16; }
+static char *entry_val(const rw_dict *d, char *e) { return e + 16 + d->key_size; }
+
+rw_dict *rw_dict_new(int64_t key_kind, int64_t val_size) {
+    rw_dict *d = (rw_dict *)calloc(1, sizeof *d);
+    if (!d) { fputs("rw: out of memory (dict)\n", stderr); abort(); }
+    d->key_kind = key_kind;
+    d->key_size = key_kind == 0 ? (int64_t)sizeof(int64_t) : (int64_t)sizeof(rw_str);
+    d->val_size = val_size;
+    d->entry_size = 16 + d->key_size + ((val_size + 7) / 8) * 8;
+    return d;
+}
+
+/* Index slot holding `key`, or the empty slot where it would go. */
+static int64_t dict_find_slot(const rw_dict *d, const void *key, uint64_t h) {
+    uint64_t mask = (uint64_t)d->index_cap - 1;
+    for (uint64_t i = h & mask;; i = (i + 1) & mask) {
+        int64_t pos = d->index[i];
+        if (pos < 0) return (int64_t)i;
+        char *e = RW_DICT_ENTRY(d, pos);
+        if (*(uint64_t *)(e + 8) && *(uint64_t *)e == h && dict_key_eq(d, entry_key(d, e), key)) {
+            return (int64_t)i;
+        }
+    }
+}
+
+static void dict_rebuild(rw_dict *d, int64_t new_cap) {
+    /* Compact live entries into a new array and rebuild the index. */
+    char *entries = (char *)malloc((size_t)(new_cap * d->entry_size));
+    int64_t index_cap = 8;
+    while (index_cap * 2 < new_cap * 3) index_cap *= 2;  /* load <= 2/3 */
+    int64_t *index = (int64_t *)malloc((size_t)index_cap * sizeof(int64_t));
+    if (!entries || !index) { fputs("rw: out of memory (dict)\n", stderr); abort(); }
+    for (int64_t i = 0; i < index_cap; i++) index[i] = -1;
+    int64_t n = 0;
+    for (int64_t i = 0; i < d->used; i++) {
+        char *e = RW_DICT_ENTRY(d, i);
+        if (!*(uint64_t *)(e + 8)) continue;
+        memcpy(entries + n * d->entry_size, e, (size_t)d->entry_size);
+        uint64_t mask = (uint64_t)index_cap - 1;
+        uint64_t j = *(uint64_t *)e & mask;
+        while (index[j] >= 0) j = (j + 1) & mask;
+        index[j] = n++;
+    }
+    free(d->entries);
+    free(d->index);
+    d->entries = entries;
+    d->index = index;
+    d->index_cap = index_cap;
+    d->cap = new_cap;
+    d->used = n;
+}
+
+void rw_dict_set(rw_dict *d, const void *key, const void *val) {
+    if (d->index_cap == 0) dict_rebuild(d, 8);
+    uint64_t h = dict_hash(d, key);
+    int64_t slot = dict_find_slot(d, key, h);
+    if (d->index[slot] >= 0) {  /* existing key: update in place */
+        memcpy(entry_val(d, RW_DICT_ENTRY(d, d->index[slot])), val, (size_t)d->val_size);
+        return;
+    }
+    if (d->used == d->cap) {
+        /* Grow if mostly live; otherwise compaction alone makes room. */
+        dict_rebuild(d, d->len * 2 >= d->cap ? d->cap * 2 : d->cap);
+        slot = dict_find_slot(d, key, h);
+    }
+    char *e = RW_DICT_ENTRY(d, d->used);
+    *(uint64_t *)e = h;
+    *(uint64_t *)(e + 8) = 1;
+    memcpy(entry_key(d, e), key, (size_t)d->key_size);
+    memcpy(entry_val(d, e), val, (size_t)d->val_size);
+    d->index[slot] = d->used++;
+    d->len++;
+}
+
+static char *dict_lookup(rw_dict *d, const void *key) {
+    if (d->len == 0) return NULL;
+    int64_t slot = dict_find_slot(d, key, dict_hash(d, key));
+    return d->index[slot] >= 0 ? RW_DICT_ENTRY(d, d->index[slot]) : NULL;
+}
+
+int8_t rw_dict_get(rw_dict *d, const void *key, void *val_out) {
+    char *e = dict_lookup(d, key);
+    if (!e) return 0;
+    memcpy(val_out, entry_val(d, e), (size_t)d->val_size);
+    return 1;
+}
+
+void rw_dict_at(rw_dict *d, const void *key, void *val_out) {
+    if (!rw_dict_get(d, key, val_out)) {
+        if (d->key_kind == 0) {
+            fprintf(stderr, "rw: dict key not found: %lld\n", (long long)*(const int64_t *)key);
+        } else {
+            const rw_str *s = (const rw_str *)key;
+            fprintf(stderr, "rw: dict key not found: \"%.*s\"\n", (int)s->len, s->ptr);
+        }
+        abort();
+    }
+}
+
+int8_t rw_dict_has(rw_dict *d, const void *key) {
+    return dict_lookup(d, key) ? 1 : 0;
+}
+
+int8_t rw_dict_remove(rw_dict *d, const void *key) {
+    char *e = dict_lookup(d, key);
+    if (!e) return 0;
+    *(uint64_t *)(e + 8) = 0;  /* tombstone: the index slot stays occupied */
+    d->len--;
+    return 1;
+}
+
+int64_t rw_dict_len(rw_dict *d) {
+    return d->len;
+}
+
+static void dict_collect(rw_list *out, rw_dict *d, int keys) {
+    int64_t size = keys ? d->key_size : d->val_size;
+    out->len = 0;
+    out->cap = 0;
+    out->data = NULL;
+    if (d->len == 0) return;
+    char *data = (char *)malloc((size_t)(d->len * size));
+    if (!data) return;
+    int64_t n = 0;
+    for (int64_t i = 0; i < d->used; i++) {
+        char *e = RW_DICT_ENTRY(d, i);
+        if (!*(uint64_t *)(e + 8)) continue;
+        memcpy(data + n * size, keys ? entry_key(d, e) : entry_val(d, e), (size_t)size);
+        n++;
+    }
+    out->len = n;
+    out->cap = n;
+    out->data = data;
+}
+
+void rw_dict_keys(rw_list *out, rw_dict *d) { dict_collect(out, d, 1); }
+void rw_dict_values(rw_list *out, rw_dict *d) { dict_collect(out, d, 0); }
+
 /* ---------- lifecycle ---------- */
 
 void rw_init(void) {
