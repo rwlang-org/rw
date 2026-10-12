@@ -218,6 +218,12 @@ class IRGen:
         self._rw_fs_rename = ir.Function(m, ir.FunctionType(I64, [RW_STR_TY, RW_STR_TY]), "rw_fs_rename")
         self._rw_fs_remove = ir.Function(m, s_i64, "rw_fs_remove")
         self._rw_fs_mkdir = ir.Function(m, s_i64, "rw_fs_mkdir")
+        # child processes (spec 61)
+        self._rw_proc_start = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [RW_LIST_INT_TY.as_pointer(), RW_LIST_INT_TY.as_pointer()]),
+            "rw_proc_start")
+        self._rw_proc_wait = ir.Function(m, ir.FunctionType(I64, [I64]), "rw_proc_wait")
+        self._rw_proc_kill = ir.Function(m, ir.FunctionType(I64, [I64, RW_STR_TY]), "rw_proc_kill")
         # I/O errors (spec 51)
         self._rw_last_error = ir.Function(m, ir.FunctionType(I64, []), "rw_last_error")
         self._rw_error_name = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_error_name")
@@ -1402,6 +1408,12 @@ class IRGen:
             out_slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.call(self._rw_fs_read_dir, [out_slot, self._emit_expr(call.args[0], ctx)])
             return ctx.builder.load(out_slot)
+        if call.callee == "proc_start":
+            in_slot = ctx.alloca(RW_LIST_INT_TY)
+            ctx.builder.store(self._emit_expr(call.args[0], ctx), in_slot)
+            out_slot = ctx.alloca(RW_LIST_INT_TY)
+            ctx.builder.call(self._rw_proc_start, [out_slot, in_slot])
+            return ctx.builder.load(out_slot)
         if call.callee == "signal_wait":
             slot = ctx.alloca(RW_LIST_INT_TY)
             ctx.builder.store(self._emit_expr(call.args[0], ctx), slot)
@@ -1464,6 +1476,8 @@ class IRGen:
             "fs_rename": self._rw_fs_rename,
             "fs_remove": self._rw_fs_remove,
             "fs_mkdir": self._rw_fs_mkdir,
+            "proc_wait": self._rw_proc_wait,
+            "proc_kill": self._rw_proc_kill,
             "error_name": self._rw_error_name,
             "error_message": self._rw_error_message,
         }

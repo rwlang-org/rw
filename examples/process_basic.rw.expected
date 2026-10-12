@@ -1,0 +1,6 @@
+status=0 out=[hello world] err=[]
+status=3 out=[out] err=[err]
+status=0 out=[PIPED INPUT] err=[]
+failed: ENOENT
+true
+143

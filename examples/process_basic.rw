@@ -1,0 +1,22 @@
+# Child processes with the standard library (spec 61).
+import process
+
+def show(o: Option[process.Output]) -> void:
+    match o:
+        case Some(out):
+            print(f"status={out.status} out=[{str_strip(out.stdout)}] err=[{str_strip(out.stderr)}]")
+        case None:
+            print("failed: " + error_name(last_error()))
+
+def main() -> int:
+    show(process.run(["echo", "hello", "world"]))
+    show(process.run(["sh", "-c", "echo out; echo err >&2; exit 3"]))
+    show(process.run(["tr", "a-z", "A-Z"], "piped input"))
+    show(process.run(["no-such-command-rw"]))
+    match process.start(["sleep", "10"]):
+        case Some(p):
+            print(p.kill())
+            print(p.wait())
+        case None:
+            print("no sleep")
+    return 0

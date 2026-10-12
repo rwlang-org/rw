@@ -26,11 +26,21 @@
 
 #include "aio.h"
 
-/* True for fds whose read/write may block in the kernel: anything that is
- * not a socket. Sockets accepted by rw are nonblocking (tcp.c). */
+/* True for fds whose read/write may block in the kernel. Sockets are
+ * nonblocking (tcp.c, addr.c) and use the netpoller. So do pipes that are in
+ * nonblocking mode, such as the ones rw creates for child processes
+ * (spec 61): offloading those to the bounded aio pool could deadlock when a
+ * blocked read waits for a write queued behind it. Inherited pipes (a
+ * blocking stdin, say) and regular files still go to the pool. */
 static int needs_offload(int64_t fd) {
     struct stat st;
-    return fstat((int)fd, &st) == 0 && !S_ISSOCK(st.st_mode);
+    if (fstat((int)fd, &st) != 0) return 0;
+    if (S_ISSOCK(st.st_mode)) return 0;
+    if (S_ISFIFO(st.st_mode)) {
+        int fl = fcntl((int)fd, F_GETFL, 0);
+        if (fl >= 0 && (fl & O_NONBLOCK)) return 0;
+    }
+    return 1;
 }
 
 static void read_impl(rw_str *out, int64_t fd, int64_t max) {

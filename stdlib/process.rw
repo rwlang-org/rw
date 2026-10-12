@@ -1,0 +1,74 @@
+# Child processes (spec 61).
+#
+#   import process
+#   match process.run(["git", "rev-parse", "HEAD"]):
+#       case Some(out):
+#           print(f"{out.status}: {str_strip(out.stdout)}")
+#       case None:
+#           print(error_message(last_error()))   # e.g. the command was not found
+#
+# For streaming, process.start gives the three pipe handles; use read /
+# write / close on them and wait() at the end.
+
+class Process:
+    pid: int
+    stdin: int     # write end of the child's stdin
+    stdout: int    # read end of the child's stdout
+    stderr: int    # read end of the child's stderr
+
+    # Close stdin (the child sees EOF) and wait for the child to exit.
+    # Returns its exit status, 128 + N if it was killed by signal N, or -1.
+    def wait(self) -> int:
+        if self.stdin >= 0:
+            close(self.stdin)
+            self.stdin = -1
+        return proc_wait(self.pid)
+
+    # Send a signal by name ("SIGTERM", "SIGKILL", "SIGINT", ...).
+    def kill(self, sig: string = "SIGTERM") -> bool:
+        return proc_kill(self.pid, sig) == 0
+
+class Output:
+    status: int
+    stdout: string
+    stderr: string
+
+# Start argv[0] (looked up in PATH) with the rest as arguments. None, with
+# last_error set (ENOENT for a missing command), if it cannot be started.
+def start(argv: List[string]) -> Option[Process]:
+    v = proc_start(argv)
+    if len(v) != 4:
+        return None
+    return Some(Process(v[0], v[1], v[2], v[3]))
+
+def read_all(fd: int) -> string:
+    out = ""
+    while true:
+        b = read(fd, 65536)
+        if len(b) == 0:
+            break
+        out = out + str_from_bytes(b)
+    close(fd)
+    return out
+
+def feed(fd: int, data: string) -> int:
+    if len(data) > 0:
+        write_all(fd, bytes_from_str(data))
+    close(fd)
+    return 0
+
+# Run to completion with `input` on stdin and collect stdout and stderr.
+# The three streams are handled by separate fibers, so a child that writes
+# a lot before reading all its input cannot deadlock.
+def run(argv: List[string], input: string = "") -> Option[Output]:
+    match start(argv):
+        case Some(p):
+            fed = spawn feed(p.stdin, input)
+            p.stdin = -1
+            err = spawn read_all(p.stderr)
+            out = read_all(p.stdout)
+            await fed
+            status = p.wait()
+            return Some(Output(status, out, await err))
+        case None:
+            return None
