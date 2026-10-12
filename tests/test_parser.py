@@ -608,3 +608,20 @@ def test_parse_class_methods_lowered_to_functions():
 def test_parse_method_requires_self():
     with pytest.raises(ParserError):
         parse_src("class C:\n    x: int\n\n    def m(a: int) -> int:\n        return a\n")
+
+
+# ----- f-strings (spec 34) -----
+
+def test_parse_fstring_lowered_to_concat():
+    mod = parse_src('def main() -> int:\n    s: string = f"x={x}!"\n    return 0\n')
+    e = mod.functions[0].body[0].value
+    # ("x=" + str(x)) + "!"
+    assert isinstance(e, A.BinOp) and e.op == "+"
+    assert isinstance(e.right, A.StringLit) and e.right.value == "!"
+    assert isinstance(e.left.right, A.Call) and e.left.right.callee == "str"
+
+
+def test_parse_fstring_format_spec_is_error():
+    with pytest.raises(ParserError) as ei:
+        parse_src('def main() -> int:\n    s: string = f"{x:.2f}"\n    return 0\n')
+    assert "format specs are not supported" in str(ei.value)

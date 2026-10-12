@@ -1,0 +1,26 @@
+class User:
+    name: string
+    age: int
+
+    def describe(self) -> string:
+        return f"{self.name} ({self.age})"
+
+def main() -> int:
+    name = "rw"
+    version = 10
+    ratio = 0.25
+    ok = true
+    print(f"hello, {name}!")
+    print(f"v0.0.{version} ratio={ratio} ok={ok}")
+    print(f"{version * 2 + 1} = {str_upper(name)}")
+    print(f"{{braces}} and {name}")
+    print(f"")
+    print(f"{name}")
+    users = [User("ann", 31), User("bob", 25)]
+    for u in users:
+        print(f"- {u.describe()}")
+    ages: Dict[string, int] = dict_new()
+    ages["ann"] = 31
+    print(f"ann is {ages["ann"]}, first user is {users[0].name}")
+    print(f"tab:\t{len(users)} users\n--")
+    return 0

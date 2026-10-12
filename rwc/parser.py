@@ -36,7 +36,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from . import ast_nodes as A
-from .lexer import Token, TokenKind
+from .lexer import LexerError, Token, TokenKind, tokenize
 
 
 class ParserError(Exception):
@@ -965,6 +965,40 @@ class Parser:
                 atom = A.FieldAccess(atom, name.value, name.line, name.col)
         return atom
 
+    def _lower_fstring(self, t: Token) -> A.Expr:
+        """f"a{x}b" -> "a" + str(x) + "b" (spec 34)."""
+        pieces: List[A.Expr] = []
+        for kind, text, line, col in t.parts or []:
+            if kind == "lit":
+                pieces.append(A.StringLit(text, line, col))
+                continue
+            stripped = text.lstrip()
+            col += len(text) - len(stripped)
+            try:
+                toks = tokenize(stripped.rstrip())
+            except LexerError as e:
+                raise ParserError(e.message, line, col + e.col - 1, e.length) from e
+            for tok in toks:  # report errors at the f-string's position
+                if tok.line == 1:
+                    tok.col += col - 1
+                tok.line += line - 1
+            sub = Parser(toks)
+            expr = sub.parse_expr()
+            if sub.cur.kind not in (TokenKind.NEWLINE, TokenKind.EOF):
+                raise ParserError(
+                    "invalid expression in f-string (format specs are not supported)",
+                    sub.cur.line, sub.cur.col, max(1, len(sub.cur.value)),
+                )
+            pieces.append(A.Call("str", [expr], line, col))
+        if not pieces:
+            return A.StringLit("", t.line, t.col)
+        out = pieces[0]
+        if isinstance(out, A.Call):
+            out = A.BinOp("+", A.StringLit("", t.line, t.col), out, t.line, t.col)
+        for p in pieces[1:]:
+            out = A.BinOp("+", out, p, t.line, t.col)
+        return out
+
     def _parse_subscript(self, obj: A.Expr) -> A.Expr:
         """`[index]` or `[start?:stop?]` after `obj` (spec 29)."""
         lb = self.eat(TokenKind.LBRACK)
@@ -1006,6 +1040,9 @@ class Parser:
         if t.kind == TokenKind.STRING:
             self.i += 1
             return A.StringLit(t.value, t.line, t.col)
+        if t.kind == TokenKind.FSTRING:
+            self.i += 1
+            return self._lower_fstring(t)
         if t.kind == TokenKind.KW_TRUE:
             self.i += 1
             return A.BoolLit(True, t.line, t.col)

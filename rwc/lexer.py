@@ -16,6 +16,7 @@ Errors are raised as LexerError carrying file/line/col for diagnostics.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import List, Optional, Tuple
 from enum import Enum, auto
 
 
@@ -30,6 +31,7 @@ class TokenKind(Enum):
     INT = auto()
     FLOAT = auto()
     STRING = auto()
+    FSTRING = auto()  # f"..." (spec 34); see Token.parts
 
     # Identifier + keyword
     IDENT = auto()
@@ -164,6 +166,9 @@ class Token:
     value: str
     line: int  # 1-origin
     col: int  # 1-origin
+    # FSTRING only (spec 34): ("lit", text, line, col) with escapes already
+    # processed, or ("expr", source, line, col) for a `{...}` part.
+    parts: Optional[List[Tuple[str, str, int, int]]] = None
 
     def __repr__(self) -> str:
         return f"Token({self.kind.name}, {self.value!r}, {self.line}:{self.col})"
@@ -300,7 +305,9 @@ class Lexer:
                 self._advance()
                 continue
             start_line, start_col = self.line, self.col
-            if ch.isalpha() or ch == "_":
+            if ch == "f" and self._peek(1) == '"':
+                self._read_fstring(start_line, start_col)
+            elif ch.isalpha() or ch == "_":
                 self._read_ident(start_line, start_col)
             elif ch.isdigit():
                 self._read_number(start_line, start_col)
@@ -411,6 +418,95 @@ class Lexer:
                 self._advance()
             else:
                 break
+
+    _ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", '"': '"', "0": "\0"}
+
+    def _read_fstring(self, line: int, col: int) -> None:
+        """f"text {expr} text" (spec 34). `{{` and `}}` are literal braces.
+        Inside `{...}`, nested brackets and string literals are skipped over,
+        so `f"{d["a"]}"` works."""
+        self._advance()  # f
+        self._advance()  # opening quote
+        parts: List[Tuple[str, str, int, int]] = []
+        lit: list[str] = []
+        lit_line, lit_col = self.line, self.col
+
+        def flush() -> None:
+            if lit:
+                parts.append(("lit", "".join(lit), lit_line, lit_col))
+                lit.clear()
+
+        while True:
+            if self.i >= len(self.source) or self.source[self.i] == "\n":
+                raise LexerError("unterminated f-string", line, col, 2)
+            c = self.source[self.i]
+            if c == '"':
+                self._advance()
+                break
+            if c == "{" and self._peek(1) == "{":
+                lit.append("{")
+                self._advance()
+                self._advance()
+                continue
+            if c == "}" and self._peek(1) == "}":
+                lit.append("}")
+                self._advance()
+                self._advance()
+                continue
+            if c == "}":
+                raise LexerError("single '}' in f-string (use '}}')", self.line, self.col, 1)
+            if c == "{":
+                flush()
+                self._advance()
+                e_line, e_col = self.line, self.col
+                depth = 0
+                src: list[str] = []
+                while True:
+                    if self.i >= len(self.source) or self.source[self.i] == "\n":
+                        raise LexerError("unterminated '{' in f-string", e_line, e_col - 1, 1)
+                    d = self.source[self.i]
+                    if d == "}" and depth == 0:
+                        self._advance()
+                        break
+                    if d in "([{":
+                        depth += 1
+                    elif d in ")]}":
+                        depth -= 1
+                    elif d == '"':
+                        # Copy a nested string literal verbatim.
+                        src.append(d)
+                        self._advance()
+                        while self.i < len(self.source) and self.source[self.i] not in '"\n':
+                            if self.source[self.i] == "\\":
+                                src.append(self.source[self.i])
+                                self._advance()
+                            src.append(self.source[self.i])
+                            self._advance()
+                        if self.i >= len(self.source) or self.source[self.i] != '"':
+                            # Most likely a missing `}` before the closing quote.
+                            raise LexerError("unterminated '{' in f-string", e_line, e_col - 1, 1)
+                    src.append(self.source[self.i])
+                    self._advance()
+                text = "".join(src)
+                if not text.strip():
+                    raise LexerError("empty expression in f-string", e_line, e_col - 1, 2)
+                parts.append(("expr", text, e_line, e_col))
+                lit_line, lit_col = self.line, self.col
+                continue
+            if c == "\\":
+                self._advance()
+                esc = self.source[self.i] if self.i < len(self.source) else ""
+                if esc not in self._ESCAPES:
+                    raise LexerError(f"unknown escape sequence: \\{esc}", self.line, self.col - 1, 2)
+                lit.append(self._ESCAPES[esc])
+                self._advance()
+                continue
+            if not lit:
+                lit_line, lit_col = self.line, self.col
+            lit.append(c)
+            self._advance()
+        flush()
+        self.tokens.append(Token(TokenKind.FSTRING, "", line, col, parts=parts))
 
     def _read_string(self, line: int, col: int) -> None:
         # Consume opening quote
