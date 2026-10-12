@@ -194,6 +194,14 @@ rw_str rw_chr(int64_t cp) {
     return out;
 }
 
+/* spec 62: one raw byte (the low 8 bits of b). */
+rw_str rw_str_from_byte(int64_t b) {
+    char *p;
+    rw_str out = str_alloc(1, &p);
+    if (p) p[0] = (char)(unsigned char)(b & 0xFF);
+    return out;
+}
+
 void rw_str_to_float(rw_option_float *out, rw_str s) {
     out->tag = 0;
     out->payload = 0.0;

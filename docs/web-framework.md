@@ -55,6 +55,8 @@ return value is the same app, for convenience.
 
 Patterns are matched segment by segment. A `:name` segment captures any
 non-empty segment: `/users/:id/posts/:post` matches `/users/7/posts/42`.
+Segments are percent-decoded after the path is split, so `%2F` never creates
+a new segment.
 Routes are tried in registration order and the first match wins. A path that
 matches a route only under another method gets `405 Method Not Allowed`;
 anything else goes to the not-found handler.
@@ -63,11 +65,15 @@ anything else goes to the not-found handler.
 
 | Function | Description |
 |---|---|
-| `param(req, name) -> string` | A path parameter |
-| `query(req, name) -> string` | A query-string value (`?q=rw&page=2`); no percent-decoding |
+| `param(req, name) -> string` | A path parameter, percent-decoded |
+| `query(req, name) -> string` | The first value of a query-string parameter (`?q=rw&page=2`), decoded (`%XX` and `+`) |
+| `form(req, name) -> string` | A field of an `application/x-www-form-urlencoded` body, decoded; `""` for other content types |
+| `cookie(req, name) -> string` | A cookie from the `Cookie` header (the raw value) |
 | `header(req, name) -> string` | A request header, case-insensitive |
 
-All three return `""` when the value is absent.
+All of them return `""` when the value is absent. `req.path`, `req.query`,
+and `req.body` keep the raw text. The stdlib `url` module (spec 62) decodes
+or encodes anything else.
 
 ## Building responses
 
@@ -78,6 +84,7 @@ All three return `""` when the value is absent.
 | `json(status, body)` | `application/json` (the body is passed through as is) |
 | `response(status, content_type, body)` | Any content type |
 | `redirect(location)` | `302 Found` with a `Location` header |
+| `set_cookie(res, name, value, attrs = "Path=/; HttpOnly; SameSite=Lax")` | Add a `Set-Cookie` header; escape the value yourself (`url.escape`) if it may contain `;`, `,`, or spaces |
 | `set_header(res, name, value) -> Response` | Add a response header |
 
 The framework adds `Content-Length` and `Connection: close` to every response.

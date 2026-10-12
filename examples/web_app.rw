@@ -1,6 +1,7 @@
 # A web application built on examples/web.rw.
 import web
 import json as js
+import url
 from web import App, Request, Response, text, html, json, param, query, header, set_header
 
 def index(req: Request) -> Response:
@@ -24,6 +25,20 @@ def echo(req: Request) -> Response:
     res: Response = text(201, req.body)
     return set_header(res, "X-Echo-Length", str_from_int(len(req.body)))
 
+# An HTML form POST (application/x-www-form-urlencoded) that sets a cookie.
+def login(req: Request) -> Response:
+    user: string = web.form(req, "user")
+    if user == "":
+        return text(400, "user required\n")
+    res: Response = text(200, "welcome, " + user + "\n")
+    return web.set_cookie(res, "user", url.escape(user))
+
+def whoami(req: Request) -> Response:
+    user: string = url.unescape(web.cookie(req, "user"))
+    if user == "":
+        return text(401, "not logged in\n")
+    return text(200, "you are " + user + "\n")
+
 def old(req: Request) -> Response:
     return web.redirect("/")
 
@@ -38,6 +53,8 @@ def main() -> int:
     web.get(app, "/search", search)
     web.get(app, "/agent", agent)
     web.post(app, "/echo", echo)
+    web.post(app, "/login", login)
+    web.get(app, "/whoami", whoami)
     web.get(app, "/old", old)
     web.set_not_found(app, missing)
     return web.serve(app, 8080)

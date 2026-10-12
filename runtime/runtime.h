@@ -152,6 +152,7 @@ typedef struct {
 /* Bytes and code points (spec 58). */
 int64_t rw_byte_at     (rw_str s, int64_t i);           /* 0..255, or -1 */
 rw_str  rw_chr         (int64_t cp);                    /* UTF-8 encoding */
+rw_str  rw_str_from_byte(int64_t b);                    /* one raw byte (spec 62) */
 void    rw_str_to_float(rw_option_float *out, rw_str s);
 
 void rw_list_int_at_opt(rw_option_int *out, const rw_list_int *l, int64_t i);

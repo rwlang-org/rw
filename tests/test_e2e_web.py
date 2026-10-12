@@ -122,6 +122,30 @@ def test_post_body_split_across_reads(server):
     assert body == b"hello world"
 
 
+def test_percent_decoding(server):
+    status, _, body = _call(server, "GET", "/hello/caf%C3%A9%20au%2Blait")
+    assert (status, body) == (200, "hello, café au+lait\n".encode())
+    status, _, body = _call(server, "GET", "/search?q=a+b%26c&page=%32")
+    assert (status, body) == (200, b'{"q":"a b&c","page":"2"}\n')
+
+
+def test_form_post_sets_cookie_and_cookie_is_read_back(server):
+    status, headers, body = _call(server, "POST", "/login", b"user=J%C3%BCrgen+M&x=1",
+                                  "Content-Type: application/x-www-form-urlencoded\r\n")
+    assert (status, body) == (200, "welcome, Jürgen M\n".encode())
+    assert headers["set-cookie"] == "user=J%C3%BCrgen%20M; Path=/; HttpOnly; SameSite=Lax"
+    cookie = headers["set-cookie"].split(";")[0]
+    status, _, body = _call(server, "GET", "/whoami", extra=f"Cookie: theme=dark; {cookie}\r\n")
+    assert (status, body) == (200, "you are Jürgen M\n".encode())
+    status, _, _ = _call(server, "GET", "/whoami")
+    assert status == 401
+
+
+def test_form_ignores_other_content_types(server):
+    status, _, body = _call(server, "POST", "/login", b"user=x", "Content-Type: text/plain\r\n")
+    assert (status, body) == (400, b"user required\n")
+
+
 def test_redirect(server):
     status, headers, body = _call(server, "GET", "/old")
     assert status == 302

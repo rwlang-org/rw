@@ -1,0 +1,17 @@
+# Percent-encoding and query strings with the url module (spec 62).
+import url
+
+def main() -> int:
+    print(url.unescape("caf%C3%A9+au+lait"))
+    print(url.unescape("a+b", false))
+    print(url.unescape("100%"))
+    print(url.unescape("%zz%4"))
+    print(url.escape("a b&c=d/é~"))
+    for p in url.parse_query("q=r%26w&tag=a&tag=b&&flag&e="):
+        print("[" + p.key + "]=[" + p.value + "]")
+    match url.get(url.parse_query("x=1&y=2"), "y"):
+        case Some(v):
+            print(v)
+        case None:
+            print("none")
+    return 0
