@@ -462,6 +462,22 @@ class Parser:
             return self.parse_match()
         if t.kind == TokenKind.KW_ASSERT:
             return self.parse_assert()
+        if t.kind == TokenKind.KW_DEFER:
+            kw = self.eat(TokenKind.KW_DEFER)
+            inner = self.parse_expr_stmt()
+            if not isinstance(inner, A.ExprStmt) or not isinstance(inner.expr, (A.Call, A.CallValue)):
+                raise ParserError("defer must be followed by a call", kw.line, kw.col, 5)
+            return A.Defer(inner, kw.line, kw.col)
+        if t.kind == TokenKind.KW_WITH:
+            kw = self.eat(TokenKind.KW_WITH)
+            expr = self.parse_expr()
+            var: Optional[str] = None
+            if self.match(TokenKind.KW_AS):
+                var = self.eat(TokenKind.IDENT, "name after 'as'").value
+            self.eat(TokenKind.COLON, "':' after with header")
+            self.eat(TokenKind.NEWLINE)
+            body = self.parse_block()
+            return A.With(expr, var, body, kw.line, kw.col)
         # IDENT followed by ':'  => var_decl
         # IDENT followed by '='  => assignment
         if t.kind == TokenKind.IDENT:

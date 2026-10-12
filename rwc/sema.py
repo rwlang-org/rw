@@ -63,6 +63,8 @@ class SemaResult:
     decl_types: Dict[int, T.Type] = field(default_factory=dict)
     # Method calls (spec 33): id(Call | CallValue) -> the method's function key.
     method_calls: Dict[int, FuncKey] = field(default_factory=dict)
+    # id(With) -> the resource type (spec 47).
+    with_types: Dict[int, T.Type] = field(default_factory=dict)
     # id(Name | FieldAccess) -> the constant it refers to (spec 35); irgen
     # emits the constant's literal in its place.
     const_refs: Dict[int, A.ConstDef] = field(default_factory=dict)
@@ -571,7 +573,23 @@ class Sema:
         return env
 
     # ---------- function body ----------
+    def _reject_nested_defer(self, stmts: List[A.Stmt], top: bool) -> None:
+        """`defer` is only allowed directly in a function body (spec 47)."""
+        for s in stmts:
+            if isinstance(s, A.Defer) and not top:
+                raise CompileError(Diagnostic(self.filename, s.line, s.col, 5,
+                                              "defer is only allowed at the top level of a function"))
+            for attr in ("then_body", "else_body", "body", "some_block", "none_block",
+                         "ok_block", "err_block", "update"):
+                inner = getattr(s, attr, None)
+                if isinstance(inner, list):
+                    self._reject_nested_defer(inner, False)
+            if isinstance(s, A.ValueMatch):
+                for arm in s.arms:
+                    self._reject_nested_defer(arm.body, False)
+
     def _check_func(self, fn: A.FuncDef) -> None:
+        self._reject_nested_defer(fn.body, True)
         sig = self.result.functions[(self.current_module, fn.name)]
         # Local scope: param name -> Type. New scopes are pushed for if/while bodies,
         # but in rw the entire function shares one flat scope. Re-declaring an
@@ -661,6 +679,30 @@ class Sema:
 
         if isinstance(stmt, A.ValueMatch):
             return self._check_value_match(fn, stmt, locals_, ret_ty)
+
+        if isinstance(stmt, A.Defer):
+            self._check_stmt(fn, stmt.stmt, locals_, ret_ty)
+            return False
+
+        if isinstance(stmt, A.With):
+            rt = self._check_expr(fn, stmt.expr, locals_)
+            closable = rt is T.MUTEX or (
+                isinstance(rt, T.ClassType) and "close" in rt.methods
+                and len(self.result.functions[rt.methods["close"]].params) == 1
+            )
+            if not closable:
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, 4,
+                    f"with needs a Mutex or a record with a `close(self)` method, found `{rt}`",
+                ))
+            self.result.with_types[id(stmt)] = rt
+            body_locals = dict(locals_)
+            if stmt.var is not None:
+                if stmt.var in locals_:
+                    raise CompileError(Diagnostic(self.filename, stmt.line, stmt.col, len(stmt.var),
+                                                  f"variable `{stmt.var}` already declared"))
+                body_locals[stmt.var] = rt
+            return self._check_block(fn, stmt.body, body_locals, ret_ty)
 
         if isinstance(stmt, A.TupleAssign):
             vt = self._check_expr(fn, stmt.value, locals_)

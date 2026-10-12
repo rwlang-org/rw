@@ -707,3 +707,19 @@ def test_parse_default_keyword_errors(src, msg):
     with pytest.raises(ParserError) as ei:
         parse_src(src)
     assert msg in str(ei.value)
+
+
+# ----- with / defer (spec 47) -----
+
+def test_parse_with_and_defer():
+    mod = parse_src("def main() -> int:\n    defer f()\n    with g() as r:\n        print(1)\n    with m:\n        print(2)\n    return 0\n")
+    d, w1, w2 = mod.functions[0].body[:3]
+    assert isinstance(d, A.Defer) and isinstance(d.stmt.expr, A.Call)
+    assert isinstance(w1, A.With) and w1.var == "r"
+    assert isinstance(w2, A.With) and w2.var is None
+
+
+def test_parse_defer_requires_call():
+    with pytest.raises(ParserError) as ei:
+        parse_src("def main() -> int:\n    defer x\n    return 0\n")
+    assert "defer must be followed by a call" in str(ei.value)

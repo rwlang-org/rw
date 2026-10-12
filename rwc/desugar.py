@@ -45,6 +45,9 @@ class _Desugarer:
         if isinstance(s, A.ForEach):
             s.body = self._block(s.body)
             return [s]
+        if isinstance(s, A.With):
+            s.body = self._block(s.body)
+            return [s]
         if isinstance(s, A.ValueMatch):
             for arm in s.arms:
                 arm.body = self._block(arm.body)

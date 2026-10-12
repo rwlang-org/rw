@@ -1,0 +1,48 @@
+class Resource:
+    name: string
+    log: List[string]
+
+    def close(self) -> void:
+        self.log = list_push(self.log, "close " + self.name)
+
+def use(log_owner: Resource, fail: bool) -> int:
+    defer print("deferred 1")
+    defer print("deferred 2")
+    with Resource("file", []) as r:
+        print("using " + r.name)
+        if fail:
+            return -1           # r.close() and both defers still run
+    print("after with")
+    return 0
+
+def first_negative(xs: List[int], lock: Mutex) -> int:
+    with lock:
+        for x in xs:
+            if x < 0:
+                return x        # unlocks before returning
+    return 0
+
+def count_until(limit: int, owner: Resource) -> int:
+    n = 0
+    for i in range(0, 10):
+        with Resource(f"loop-{i}", []) as r:
+            if i == limit:
+                break           # closes this iteration's resource
+            n += 1
+    return n
+
+def main() -> int:
+    owner = Resource("owner", [])
+    print(use(owner, false))
+    print(use(owner, true))
+    lock = mutex_new()
+    print(first_negative([3, -4, 5], lock))
+    if mutex_try_lock(lock):
+        print("lock released")
+        mutex_unlock(lock)
+    print(count_until(3, owner))
+    tracked = Resource("tracked", [])
+    with tracked:
+        print("body")
+    print(str_join(tracked.log, ","))
+    return 0
