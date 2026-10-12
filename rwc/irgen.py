@@ -187,6 +187,7 @@ class IRGen:
         self._rw_open = ir.Function(m, ir.FunctionType(I64, [RW_STR_TY, RW_STR_TY]), "rw_open")
         self._rw_local_addr = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_local_addr")
         self._rw_peer_addr = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_peer_addr")
+        self._rw_write_all = ir.Function(m, ir.FunctionType(I64, [I64, RW_STR_TY]), "rw_write_all")
         # I/O errors (spec 51)
         self._rw_last_error = ir.Function(m, ir.FunctionType(I64, []), "rw_last_error")
         self._rw_error_name = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_error_name")
@@ -1399,6 +1400,7 @@ class IRGen:
             "local_addr": self._rw_local_addr,
             "peer_addr": self._rw_peer_addr,
             "last_error": self._rw_last_error,
+            "write_all": self._rw_write_all,
             "error_name": self._rw_error_name,
             "error_message": self._rw_error_message,
         }

@@ -94,6 +94,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "os_args", "os_getenv", "os_setenv", "os_exit", "os_getcwd", "os_chdir",
     "dial", "listen", "accept", "open", "local_addr", "peer_addr",
     "last_error", "error_name", "error_message",
+    "write_all",
 })
 
 _DICT_BUILTINS = frozenset({
@@ -156,6 +157,8 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
     "last_error": ((), T.INT),
     "error_name": ((T.INT,), T.STRING),
     "error_message": ((T.INT,), T.STRING),
+    # spec 52
+    "write_all": ((T.INT, T.BYTES), T.INT),
 }
 
 

@@ -257,15 +257,6 @@ def serialize(res: Response) -> string:
     return out + res.body
 
 # write() may write only part of the buffer; keep going until all is sent.
-def write_all(fd: int, s: string) -> int:
-    off: int = 0
-    while off < len(s):
-        n: int = write(fd, bytes_from_str(str_slice(s, off, len(s))))
-        if n <= 0:
-            return -1
-        off = off + n
-    return off
-
 def handle_conn(app: App, fd: int) -> int:
     req: Request = read_request(fd)
     if req.method == "" and req.path == "eof":
@@ -275,7 +266,7 @@ def handle_conn(app: App, fd: int) -> int:
         res = text(413, "request too large\n")
     elif req.method != "":
         res = dispatch(app, req)
-    write_all(fd, serialize(res))
+    write_all(fd, bytes_from_str(serialize(res)))
     if app.log:
         print(req.method + " " + req.path + " " + str_from_int(res.status))
     return close(fd)

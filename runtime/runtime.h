@@ -150,6 +150,7 @@ int64_t rw_tcp_accept(int64_t listen_fd);
 void    rw_read     (rw_str *out, int64_t fd, int64_t max);
 int64_t rw_write    (int64_t fd, rw_str b);
 int64_t rw_close    (int64_t fd);
+int64_t rw_write_all(int64_t fd, rw_str b);   /* spec 52 */
 int64_t rw_file_open(rw_str path, rw_str mode);
 
 /* I/O error reporting (spec 51). Every I/O builtin records 0 on success
