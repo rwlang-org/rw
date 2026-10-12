@@ -187,6 +187,10 @@ class IRGen:
         self._rw_open = ir.Function(m, ir.FunctionType(I64, [RW_STR_TY, RW_STR_TY]), "rw_open")
         self._rw_local_addr = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_local_addr")
         self._rw_peer_addr = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_peer_addr")
+        # I/O errors (spec 51)
+        self._rw_last_error = ir.Function(m, ir.FunctionType(I64, []), "rw_last_error")
+        self._rw_error_name = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_error_name")
+        self._rw_error_message = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_error_message")
         self._rw_os_chdir = ir.Function(m, ir.FunctionType(I8, [RW_STR_TY]), "rw_os_chdir")
         # string builtins (spec 28); split/join take the list by pointer.
         s2s = ir.FunctionType(RW_STR_TY, [RW_STR_TY])
@@ -1394,6 +1398,9 @@ class IRGen:
             "open": self._rw_open,
             "local_addr": self._rw_local_addr,
             "peer_addr": self._rw_peer_addr,
+            "last_error": self._rw_last_error,
+            "error_name": self._rw_error_name,
+            "error_message": self._rw_error_message,
         }
         if call.callee in direct:
             fn = direct[call.callee]

@@ -152,6 +152,21 @@ int64_t rw_write    (int64_t fd, rw_str b);
 int64_t rw_close    (int64_t fd);
 int64_t rw_file_open(rw_str path, rw_str mode);
 
+/* I/O error reporting (spec 51). Every I/O builtin records 0 on success
+ * and an errno value on failure; RW_ENOHOST means name resolution failed. */
+#define RW_ENOHOST 10001
+
+/* errno for code that can park. A fiber may resume on another thread, and
+ * glibc declares __errno_location const, so the compiler may reuse the
+ * errno address computed before a park. rw_errno_ptr lives in another
+ * translation unit and is not const, so every use re-reads it. */
+int *rw_errno_ptr(void);
+#define rw_errno (*rw_errno_ptr())
+void    rw_set_last_error(int err);
+int64_t rw_last_error    (void);
+rw_str  rw_error_name    (int64_t err);
+rw_str  rw_error_message (int64_t err);
+
 /* Address-based entry points (runtime/net/addr.c, spec 50). */
 int64_t rw_dial      (rw_str addr);
 int64_t rw_listen    (rw_str addr);

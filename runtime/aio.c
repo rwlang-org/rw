@@ -14,6 +14,7 @@
 #include "fiber/sched.h"
 #include "runtime.h"
 
+#include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -31,6 +32,7 @@ typedef struct rw_aio_task {
     int64_t   max;           /* read */
     rw_str    in;            /* write: caller-provided buffer */
     int64_t   wret;          /* write result */
+    int       err;           /* rw_errno from the pool thread (spec 51) */
     void    (*fn)(void *);   /* call */
     void     *arg;           /* call */
     rw_fiber_handle *waiter; /* fiber to wake on completion */
@@ -75,12 +77,14 @@ static void run_task(rw_aio_task *t) {
         char *buf = (char *)malloc((size_t)t->max);
         if (!buf) { t->out->len = 0; t->out->ptr = NULL; return; }
         ssize_t n = read((int)t->fd, buf, (size_t)t->max);
+        t->err = n < 0 ? rw_errno : 0;
         if (n > 0) { t->out->len = n; t->out->ptr = buf; }
         else       { free(buf); t->out->len = 0; t->out->ptr = NULL; }
     } else if (t->op == RW_AIO_CALL) {
         t->fn(t->arg);
     } else { /* RW_AIO_WRITE */
         ssize_t n = write((int)t->fd, t->in.ptr, (size_t)t->in.len);
+        t->err = n < 0 ? rw_errno : 0;
         t->wret = (int64_t)n;
     }
 }
@@ -144,9 +148,10 @@ void rw_aio_read(rw_str *out, int64_t fd, int64_t max) {
         return;
     }
     rw_aio_task t;
-    t.op = RW_AIO_READ; t.fd = fd; t.out = out; t.max = max;
+    t.op = RW_AIO_READ; t.fd = fd; t.out = out; t.max = max; t.err = 0;
     t.waiter = me; t.next = NULL;
     rw_sched_park_commit(commit_task, &t);
+    rw_errno = t.err;   /* now on whichever M resumed us */
 }
 
 int64_t rw_aio_write(int64_t fd, rw_str b) {
@@ -157,9 +162,10 @@ int64_t rw_aio_write(int64_t fd, rw_str b) {
         return (int64_t)n;
     }
     rw_aio_task t;
-    t.op = RW_AIO_WRITE; t.fd = fd; t.in = b; t.wret = 0;
+    t.op = RW_AIO_WRITE; t.fd = fd; t.in = b; t.wret = 0; t.err = 0;
     t.waiter = me; t.next = NULL;
     rw_sched_park_commit(commit_task, &t);
+    rw_errno = t.err;
     return t.wret;
 }
 
