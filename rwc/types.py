@@ -148,6 +148,14 @@ class TupleType(Type):
         self.name = f"tuple[{', '.join(str(e) for e in elems)}]"
 
 
+class ChannelType(Type):
+    """`Channel[T]` (spec 44): a reference to a runtime channel."""
+
+    def __init__(self, elem: Type) -> None:
+        self.elem = elem
+        self.name = f"Channel[{elem}]"
+
+
 def is_numeric(t: Type) -> bool:
     return t is INT or t is FLOAT
 

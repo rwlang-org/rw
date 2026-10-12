@@ -371,6 +371,12 @@ class Parser:
             return A.TypeResult(ok, err, t.line, t.col)
         # `Callable[[P1, ...], R]` (spec 21). `Callable` is not a keyword; it is
         # only special in type position.
+        # `Channel[T]` (spec 44).
+        if t.kind == TokenKind.IDENT and t.value == "Channel" and self.peek(1).kind == TokenKind.LBRACK:
+            self.i += 2
+            elem = self.parse_type()
+            self.eat(TokenKind.RBRACK, "']' to close Channel[...]")
+            return A.TypeChannel(elem, t.line, t.col)
         # `tuple[T1, ..., Tn]` / `Tuple[...]` (spec 37).
         if t.kind == TokenKind.IDENT and t.value in ("tuple", "Tuple") and self.peek(1).kind == TokenKind.LBRACK:
             self.i += 2

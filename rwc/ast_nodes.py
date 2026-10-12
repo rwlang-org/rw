@@ -74,6 +74,14 @@ class TypeDict:
 
 
 @dataclass
+class TypeChannel:
+    """`Channel[T]` (spec 44)."""
+    elem: "TypeExpr"
+    line: int
+    col: int
+
+
+@dataclass
 class TypeTuple:
     """`tuple[T1, ..., Tn]` (spec 37)."""
     elems: List["TypeExpr"]
@@ -82,7 +90,7 @@ class TypeTuple:
 
 
 TypeExpr = Union[TypeName, TypeFuture, TypeCallable, TypeList, TypeOption, TypeResult, TypeDict,
-                 TypeTuple]
+                 TypeTuple, TypeChannel]
 
 
 # ----- Expressions -----

@@ -86,6 +86,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values",
     "sleep", "time_ms", "mono_ns",
     "rand_int", "rand_float", "rand_seed", "rand_bytes",
+    "chan_new", "chan_send", "chan_recv", "chan_close",
     "os_args", "os_getenv", "os_setenv", "os_exit", "os_getcwd", "os_chdir",
 })
 
@@ -215,6 +216,12 @@ class Sema:
                 return self.class_map[ty.name]
             raise CompileError(Diagnostic(self.filename, ty.line, ty.col, len(ty.name),
                                           f"unknown type: {ty.name}"))
+        if isinstance(ty, A.TypeChannel):
+            elem = self._resolve_type(ty.elem)
+            if elem is T.VOID:
+                raise CompileError(Diagnostic(self.filename, ty.line, ty.col, 7,
+                                              "Channel element type cannot be void"))
+            return T.ChannelType(elem)
         if isinstance(ty, A.TypeTuple):
             elems = [self._resolve_type(e) for e in ty.elems]
             if any(e is T.VOID for e in elems):
@@ -759,6 +766,8 @@ class Sema:
                 elem: T.Type = it_ty.elem
             elif isinstance(it_ty, T.DictType):
                 elem = it_ty.key  # iterates over the keys, in insertion order
+            elif isinstance(it_ty, T.ChannelType):
+                elem = it_ty.elem  # receives until the channel is closed
             elif it_ty is T.STRING:
                 elem = T.STRING
             else:
@@ -885,6 +894,8 @@ class Sema:
         elif isinstance(expected, T.DictType) and (
             self._is_builtin_call(expr, "dict_new", locals_) or isinstance(expr, A.DictLit)
         ):
+            self._type_hints[id(expr)] = expected
+        elif isinstance(expected, T.ChannelType) and self._is_builtin_call(expr, "chan_new", locals_):
             self._type_hints[id(expr)] = expected
         elif isinstance(expected, T.TupleType) and isinstance(expr, A.TupleLit):
             self._type_hints[id(expr)] = expected
@@ -1363,7 +1374,9 @@ class Sema:
                     f"len takes exactly 1 argument, got {len(call.args)}",
                 ))
             at = self._check_expr(fn, call.args[0], locals_)
-            if at is not T.STRING and at is not T.BYTES and not isinstance(at, (T.ListType, T.DictType)):
+            if at is not T.STRING and at is not T.BYTES and not isinstance(
+                at, (T.ListType, T.DictType, T.ChannelType)
+            ):
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, 3,
                     f"len argument must be string, Bytes, a List or a Dict, found `{at}`",
@@ -1399,6 +1412,8 @@ class Sema:
             return T.STRING
         if call.callee in _DICT_BUILTINS:
             return self._check_dict_builtin(fn, call, locals_)
+        if call.callee in ("chan_new", "chan_send", "chan_recv", "chan_close"):
+            return self._check_chan_builtin(fn, call, locals_)
         if call.callee in _CONVERSIONS:
             accepted, ret, names = _CONVERSIONS[call.callee]
             if len(call.args) != 1:
@@ -1787,6 +1802,40 @@ class Sema:
                 f"{name} argument 2 must be {dt.key}, found `{kt}`",
             ))
         return T.option_of(dt.value) if name == "dict_get" else T.BOOL
+
+    def _check_chan_builtin(self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]) -> T.Type:
+        """chan_new / chan_send / chan_recv / chan_close (spec 44)."""
+        name = call.callee
+        arity = {"chan_new": 1, "chan_send": 2, "chan_recv": 1, "chan_close": 1}[name]
+        if len(call.args) != arity:
+            raise CompileError(Diagnostic(
+                self.filename, call.line, call.col, len(name),
+                f"{name} takes {arity} argument{'s' if arity != 1 else ''}, got {len(call.args)}",
+            ))
+        if name == "chan_new":
+            if self._check_expr(fn, call.args[0], locals_) is not T.INT:
+                raise CompileError(Diagnostic(self.filename, call.line, call.col, len(name),
+                                              "chan_new capacity must be int"))
+            hint = self._type_hints.get(id(call))
+            if not isinstance(hint, T.ChannelType):
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(name),
+                    "cannot infer the type of chan_new(); give the variable a Channel type",
+                ))
+            return hint
+        ct = self._check_expr(fn, call.args[0], locals_)
+        if not isinstance(ct, T.ChannelType):
+            raise CompileError(Diagnostic(self.filename, call.line, call.col, len(name),
+                                          f"{name} argument 1 must be a Channel, found `{ct}`"))
+        if name == "chan_send":
+            vt = self._check_expr_expect(fn, call.args[1], locals_, ct.elem)
+            if vt != ct.elem:
+                raise CompileError(Diagnostic(self.filename, call.line, call.col, len(name),
+                                              f"chan_send argument 2 must be {ct.elem}, found `{vt}`"))
+            return T.VOID
+        if name == "chan_recv":
+            return T.option_of(ct.elem)
+        return T.VOID
 
     def _check_dict_key(self, fn: A.FuncDef, dt: T.DictType, key: A.Expr,
                         locals_: Dict[str, T.Type], line: int, col: int) -> None:
