@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from ._net import wait_for_port
+
 REPO = Path(__file__).resolve().parent.parent
 EXAMPLES = REPO / "examples"
 
@@ -48,10 +50,7 @@ def server():
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    time.sleep(0.5)  # give the server time to bind+listen
-    if proc.poll() is not None:
-        _, err = proc.communicate(timeout=1.0)
-        raise AssertionError(f"server exited early (rc={proc.returncode}): {err!r}")
+    wait_for_port(port, proc)
     try:
         yield port
     finally:
