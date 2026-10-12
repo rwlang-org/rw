@@ -1,0 +1,27 @@
+import constants_lib as lib
+from constants_lib import MAX_USERS
+
+LIMIT: int = 10
+NEG: int = -7
+RATIO: float = 0.5
+GREETING: string = "hello"
+DEBUG: bool = false
+
+def scaled(x: int) -> float:
+    return float(x) * RATIO
+
+def main() -> int:
+    total = 0
+    for i in range(0, LIMIT):
+        total += i
+    print(total)
+    print(NEG + LIMIT)
+    print(scaled(LIMIT))
+    print(f"{GREETING}, v{lib.VERSION}")
+    if not DEBUG:
+        print("debug off")
+    print(MAX_USERS * 2)
+    # A local may shadow a constant with an annotated declaration.
+    LIMIT: int = 1
+    print(LIMIT)
+    return 0

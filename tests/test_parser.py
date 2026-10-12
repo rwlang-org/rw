@@ -175,10 +175,11 @@ def test_spawn_requires_call():
         parse_src(src)
 
 
-def test_module_must_start_with_def():
-    src = "x: int = 1\n"
+def test_module_level_statement_is_error():
+    # `x: int = 1` is now a constant (spec 35); other statements are not
+    # allowed at module level.
     with pytest.raises(ParserError):
-        parse_src(src)
+        parse_src("print(1)\n")
 
 
 def test_parenthesized_expr():
@@ -625,3 +626,17 @@ def test_parse_fstring_format_spec_is_error():
     with pytest.raises(ParserError) as ei:
         parse_src('def main() -> int:\n    s: string = f"{x:.2f}"\n    return 0\n')
     assert "format specs are not supported" in str(ei.value)
+
+
+# ----- module constants (spec 35) -----
+
+def test_parse_constants():
+    mod = parse_src('LIMIT: int = 10\nNEG: float = -1.5\nNAME: string = "x"\n\ndef main() -> int:\n    return LIMIT\n')
+    assert [c.name for c in mod.constants] == ["LIMIT", "NEG", "NAME"]
+
+
+@pytest.mark.parametrize("src", ["X: int = 1 + 2\n", "X: int = f()\n", 'X: string = -"a"\n'])
+def test_parse_constant_must_be_literal(src):
+    with pytest.raises(ParserError) as ei:
+        parse_src(src)
+    assert "must be initialised with a literal" in str(ei.value)

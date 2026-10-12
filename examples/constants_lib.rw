@@ -1,0 +1,2 @@
+VERSION: string = "1.2.3"
+MAX_USERS: int = 3

@@ -63,6 +63,9 @@ class SemaResult:
     decl_types: Dict[int, T.Type] = field(default_factory=dict)
     # Method calls (spec 33): id(Call | CallValue) -> the method's function key.
     method_calls: Dict[int, FuncKey] = field(default_factory=dict)
+    # id(Name | FieldAccess) -> the constant it refers to (spec 35); irgen
+    # emits the constant's literal in its place.
+    const_refs: Dict[int, A.ConstDef] = field(default_factory=dict)
 
 
 # Names of builtin functions. Spawning a builtin is an error, and a qualified
@@ -141,6 +144,9 @@ class Sema:
         # Record types per module (spec 20); `class_map` is the current one.
         self._classes_by_module: Dict[Optional[str], Dict[str, T.ClassType]] = {}
         self.class_map: Dict[str, T.ClassType] = {}
+        # Constants per module (local name -> (definition, type)), spec 35.
+        self._consts_by_module: Dict[Optional[str], Dict[str, Tuple[A.ConstDef, T.Type]]] = {}
+        self.const_map: Dict[str, Tuple[A.ConstDef, T.Type]] = {}
         # id(expr) -> the type it takes from context: list_new() / [] (spec 22,
         # 29) and None / Some / Ok / Err (spec 30).
         self._type_hints: Dict[int, T.Type] = {}
@@ -167,6 +173,7 @@ class Sema:
         self.current_module = mod_name
         self.type_alias_map = self._aliases_by_module.setdefault(mod_name, {})
         self.class_map = self._classes_by_module.setdefault(mod_name, {})
+        self.const_map = self._consts_by_module.setdefault(mod_name, {})
         self._import_env = self._import_envs.get(mod_name, {})
         if mod_name is None:
             self.filename = self._root_filename
@@ -303,6 +310,16 @@ class Sema:
                         ))
                     cls.methods[m] = (mod_name, f"{cdef.name}.{m}")
 
+        # Module constants (spec 35): types are known now; imported constants
+        # are bound after every module's own constants are registered.
+        for mod_name, mod in self._all_modules:
+            self._enter_module(mod_name)
+            for cdef in mod.constants:
+                self._register_const(cdef, mod)
+        for mod_name, mod in self._all_modules:
+            self._enter_module(mod_name)
+            self._bind_imported_consts(mod)
+
         # First pass: collect signatures across all modules, keyed by
         # (module, name). Same-named functions in different modules coexist.
         for mod_name, mod in self._all_modules:
@@ -369,6 +386,46 @@ class Sema:
         self._enter_module(None)
         return self.result
 
+    def _register_const(self, cdef: A.ConstDef, mod: A.Module) -> None:
+        taken = (
+            cdef.name in self.const_map or cdef.name in self.class_map
+            or cdef.name in self.type_alias_map or cdef.name in _BUILTIN_FUNCS
+            or any(fn.name == cdef.name for fn in mod.functions)
+        )
+        if taken:
+            raise CompileError(Diagnostic(
+                self.filename, cdef.line, cdef.col, len(cdef.name),
+                f"`{cdef.name}` is already defined",
+            ))
+        declared = self._resolve_type(cdef.type_expr)
+        v = cdef.value.operand if isinstance(cdef.value, A.UnaryOp) else cdef.value
+        lit_ty = {A.IntLit: T.INT, A.FloatLit: T.FLOAT, A.StringLit: T.STRING,
+                  A.BoolLit: T.BOOL}[type(v)]
+        if declared != lit_ty:
+            raise CompileError(Diagnostic(
+                self.filename, cdef.line, cdef.col, len(cdef.name),
+                f"type mismatch: declared `{declared}`, value has type `{lit_ty}`",
+            ))
+        self.result.expr_types[id(v)] = lit_ty
+        self.result.expr_types[id(cdef.value)] = lit_ty
+        self.const_map[cdef.name] = (cdef, declared)
+
+    def _bind_imported_consts(self, mod: A.Module) -> None:
+        """`from x import NAME` where NAME is a constant of x (spec 35)."""
+        for imp in mod.imports:
+            if imp.names is None:
+                continue
+            src = self._consts_by_module.get(imp.module, {})
+            for src_name, alias in imp.names:
+                if src_name in src:
+                    local = alias or src_name
+                    if local in self.const_map or local in self.class_map:
+                        raise CompileError(Diagnostic(
+                            self.filename, imp.line, imp.col, max(1, len(local)),
+                            f"imported name `{local}` collides with a local definition",
+                        ))
+                    self.const_map[local] = src[src_name]
+
     def _qualified_class(self, qualifier: str, name: str, line: int, col: int) -> T.ClassType:
         """Resolve `qualifier.Name` to a class of an imported module."""
         if qualifier not in self._import_env:
@@ -434,6 +491,8 @@ class Sema:
                 local = alias or src_name
                 if src_name in self._classes_by_module.get(imp.module, {}):
                     continue  # a class import; bound by _bind_imported_classes
+                if src_name in self._consts_by_module.get(imp.module, {}):
+                    continue  # a constant import; bound by _bind_imported_consts
                 src_key: FuncKey = (imp.module, src_name)
                 if src_key not in self.result.functions:
                     raise CompileError(Diagnostic(
@@ -520,6 +579,11 @@ class Sema:
             return False
 
         if isinstance(stmt, A.Assign):
+            if stmt.name not in locals_ and stmt.name in self.const_map:
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, len(stmt.name),
+                    f"cannot assign to constant `{stmt.name}`",
+                ))
             if stmt.name not in locals_:
                 return self._declare_by_assignment(fn, stmt, locals_)
             expected = locals_[stmt.name]
@@ -778,6 +842,10 @@ class Sema:
         if isinstance(expr, A.Name):
             if expr.name in locals_:
                 return locals_[expr.name]
+            if expr.name in self.const_map:
+                cdef, cty = self.const_map[expr.name]
+                self.result.const_refs[id(expr)] = cdef
+                return cty
             # A function used as a value (spec 21).
             ref: Optional[FuncKey] = None
             if (self.current_module, expr.name) in self.result.functions:
@@ -887,8 +955,13 @@ class Sema:
             and expr.obj.name not in locals_
             and expr.obj.name in self._import_env
         ):
+            real_mod = self._import_env[expr.obj.name]
+            qconst = self._consts_by_module.get(real_mod, {}).get(expr.field)
+            if qconst is not None:  # `mod.NAME` (spec 35)
+                self.result.const_refs[id(expr)] = qconst[0]
+                return qconst[1]
             # `mod.f` used as a value (spec 21).
-            key: FuncKey = (self._import_env[expr.obj.name], expr.field)
+            key: FuncKey = (real_mod, expr.field)
             if key not in self.result.functions:
                 raise CompileError(Diagnostic(
                     self.filename, expr.line, expr.col, len(expr.field),
