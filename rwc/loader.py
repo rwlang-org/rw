@@ -1,7 +1,8 @@
 """Module loader: resolves `import` statements into a program graph.
 
 The entry `.rw` file may `import foo`, which is resolved to `foo.rw` in the
-*same directory* as the entry file (the only search path; see spec 17).
+*same directory* as the entry file (spec 17), or else to the bundled
+standard library in `<repo>/stdlib/` (spec 54).
 Imported modules may themselves import (transitive imports). Import cycles
 are detected and reported as errors.
 
@@ -13,6 +14,7 @@ and parse the reachable modules.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -55,6 +57,15 @@ def _find_main(mod: A.Module) -> Optional[A.FuncDef]:
     return next((fn for fn in mod.functions if fn.name == "main"), None)
 
 
+def stdlib_dir() -> Path:
+    """The bundled standard library (`stdlib/` next to the `rwc` package, like
+    `runtime/`). `RW_STDLIB` overrides it."""
+    env = os.environ.get("RW_STDLIB")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parent.parent / "stdlib"
+
+
 def load_program(root_source: str, root_filename: str) -> LoadedProgram:
     """Load the entry module and all transitively imported modules.
 
@@ -93,11 +104,14 @@ def load_program(root_source: str, root_filename: str) -> LoadedProgram:
             if target in loaded:
                 continue  # already parsed via another path
 
-            target_path = base_dir / f"{target}.rw"
-            if not target_path.is_file():
+            # The program's own directory wins, so a local module can shadow
+            # a stdlib one.
+            candidates = [base_dir / f"{target}.rw", stdlib_dir() / f"{target}.rw"]
+            target_path = next((p for p in candidates if p.is_file()), None)
+            if target_path is None:
                 raise CompileError(Diagnostic(
                     mod_filename, imp.line, imp.col, max(1, len(target)),
-                    f"cannot find module '{target}' (looked for {target_path})",
+                    f"cannot find module '{target}' (looked for {candidates[0]} and {candidates[1]})",
                 ))
             target_source = target_path.read_text(encoding="utf-8")
             target_mod = _parse_module(target_source, str(target_path))

@@ -85,6 +85,7 @@ The framework adds `Content-Length` and `Connection: close` to every response.
 ## Protocol behavior and limits
 
 - One request per connection (`Connection: close`); no keep-alive or pipelining
+- Requests are read with the stdlib buffered reader (`bufio`, spec 54)
 - The request head may be up to 64 KiB (`413` above that); the body is read
   according to `Content-Length`, up to 1 MiB (`413` above that). Chunked
   request bodies are not supported

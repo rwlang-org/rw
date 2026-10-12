@@ -1,0 +1,88 @@
+# Buffered reading on any handle (spec 54).
+#
+#   import bufio
+#   r = bufio.reader(fd)
+#   match r.read_line():
+#       case Some(line):
+#           ...
+#       case None:
+#           ...              # EOF (or an error: see r.err)
+#
+# Bytes read past what a call returns stay in the reader for the next call,
+# so the calls can be mixed freely on one handle.
+
+class Reader:
+    fd: int
+    buf: string     # bytes read from fd but not yet returned
+    eof: bool       # fd reported EOF or an error
+    err: int        # last_error() at that point (0 = clean EOF)
+
+    # Read more from fd into buf. False once fd is exhausted.
+    def fill(self) -> bool:
+        if self.eof:
+            return false
+        b = read(self.fd, 4096)
+        if len(b) == 0:
+            self.eof = true
+            self.err = last_error()
+            return false
+        self.buf = self.buf + str_from_bytes(b)
+        return true
+
+    # Remove and return the first n buffered bytes.
+    def take(self, n: int) -> string:
+        out = str_slice(self.buf, 0, n)
+        self.buf = str_slice(self.buf, n, len(self.buf))
+        return out
+
+    # Up to and including the first `delim`. At EOF, whatever is left (no
+    # delimiter); "" only when nothing is left. With limit > 0, gives up
+    # once `limit` bytes are buffered without a delimiter and returns those
+    # bytes (no delimiter), so a peer cannot grow the buffer without bound.
+    def read_until(self, delim: string, limit: int = 0) -> string:
+        start = 0
+        while true:
+            i = str_find(str_slice(self.buf, start, len(self.buf)), delim)
+            if i >= 0 and (limit <= 0 or start + i + len(delim) <= limit):
+                return self.take(start + i + len(delim))
+            if limit > 0 and len(self.buf) >= limit:
+                return self.take(limit)
+            # The delimiter may straddle the old and new data.
+            start = len(self.buf) - len(delim) + 1
+            if start < 0:
+                start = 0
+            if not self.fill():
+                return self.take(len(self.buf))
+        return ""
+
+    # The next line without its "\n" or "\r\n"; None at EOF. A last line
+    # without a newline is still returned.
+    def read_line(self) -> Option[string]:
+        s = self.read_until("\n")
+        if len(s) == 0:
+            return None
+        if str_ends_with(s, "\n"):
+            s = str_slice(s, 0, len(s) - 1)
+            if str_ends_with(s, "\r"):
+                s = str_slice(s, 0, len(s) - 1)
+        return Some(s)
+
+    # Exactly n bytes, or fewer if fd ends first.
+    def read_exact(self, n: int) -> Bytes:
+        while len(self.buf) < n:
+            if not self.fill():
+                break
+        return bytes_from_str(self.take(n))
+
+    # Whatever is buffered (up to max), or one read from fd if nothing is.
+    def read_some(self, max: int) -> Bytes:
+        if len(self.buf) == 0:
+            self.fill()
+        return bytes_from_str(self.take(max))
+
+    # Bytes buffered but not yet returned.
+    def buffered(self) -> int:
+        return len(self.buf)
+
+def reader(fd: int) -> Reader:
+    return Reader(fd, "", false, 0)
