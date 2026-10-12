@@ -49,3 +49,8 @@ make -C runtime
 uv run --frozen pytest tests/test_e2e_blocking_fd.py -q
 uv run --frozen pytest -q
 ```
+
+## Update (spec 61)
+
+A FIFO in nonblocking mode (the pipes rw creates for child processes) now
+uses the netpoller instead of the pool; see spec 61.

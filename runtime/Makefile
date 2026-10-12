@@ -29,7 +29,7 @@ else
   $(error unsupported OS: $(UNAME_S))
 endif
 
-OBJS := runtime.o io.o aio.o timer.o chan.o signal.o fs.o \
+OBJS := runtime.o io.o aio.o timer.o chan.o signal.o fs.o process.o \
         fiber/fiber.o fiber/sched.o fiber/runq.o fiber/park.o \
         net/netpoller.o net/tcp.o net/addr.o $(NET_PLATFORM_O) \
         $(FIBER_ASM)

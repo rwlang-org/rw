@@ -210,6 +210,11 @@ int64_t rw_fs_rename  (rw_str from, rw_str to);
 int64_t rw_fs_remove  (rw_str path);    /* file or empty directory */
 int64_t rw_fs_mkdir   (rw_str path);
 
+/* Child processes (spec 61). */
+void    rw_proc_start(rw_list_int *out, const rw_list *argv);  /* [pid, in, out, err] */
+int64_t rw_proc_wait (int64_t pid);
+int64_t rw_proc_kill (int64_t pid, rw_str sig);
+
 /* Signals (spec 57): wait for one of the named signals ("SIGTERM", ...). */
 rw_str  rw_signal_wait(const rw_list *names);
 

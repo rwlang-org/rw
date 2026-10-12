@@ -43,7 +43,9 @@ void rw_net_close_fd(int fd);
 #define RW_NET_ERRNO(r) ((r) == RW_NET_CLOSED ? EBADF : ETIMEDOUT)
 
 /* Per-fd timeouts in ms (0 = none), read by the I/O builtins (spec 53).
- * rw_net_reset_fd clears them when a handle is created or closed. */
+ * rw_net_reset_fd clears them and the closed mark (spec 57). Every runtime
+ * path that creates an fd a fiber may wait on must call it, or the new
+ * handle can inherit the state of a closed one with the same number. */
 void    rw_net_set_timeout(int fd, int dir, int64_t ms);
 int64_t rw_net_get_timeout(int fd, int dir);
 void    rw_net_reset_fd(int fd);
