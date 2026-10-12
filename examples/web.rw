@@ -11,6 +11,7 @@
 #       return web.serve(app, 8080)
 #
 # See docs/web-framework.md for the full API.
+import bufio
 
 class Header:
     name: string
@@ -211,18 +212,26 @@ def bad_request(why: string) -> Request:
     return Request("", why, "", list_new(), list_new(), "")
 
 def read_request(fd: int) -> Request:
-    buf: string = ""
-    while str_find(buf, "\r\n\r\n") < 0:
-        b: Bytes = read(fd, 4096)
-        if len(b) == 0:
-            if len(buf) > 0 and error_name(last_error()) == "ETIMEDOUT":
+    r: bufio.Reader = bufio.reader(fd)
+    lines: List[string] = []
+    size: int = 0
+    while true:
+        line: string = r.read_until("\n", max_header_bytes() - size + 1)
+        size += len(line)
+        if not str_ends_with(line, "\n"):
+            if size > max_header_bytes():
+                return bad_request("too-large")
+            if size == 0:
+                return bad_request("eof")
+            if error_name(r.err) == "ETIMEDOUT":
                 return bad_request("timeout")
-            return bad_request("eof" if len(buf) == 0 else "bad")
-        buf = buf + str_from_bytes(b)
-        if len(buf) > max_header_bytes():
-            return bad_request("too-large")
-    head_end: int = str_find(buf, "\r\n\r\n")
-    lines: List[string] = str_split(str_slice(buf, 0, head_end), "\r\n")
+            return bad_request("bad")
+        line = str_strip(line)
+        if line == "":
+            break
+        lines = list_push(lines, line)
+    if len(lines) == 0:
+        return bad_request("bad")
     parts: List[string] = str_split(list_at(lines, 0), " ")
     if len(parts) != 3:
         return bad_request("bad")
@@ -232,21 +241,18 @@ def read_request(fd: int) -> Request:
     query_s: string = "" if q < 0 else str_slice(target, q + 1, len(target))
     headers: List[Header] = list_new()
     for i in range(1, len(lines)):
-        line: string = list_at(lines, i)
-        c: int = str_find(line, ":")
+        h: string = list_at(lines, i)
+        c: int = str_find(h, ":")
         if c > 0:
-            headers = list_push(headers, Header(str_strip(str_slice(line, 0, c)), str_strip(str_slice(line, c + 1, len(line)))))
-    body: string = str_slice(buf, head_end + 4, len(buf))
+            headers = list_push(headers, Header(str_strip(str_slice(h, 0, c)), str_strip(str_slice(h, c + 1, len(h)))))
+    body: string = ""
     match str_to_int(lookup(headers, "Content-Length")):
         case Some(n):
             if n > max_body_bytes():
                 return bad_request("too-large")
-            while len(body) < n:
-                more: Bytes = read(fd, 4096)
-                if len(more) == 0:
-                    return bad_request("bad")
-                body = body + str_from_bytes(more)
-            body = str_slice(body, 0, n)
+            body = str_from_bytes(r.read_exact(n))
+            if len(body) < n:
+                return bad_request("bad")
         case None:
             body = ""
     return Request(list_at(parts, 0), path, query_s, headers, list_new(), body)

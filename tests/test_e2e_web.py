@@ -174,6 +174,14 @@ def test_idle_connection_is_closed(server):
         assert time.monotonic() - t0 < 5
 
 
+def test_oversized_head_is_413(server):
+    # Just over the 64 KiB limit and never terminated. The server reads all
+    # of it before answering, so closing does not reset the connection.
+    head = b"GET / HTTP/1.1\r\nX: " + b"a" * (66000 - 20)
+    status, _, _ = _parse(_request(server, head))
+    assert status == 413
+
+
 def test_oversized_body_is_413(server):
     status, _, _ = _parse(_request(server, b"POST /echo HTTP/1.1\r\nContent-Length: 2000000\r\n\r\n"))
     assert status == 413

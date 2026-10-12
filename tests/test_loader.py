@@ -92,3 +92,28 @@ def test_records_module_paths(tmp_path):
     prog = load_program(ENTRY, entry_path)
     assert prog.paths["main"] == entry_path
     assert prog.paths["lib"] == lib_path
+
+
+def test_stdlib_module_is_found(tmp_path):
+    src = "import bufio\n\ndef main() -> int:\n    return 0\n"
+    entry_path = _write(tmp_path, "main", src)
+    prog = load_program(src, entry_path)
+    assert prog.paths["bufio"].endswith("stdlib/bufio.rw")
+
+
+def test_local_module_shadows_stdlib(tmp_path):
+    _write(tmp_path, "bufio", LIB)
+    src = "import bufio\n\ndef main() -> int:\n    return bufio.add(1, 2)\n"
+    entry_path = _write(tmp_path, "main", src)
+    prog = load_program(src, entry_path)
+    assert prog.paths["bufio"] == str(tmp_path / "bufio.rw")
+
+
+def test_rw_stdlib_env_overrides(tmp_path, monkeypatch):
+    libdir = tmp_path / "mystd"
+    libdir.mkdir()
+    (libdir / "lib.rw").write_text(LIB, encoding="utf-8")
+    monkeypatch.setenv("RW_STDLIB", str(libdir))
+    entry_path = _write(tmp_path, "main", ENTRY)
+    prog = load_program(ENTRY, entry_path)
+    assert prog.paths["lib"] == str(libdir / "lib.rw")

@@ -1,14 +1,22 @@
+# Line-oriented chat server: each line typed gets echoed back. Uses the
+# buffered Reader from the standard library (spec 54).
+import bufio
+
 def handle_client(fd: int) -> int:
-    welcome: string = "welcome to rw chat. type 'quit' to leave.\n> "
-    write(fd, bytes_from_str(welcome))
-    while true:
-        b: Bytes = read(fd, 4096)
-        if len(b) == 0:
-            close(fd)
-            return 0
-        s: string = str_from_bytes(b)
-        reply: string = "you said: " + s + "> "
-        write(fd, bytes_from_str(reply))
+    write_all(fd, bytes_from_str("welcome to rw chat. type 'quit' to leave.\n> "))
+    r = bufio.reader(fd)
+    done = false
+    while not done:
+        match r.read_line():
+            case Some(line):
+                if line == "quit":
+                    write_all(fd, bytes_from_str("bye\n"))
+                    done = true
+                else:
+                    write_all(fd, bytes_from_str("you said: " + line + "\n> "))
+            case None:
+                done = true
+    close(fd)
     return 0
 
 def main() -> int:
