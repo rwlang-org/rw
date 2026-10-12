@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.0.10](https://github.com/rwlang-org/rw/compare/v0.0.9...v0.0.10) - 2026-10-12
+- feat: int()/float()/str() conversions and string ordering by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/170
+- feat: compound assignment (+= and friends) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/171
+- feat: string builtins (split, join, strip, replace, lower, upper, contains, ends_with) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/173
+- fix: continue in a range-for no longer loops forever by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/174
+- fix(irgen): allocate locals in the entry block (loops overflowed fiber stacks) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/176
+- feat: list literals, indexing, slicing, and for-each by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/177
+- feat: generic Option[T] and Result[T, E] by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/178
+- feat: Dict[K, V] by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/181
+
 ## [v0.0.9](https://github.com/rwlang-org/rw/compare/v0.0.8...v0.0.9) - 2026-10-11
 - feat: preempt long-running fibers at safe points by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/155
 - fix(runtime): make parked fibers wakeable only after their context is saved by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/157
