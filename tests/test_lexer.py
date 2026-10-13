@@ -292,3 +292,11 @@ def test_fstring_lex_errors(src, msg):
     with pytest.raises(LexerError) as ei:
         tokenize(src)
     assert msg in str(ei.value)
+
+
+def test_leading_zero_decimal_is_an_error():
+    with pytest.raises(LexerError, match="leading zeros"):
+        tokenize("x = 007\n")
+    # A run of zeros, 0o octal, and floats are fine.
+    toks = [t.value for t in tokenize("000 0o7 0.5 00.5\n") if t.kind in (TokenKind.INT, TokenKind.FLOAT)]
+    assert toks == ["000", "0o7", "0.5", "00.5"]

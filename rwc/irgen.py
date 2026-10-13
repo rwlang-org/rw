@@ -259,6 +259,7 @@ class IRGen:
         self._rw_gc_heap_size = ir.Function(m, ir.FunctionType(I64, []), "rw_gc_heap_size")
         # I/O errors (spec 51)
         self._rw_last_error = ir.Function(m, ir.FunctionType(I64, []), "rw_last_error")
+        self._rw_set_last_error = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_set_last_error_i64")
         self._rw_error_name = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_error_name")
         self._rw_error_message = ir.Function(m, ir.FunctionType(RW_STR_TY, [I64]), "rw_error_message")
         self._rw_os_chdir = ir.Function(m, ir.FunctionType(I8, [RW_STR_TY]), "rw_os_chdir")
@@ -1514,6 +1515,7 @@ class IRGen:
             "local_addr": self._rw_local_addr,
             "peer_addr": self._rw_peer_addr,
             "last_error": self._rw_last_error,
+            "set_last_error": self._rw_set_last_error,
             "write_all": self._rw_write_all,
             "dial_timeout": self._rw_dial_timeout,
             "set_read_timeout": self._rw_set_read_timeout,

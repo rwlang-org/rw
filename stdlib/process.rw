@@ -48,7 +48,9 @@ def read_all(fd: int) -> string:
         if len(b) == 0:
             break
         out = out + str_from_bytes(b)
+    err = last_error()
     close(fd)
+    set_last_error(err)
     return out
 
 def feed(fd: int, data: string) -> int:

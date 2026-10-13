@@ -116,7 +116,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "mutex_new", "mutex_lock", "mutex_unlock", "mutex_try_lock",
     "os_args", "os_getenv", "os_setenv", "os_exit", "os_getcwd", "os_chdir",
     "dial", "listen", "accept", "open", "local_addr", "peer_addr",
-    "last_error", "error_name", "error_message",
+    "last_error", "error_name", "error_message", "set_last_error",
     "write_all",
     "dial_timeout", "set_read_timeout", "set_write_timeout",
     "shutdown", "set_nodelay", "set_keepalive", "set_backlog",
@@ -193,6 +193,7 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
     "last_error": ((), T.INT),
     "error_name": ((T.INT,), T.STRING),
     "error_message": ((T.INT,), T.STRING),
+    "set_last_error": ((T.INT,), T.VOID),
     # spec 52
     "write_all": ((T.INT, T.BYTES), T.INT),
     # spec 53

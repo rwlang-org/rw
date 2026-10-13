@@ -189,7 +189,11 @@ def dump(v: Value) -> string:
         # JSON has no NaN or infinity.
         if v.f != v.f or v.f > 1.7976931348623157e308 or v.f < -1.7976931348623157e308:
             return "null"
-        return str(v.f)
+        # Keep a float a float when read back ("2.0", not "2").
+        t = str(v.f)
+        if str_find(t, ".") < 0 and str_find(t, "e") < 0 and str_find(t, "n") < 0:
+            t = t + ".0"
+        return t
     if v.kind == "string":
         return quote(v.s)
     parts: List[string] = []

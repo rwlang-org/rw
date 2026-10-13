@@ -1,7 +1,7 @@
 {"name":"rw","tags":[1,2.5,true,null],"nested":{"a":"x\nyé😀"}}
 error: unexpected character at line 1, column 7
 error: expected ':' at line 1, column 6
--50
+-50.0
 error: unterminated string at line 1, column 14
 {"ok":"replaced \"q\"","n":3}
 2

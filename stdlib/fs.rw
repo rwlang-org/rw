@@ -67,9 +67,10 @@ def read_file(p: string) -> Option[string]:
         if len(b) == 0:
             break
         out = out + str_from_bytes(b)
-    failed = last_error() != 0
+    err = last_error()
     close(fd)
-    if failed:
+    if err != 0:
+        set_last_error(err)   # close succeeded and reset it
         return None
     return Some(out)
 
@@ -79,5 +80,8 @@ def write_file(p: string, data: string) -> bool:
     if fd < 0:
         return false
     ok = write_all(fd, bytes_from_str(data)) >= 0
+    err = last_error()
     close(fd)
+    if not ok:
+        set_last_error(err)
     return ok

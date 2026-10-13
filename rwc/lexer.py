@@ -401,6 +401,13 @@ class Lexer:
                 self._read_digit_run("0123456789")
 
         text = self.source[start : self.i]
+        digits = text.replace("_", "")
+        if not is_float and len(digits) > 1 and digits[0] == "0" and digits.strip("0") != "":
+            # Python 3 rejects these too; int(text, 0) would crash on them.
+            raise LexerError(
+                "leading zeros are not allowed in a decimal literal; write 0o7 for octal",
+                line, col, len(text),
+            )
         self.tokens.append(
             Token(TokenKind.FLOAT if is_float else TokenKind.INT, text, line, col)
         )

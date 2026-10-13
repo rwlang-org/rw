@@ -123,3 +123,25 @@ def test_large_document(roundtrip):
     doc = json.dumps([{"id": i, "name": f"user{i}", "tags": ["a", "b"], "score": i / 7} for i in range(2000)])
     (line,) = _run(roundtrip, [doc])
     assert json.loads(line) == json.loads(doc)
+
+
+def test_floats_stay_floats():
+    src = """
+import json
+
+def main() -> int:
+    for f in [2.0, -0.0, 1.5, 100.0]:
+        d = json.from_float(f).dump()
+        match json.parse(d):
+            case Ok(v):
+                print(d + " " + v.kind)
+            case Err(m):
+                print(m)
+    return 0
+"""
+    td = Path(tempfile.mkdtemp())
+    (td / "p.rw").write_text(src)
+    r = subprocess.run([sys.executable, "-m", "rwc.cli", "run", str(td / "p.rw")],
+                       capture_output=True, text=True, cwd=REPO, timeout=120)
+    assert r.stdout.split("\n")[:4] == ["2.0 float", "-0.0 float", "1.5 float", "100.0 float"], r.stderr
+

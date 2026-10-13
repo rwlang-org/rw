@@ -311,6 +311,10 @@ void rw_set_last_error(int err) {
     if (h) h->last_error = err; else tls_last_error = err;
 }
 
+/* Builtin set_last_error(e): lets library code restore an error after a
+ * cleanup call (close) reset it (spec 51). */
+void rw_set_last_error_i64(int64_t err) { rw_set_last_error((int)err); }
+
 int64_t rw_last_error(void) {
     rw_fiber_handle *h = rw_sched_current_fiber();
     return h ? h->last_error : tls_last_error;
