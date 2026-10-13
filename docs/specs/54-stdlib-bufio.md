@@ -72,3 +72,10 @@ and `r.err` holds the cause (`ETIMEDOUT`, `ECONNRESET`, …).
   - a local module shadows the stdlib one
   - `RW_STDLIB` overrides the directory
 - `tests/test_e2e_web.py`: a request head over 64 KiB gets 413.
+
+## Update
+
+A module loaded from the stdlib resolves its own imports in the stdlib
+only, so a user's `json.rw` never replaces the `json` that `template`
+imports. If a program needs both its local module and a stdlib module of
+the same name, loading fails with a message naming both files.

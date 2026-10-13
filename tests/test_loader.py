@@ -117,3 +117,21 @@ def test_rw_stdlib_env_overrides(tmp_path, monkeypatch):
     entry_path = _write(tmp_path, "main", ENTRY)
     prog = load_program(ENTRY, entry_path)
     assert prog.paths["lib"] == str(libdir / "lib.rw")
+
+
+def test_stdlib_modules_import_only_stdlib(tmp_path):
+    # A local json.rw must not replace the json that template imports.
+    _write(tmp_path, "json", LIB)
+    src = "import template\n\ndef main() -> int:\n    return 0\n"
+    entry_path = _write(tmp_path, "main", src)
+    prog = load_program(src, entry_path)
+    assert prog.paths["json"].endswith("stdlib/json.rw")
+
+
+def test_local_module_clashing_with_a_stdlib_dependency(tmp_path):
+    _write(tmp_path, "json", LIB)
+    src = "import template\nimport json\n\ndef main() -> int:\n    return 0\n"
+    entry_path = _write(tmp_path, "main", src)
+    with pytest.raises(CompileError) as ei:
+        load_program(src, entry_path)
+    assert "a local module shadows a standard library module" in ei.value.diagnostic.message

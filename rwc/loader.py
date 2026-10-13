@@ -101,18 +101,31 @@ def load_program(root_source: str, root_filename: str) -> LoadedProgram:
                     mod_filename, imp.line, imp.col, max(1, len(target)),
                     f"import cycle detected: {chain}",
                 ))
-            if target in loaded:
-                continue  # already parsed via another path
-
             # The program's own directory wins, so a local module can shadow
-            # a stdlib one.
-            candidates = [base_dir / f"{target}.rw", stdlib_dir() / f"{target}.rw"]
+            # a stdlib one. A stdlib module only ever imports stdlib modules,
+            # so a user's file never replaces one of its dependencies.
+            std = stdlib_dir()
+            if Path(mod_filename).resolve().parent == std.resolve():
+                candidates = [std / f"{target}.rw"]
+            else:
+                candidates = [base_dir / f"{target}.rw", std / f"{target}.rw"]
             target_path = next((p for p in candidates if p.is_file()), None)
             if target_path is None:
+                looked = " and ".join(str(c) for c in candidates)
                 raise CompileError(Diagnostic(
                     mod_filename, imp.line, imp.col, max(1, len(target)),
-                    f"cannot find module '{target}' (looked for {candidates[0]} and {candidates[1]})",
+                    f"cannot find module '{target}' (looked for {looked})",
                 ))
+            if target in loaded:
+                if Path(program.paths[target]).resolve() != target_path.resolve():
+                    # Module names are global, so two files cannot both be `target`.
+                    raise CompileError(Diagnostic(
+                        mod_filename, imp.line, imp.col, max(1, len(target)),
+                        f"module '{target}' is both {program.paths[target]} and {target_path}: "
+                        f"a local module shadows a standard library module used by another import; "
+                        f"rename the local one",
+                    ))
+                continue  # already parsed via another path
             target_source = target_path.read_text(encoding="utf-8")
             target_mod = _parse_module(target_source, str(target_path))
 

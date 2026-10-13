@@ -186,6 +186,7 @@ int *rw_errno_ptr(void);
 #define rw_errno (*rw_errno_ptr())
 void    rw_set_last_error(int err);
 int64_t rw_last_error    (void);
+void    rw_set_last_error_i64(int64_t err);
 rw_str  rw_error_name    (int64_t err);
 rw_str  rw_error_message (int64_t err);
 

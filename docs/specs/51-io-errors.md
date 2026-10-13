@@ -86,3 +86,9 @@ writes fail silently.
 - `tests/test_e2e_io_errors.py`:
   - writes to a peer that closed: EPIPE / ECONNRESET, and the process survives
   - 120 fibers each fail differently, park, and still see their own error
+
+## Update
+
+`set_last_error(e: int) -> void` sets `last_error()`. Library code uses it
+to restore an error after a cleanup `close` reset it (stdlib `fs` and
+`process`).

@@ -90,3 +90,8 @@ representation for them.
 - `examples/web_app.rw`'s `/search` builds its body with the module; the web
   e2e test sends a raw quote in the query and checks it is escaped.
 - `examples/string_builtins.rw` covers the new builtins.
+
+## Update
+
+`dump` writes a float with no fraction or exponent with a trailing `.0`
+(`2.0`, `-0.0`), so it reads back as a float.
