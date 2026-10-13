@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.0.14](https://github.com/rwlang-org/rw/compare/v0.0.13...v0.0.14) - 2026-10-13
+
+- feat: closures (nested def and lambda, capture by value) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/231
+- fix: stdlib json floats, fs/process last_error, stdlib import isolation, leading-zero literals by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/233
+- docs: language reference, runtime design, and stdlib reference (en + ja) by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/234
+
 ## [v0.0.13](https://github.com/rwlang-org/rw/compare/v0.0.12...v0.0.13) - 2026-10-12
 
 - feat: garbage collection with the Boehm GC by @ryuichi1208 in https://github.com/rwlang-org/rw/pull/224
