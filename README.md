@@ -54,6 +54,15 @@ uv run rwc run examples/web_app.rw   # curl -i http://127.0.0.1:8080/hello/rw
 
 See [docs/web-framework.md](docs/web-framework.md) for the API.
 
+## Documentation
+
+- [Language reference](docs/language.md): syntax, types, statements, concurrency, every builtin
+- [Runtime design](docs/runtime.md): value layout, fibers and the scheduler, I/O, GC, rules for extending the runtime
+- [Standard library](docs/stdlib.md): `bufio`, `fs`, `json`, `log`, `path`, `process`, `template`, `url`
+- [Web framework](docs/web-framework.md)
+- Japanese versions: [docs/ja/](docs/ja/)
+- Design notes for each feature: [docs/specs/](docs/specs/)
+
 ## Getting Help
 
 See [Issues](https://github.com/ryuichi1208/rw/issues) and the language specs
