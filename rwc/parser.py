@@ -442,6 +442,12 @@ class Parser:
 
     def parse_stmt(self) -> A.Stmt:
         t = self.cur
+        if t.kind == TokenKind.KW_DEF:
+            fdef = self.parse_func_def()
+            if any(p.default is not None for p in fdef.params):
+                raise ParserError("a nested function cannot have default arguments",
+                                  fdef.line, fdef.col, 3)
+            return A.LocalFunc(fdef, t.line, t.col)
         if t.kind == TokenKind.KW_RETURN:
             return self.parse_return()
         if t.kind == TokenKind.KW_IF:
@@ -917,7 +923,22 @@ class Parser:
 
     # ------- expressions -------
     def parse_expr(self) -> A.Expr:
+        if self.cur.kind == TokenKind.KW_LAMBDA:
+            return self.parse_lambda()
         return self.parse_ternary()
+
+    def parse_lambda(self) -> A.Expr:
+        # `lambda [a, b]: expr` (spec 71). The body is one expression; it may
+        # itself be a lambda or a ternary.
+        t = self.eat(TokenKind.KW_LAMBDA)
+        params: List[str] = []
+        if self.cur.kind != TokenKind.COLON:
+            params.append(self.eat(TokenKind.IDENT, "lambda parameter name").value)
+            while self.match(TokenKind.COMMA):
+                params.append(self.eat(TokenKind.IDENT, "lambda parameter name").value)
+        self.eat(TokenKind.COLON, "':' after lambda parameters")
+        body = self.parse_expr()
+        return A.Lambda(params, body, t.line, t.col)
 
     def parse_ternary(self) -> A.Expr:
         # Conditional expression: `then if cond else els` (Python ternary).

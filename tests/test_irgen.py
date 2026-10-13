@@ -252,11 +252,13 @@ def test_function_value_indirect_call():
         "def apply(f: Callable[[int], int], x: int) -> int:\n    return f(x)\n\n"
         "def main() -> int:\n    return apply(inc, 1)\n"
     )
-    # The parameter is a pointer to the function type, and the call goes
-    # through it; the reference passes the function symbol itself.
-    assert re.search(r'define i64 @"rw_user_apply"\(i64 \(i64\)\* %"f", i64 %"x"\)', ir_text)
-    assert re.search(r'call i64 %"f\.\d*"\(|call i64 %"\.\d+"\(', ir_text)
-    assert re.search(r'call i64 @"rw_user_apply"\(i64 \(i64\)\* @"rw_user_inc"', ir_text)
+    # A function value is {code, env} (spec 71). The call goes through the
+    # code pointer with the environment first; a top-level function is
+    # passed as its thunk with a null environment.
+    assert re.search(r'define i64 @"rw_user_apply"\(\{i8\*, i8\*\} %"f", i64 %"x"\)', ir_text)
+    assert re.search(r'bitcast i8\* %"[^"]*" to i64 \(i8\*, i64\)\*', ir_text)
+    assert 'define internal i64 @"rw_fnval_inc"(i8* %".1", i64 %".2")' in ir_text
+    assert re.search(r'call i64 @"rw_user_apply"\(\{i8\*, i8\*\} \{i8\* bitcast \(i64 \(i8\*, i64\)\* @"rw_fnval_inc" to i8\*\), i8\* null\}', ir_text)
 
 
 def test_generic_list_uses_size_generic_helpers():

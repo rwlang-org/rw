@@ -33,6 +33,11 @@ RW_LIST_INT_TY = ir.LiteralStructType([I64, I64, I64.as_pointer()])  # {len, cap
 RW_OPTION_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
 
 
+# A function value (spec 71): code pointer and environment (null for a
+# top-level function).
+FN_VALUE_TY = ir.LiteralStructType([I8P, I8P])
+
+
 def llvm_type_of(t: T.Type) -> ir.Type:
     if t is T.INT:
         return I64
@@ -68,9 +73,14 @@ def llvm_type_of(t: T.Type) -> ir.Type:
     if isinstance(t, T.TupleType):
         return ir.LiteralStructType([llvm_type_of(e) for e in t.elems])  # by value (spec 37)
     if isinstance(t, T.FunctionType):
-        # Pointer to the function's own LLVM type (spec 21).
-        return ir.FunctionType(llvm_type_of(t.ret), [llvm_type_of(p) for p in t.params]).as_pointer()
+        # {code, env} (spec 71): code takes the environment first.
+        return FN_VALUE_TY
     raise RuntimeError(f"no LLVM mapping for type {t}")
+
+
+def closure_code_type(t: "T.FunctionType") -> ir.FunctionType:
+    """The LLVM type of a function value's code: `R (i8* env, P1, ..., Pn)`."""
+    return ir.FunctionType(llvm_type_of(t.ret), [I8P] + [llvm_type_of(p) for p in t.params])
 
 
 def record_struct_type(cls: T.ClassType) -> ir.LiteralStructType:
@@ -95,6 +105,11 @@ class IRGen:
         self._trampoline_counter = 0
         # Map (module, name) -> ir.Function (LLVM symbol is renamed per module).
         self.funcs: Dict[FuncKey, ir.Function] = {}
+        # Closures (spec 71): code functions by key, bodies still to emit,
+        # and environment-ignoring thunks for top-level function values.
+        self._closure_fns: Dict[FuncKey, ir.Function] = {}
+        self._pending_closures: list = []
+        self._thunks: Dict[FuncKey, ir.Function] = {}
         # All (module, A.Module) pairs: entry first (module=None), then imports.
         self._all_modules: List[Tuple[Optional[str], A.Module]] = [
             (None, program.root)
@@ -422,6 +437,9 @@ class IRGen:
         for mod_name, mod in self._all_modules:
             for ast_fn in mod.functions:
                 self._emit_function((mod_name, ast_fn.name), ast_fn)
+        # Closure bodies (spec 71), including closures created inside them.
+        while self._pending_closures:
+            self._emit_closure(self._pending_closures.pop(0))
 
         # Synthesize the real C @main.
         self._emit_c_main()
@@ -475,6 +493,12 @@ class IRGen:
 
     def _emit_stmt(self, stmt: A.Stmt, ctx: "FunctionCtx") -> None:
         b = ctx.builder
+        if isinstance(stmt, A.LocalFunc):
+            info = self.sema.closures[id(stmt)]
+            slot = ctx.alloca(FN_VALUE_TY, name=stmt.func.name)
+            b.store(self._make_closure(info, ctx), slot)
+            ctx.locals[stmt.func.name] = slot
+            return
         if isinstance(stmt, A.VarDecl):
             ty = self.sema.decl_types[id(stmt)]
             slot = ctx.alloca(llvm_type_of(ty), name=stmt.name)
@@ -1084,9 +1108,9 @@ class IRGen:
             return self._emit_expr(cdef.value, ctx)
         ref = self.sema.func_refs.get(id(expr))
         if ref is not None:
-            # A function used as a value (a Name or `mod.f`): the function
-            # symbol is its pointer (spec 21).
-            return self.funcs[ref]
+            # A function used as a value (a Name or `mod.f`, spec 21): its
+            # environment-taking thunk with no environment (spec 71).
+            return self._fn_value_of(ref)
         if isinstance(expr, A.FieldAccess):
             obj_ty = self.sema.expr_types[id(expr.obj)]
             assert isinstance(obj_ty, T.ClassType)
@@ -1131,7 +1155,10 @@ class IRGen:
             return b.call(fn, [recv] + [self._emit_expr(a, ctx) for a in expr.args])
         if isinstance(expr, A.CallValue):
             callee = self._emit_expr(expr.callee, ctx)
-            return b.call(callee, [self._emit_expr(a, ctx) for a in expr.args])
+            fty = self.sema.expr_types[id(expr.callee)]
+            return self._call_fn_value(callee, fty, [self._emit_expr(a, ctx) for a in expr.args], b)
+        if isinstance(expr, A.Lambda):
+            return self._make_closure(self.sema.closures[id(expr)], ctx)
         if isinstance(expr, A.Name):
             slot = ctx.locals[expr.name]
             return b.load(slot)
@@ -1346,13 +1373,15 @@ class IRGen:
                           [recv] + [self._emit_expr(a, ctx) for a in call.args])
         if id(call) in self.sema.local_fn_calls:
             callee = b.load(ctx.locals[call.callee])
-            return b.call(callee, [self._emit_expr(a, ctx) for a in call.args])
+            fty = self.sema.local_fn_call_types[id(call)]
+            return self._call_fn_value(callee, fty, [self._emit_expr(a, ctx) for a in call.args], b)
         rec_cls = self.sema.field_fn_calls.get(id(call))
         if rec_cls is not None:
             assert call.module is not None
             obj = b.load(ctx.locals[call.module])
             callee = b.load(self._field_ptr(obj, rec_cls, call.callee, b))
-            return b.call(callee, [self._emit_expr(a, ctx) for a in call.args])
+            fty = rec_cls.fields[rec_cls.field_index(call.callee)][1]
+            return self._call_fn_value(callee, fty, [self._emit_expr(a, ctx) for a in call.args], b)
         cls = self.sema.constructor_calls.get(id(call))
         if cls is not None:
             return self._emit_constructor(call, cls, ctx)
@@ -1735,6 +1764,94 @@ class IRGen:
         b.unreachable()
         b.position_at_end(ok)
         return ir.Constant(I64, 0)
+
+    # ---------- function values and closures (spec 71) ----------
+    def _call_fn_value(self, fv: ir.Value, fty: T.Type, args: list, b: ir.IRBuilder) -> ir.Value:
+        assert isinstance(fty, T.FunctionType)
+        code = b.bitcast(b.extract_value(fv, 0), closure_code_type(fty).as_pointer())
+        return b.call(code, [b.extract_value(fv, 1)] + args)
+
+    def _fn_value_of(self, key: FuncKey) -> ir.Value:
+        """{thunk, null} for top-level function `key`: the thunk takes and
+        ignores an environment, then calls the function."""
+        thunk = self._thunks.get(key)
+        if thunk is None:
+            sig = self.sema.functions[key]
+            fty = T.FunctionType([t for _, t in sig.params], sig.return_type)
+            thunk = ir.Function(self.mod, closure_code_type(fty), "rw_fnval_" + self._symbol(key)[len("rw_user_"):])
+            thunk.linkage = "internal"
+            tb = ir.IRBuilder(thunk.append_basic_block("entry"))
+            r = tb.call(self.funcs[key], list(thunk.args[1:]))
+            if sig.return_type is T.VOID:
+                tb.ret_void()
+            else:
+                tb.ret(r)
+            self._thunks[key] = thunk
+        return ir.Constant.literal_struct([thunk.bitcast(I8P), ir.Constant(I8P, None)])
+
+    def _closure_fn(self, info) -> ir.Function:
+        fn = self._closure_fns.get(info.key)
+        if fn is None:
+            mod, name = info.key
+            sym = "rw_closure_" + (name if mod is None else f"{mod}.{name}")
+            fn = ir.Function(self.mod, closure_code_type(info.type), sym)
+            fn.linkage = "internal"
+            self._closure_fns[info.key] = fn
+            self._pending_closures.append(info)
+        return fn
+
+    def _env_type(self, info) -> ir.LiteralStructType:
+        return ir.LiteralStructType([llvm_type_of(t) for _, t in info.captures])
+
+    def _make_closure(self, info, ctx: "FunctionCtx") -> ir.Value:
+        """Copy the captured values into a GC-heap environment and pair it
+        with the closure's code."""
+        b = ctx.builder
+        fn = self._closure_fn(info)
+        env: ir.Value = ir.Constant(I8P, None)
+        if info.captures:
+            env_ty = self._env_type(info)
+            size = b.ptrtoint(b.gep(ir.Constant(env_ty.as_pointer(), None), [ir.Constant(I32, 1)]), I64)
+            env = b.call(self._malloc, [size])
+            typed = b.bitcast(env, env_ty.as_pointer())
+            for i, (name, _) in enumerate(info.captures):
+                field = b.gep(typed, [ir.Constant(I32, 0), ir.Constant(I32, i)])
+                b.store(b.load(ctx.locals[name]), field)
+        fv = ir.Constant(FN_VALUE_TY, ir.Undefined)
+        fv = b.insert_value(fv, b.bitcast(fn, I8P), 0)
+        return b.insert_value(fv, env, 1)
+
+    def _emit_closure(self, info) -> None:
+        fn = self._closure_fns[info.key]
+        sig = self.sema.functions[info.key]
+        b = ir.IRBuilder(fn.append_basic_block("entry"))
+        locals_: Dict[str, ir.AllocaInstr] = {}
+        env = fn.args[0]
+        if info.captures:
+            typed = b.bitcast(env, self._env_type(info).as_pointer())
+            for i, (name, ty) in enumerate(info.captures):
+                slot = b.alloca(llvm_type_of(ty), name=name)
+                b.store(b.load(b.gep(typed, [ir.Constant(I32, 0), ir.Constant(I32, i)])), slot)
+                locals_[name] = slot
+        if info.self_name is not None:
+            slot = b.alloca(FN_VALUE_TY, name=info.self_name)
+            selfv = b.insert_value(ir.Constant(FN_VALUE_TY, ir.Undefined), b.bitcast(fn, I8P), 0)
+            b.store(b.insert_value(selfv, env, 1), slot)
+            locals_[info.self_name] = slot
+        for (pname, pty), arg in zip(sig.params, fn.args[1:]):
+            slot = b.alloca(llvm_type_of(pty), name=pname)
+            b.store(arg, slot)
+            locals_[pname] = slot
+        ctx = FunctionCtx(builder=b, function=fn, locals=locals_,
+                          return_ty=sig.return_type, gen=self, func_key=info.key)
+        self._emit_safepoint(ctx)
+        self._emit_block(info.func.body, ctx)
+        if not ctx.builder.block.is_terminated:
+            self._emit_cleanups(ctx, 0)
+            if sig.return_type is T.VOID:
+                ctx.builder.ret_void()
+            else:
+                ctx.builder.unreachable()
 
     def _emit_string_literal(self, s: str, b: ir.IRBuilder) -> ir.Value:
         data = s.encode("utf-8")

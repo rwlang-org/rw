@@ -385,3 +385,7 @@ def test_template_page(server):
     assert body == b"<h1>Hello, &lt;ann&gt;</h1><span>a</span><span>b&amp;c</span>\n"
     assert _call(server, "GET", "/page/bob")[2] == b"<h1>Hello, bob</h1><p>no tags</p>\n"
 
+
+def test_lambda_route(server):
+    assert _call(server, "GET", "/ping")[::2] == (200, b"pong\n")
+

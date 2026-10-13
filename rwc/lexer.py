@@ -46,6 +46,7 @@ class TokenKind(Enum):
     KW_ASSERT = auto()
     KW_WITH = auto()    # spec 47
     KW_DEFER = auto()   # spec 47
+    KW_LAMBDA = auto()  # spec 71
     KW_AND = auto()
     KW_OR = auto()
     KW_NOT = auto()
@@ -132,6 +133,7 @@ KEYWORDS: dict[str, TokenKind] = {
     "assert": TokenKind.KW_ASSERT,
     "with": TokenKind.KW_WITH,
     "defer": TokenKind.KW_DEFER,
+    "lambda": TokenKind.KW_LAMBDA,
     "and": TokenKind.KW_AND,
     "or": TokenKind.KW_OR,
     "not": TokenKind.KW_NOT,

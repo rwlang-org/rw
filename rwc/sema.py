@@ -34,6 +34,24 @@ class FuncSig:
 
 
 @dataclass
+class ClosureInfo:
+    """A nested `def` or a `lambda` (spec 71), compiled as its own function
+    `key` taking an environment of `captures` (copied by value when the
+    closure is created) before its parameters."""
+    key: FuncKey
+    func: A.FuncDef
+    captures: List[Tuple[str, T.Type]]
+    self_name: Optional[str]
+    type: T.FunctionType
+
+
+@dataclass
+class _ClosureCtx:
+    candidates: set
+    used: set
+
+
+@dataclass
 class SemaResult:
     filename: str
     functions: Dict[FuncKey, FuncSig]
@@ -72,6 +90,10 @@ class SemaResult:
     # (id(TupleAssign), position) -> type for targets that are declared.
     tuple_index: Dict[int, int] = field(default_factory=dict)
     unpack_decls: Dict[Tuple[int, int], T.Type] = field(default_factory=dict)
+    # Closures (spec 71): id(LocalFunc | Lambda) -> what irgen needs.
+    closures: Dict[int, ClosureInfo] = field(default_factory=dict)
+    # id(Call) in local_fn_calls -> the type of the function value called.
+    local_fn_call_types: Dict[int, T.Type] = field(default_factory=dict)
 
 
 # Names of builtin functions. Spawning a builtin is an error, and a qualified
@@ -234,6 +256,9 @@ class Sema:
         self.result = SemaResult(filename=filename, functions={})
         # Depth of enclosing loops; break/continue are only valid when > 0.
         self._loop_depth = 0
+        # Closures being checked, innermost last (spec 71).
+        self._closure_stack: List[_ClosureCtx] = []
+        self._closure_counter = 0
         # User-declared type aliases (name -> resolved concrete Type), one map
         # per module. Aliases are module-local: type-alias import is a Non-Goal,
         # so `type_alias_map` always points at the current module's map.
@@ -655,6 +680,77 @@ class Sema:
                 for arm in s.arms:
                     self._reject_nested_defer(arm.body, False)
 
+    # ---------- closures (spec 71) ----------
+    def _note_use(self, name: str) -> None:
+        """A read of local `name`: inside a closure, a name from the
+        enclosing function becomes a capture."""
+        if self._closure_stack and name in self._closure_stack[-1].candidates:
+            self._closure_stack[-1].used.add(name)
+
+    def _reject_captured_assign(self, stmt: A.Stmt) -> None:
+        if not self._closure_stack:
+            return
+        names: List[str] = []
+        if isinstance(stmt, (A.VarDecl, A.Assign)):
+            names = [stmt.name]
+        elif isinstance(stmt, A.TupleAssign):
+            names = list(stmt.names)
+        elif isinstance(stmt, A.ForEach):
+            names = [stmt.var]
+        for n in names:
+            if n in self._closure_stack[-1].candidates:
+                raise CompileError(Diagnostic(
+                    self.filename, stmt.line, stmt.col, max(1, len(n)),
+                    f"`{n}` belongs to the enclosing function: a closure captures it by value "
+                    f"and cannot assign to it (spec 71)",
+                    help="keep shared mutable state in a record field, or use a different name",
+                ))
+
+    def _check_closure(self, fn: A.FuncDef, node: object, label: str,
+                       params: List[Tuple[str, T.Type]], ret: T.Type, body: List[A.Stmt],
+                       outer: Dict[str, T.Type], self_name: Optional[str],
+                       line: int, col: int) -> ClosureInfo:
+        """Check the body of a nested def / lambda as a function of its own.
+        Every local of the enclosing function visible here may be read; the
+        ones that are become captures, copied when the closure is created."""
+        self._closure_counter += 1
+        qual = f"{fn.name}${label}${self._closure_counter}"
+        key: FuncKey = (self.current_module, qual)
+        synth = A.FuncDef(qual, [A.Param(n, A.TypeName("int", line, col), line, col) for n, _ in params],
+                          A.TypeName("void", line, col), body, line, col)
+        self.result.functions[key] = FuncSig(qual, params, ret, synth, self.current_module)
+        ftype = T.FunctionType([t for _, t in params], ret)
+        candidates = dict(outer)
+        inner: Dict[str, T.Type] = dict(outer)
+        if self_name is not None:
+            candidates.pop(self_name, None)
+            inner[self_name] = ftype   # the closure can call itself
+        for pn, pt in params:
+            candidates.pop(pn, None)
+            inner[pn] = pt
+            self.result.local_types[(self.current_module, qual, pn)] = pt
+        ctx = _ClosureCtx(set(candidates), set())
+        self._closure_stack.append(ctx)
+        saved_loops = self._loop_depth
+        self._loop_depth = 0   # break / continue do not cross into a closure
+        try:
+            self._reject_nested_defer(body, True)
+            ended = self._check_block(synth, body, inner, ret)
+        finally:
+            self._closure_stack.pop()
+            self._loop_depth = saved_loops
+        if ret is not T.VOID and not ended:
+            raise CompileError(Diagnostic(self.filename, line, col, max(1, len(label)),
+                                          f"function `{label}` does not return on all paths"))
+        captures = sorted((n, candidates[n]) for n in ctx.used)
+        # A capture of the enclosing closure's own capture is a use there too.
+        if self._closure_stack:
+            for n, _ in captures:
+                self._note_use(n)
+        info = ClosureInfo(key, synth, captures, self_name, ftype)
+        self.result.closures[id(node)] = info
+        return info
+
     def _check_func(self, fn: A.FuncDef) -> None:
         self._reject_nested_defer(fn.body, True)
         sig = self.result.functions[(self.current_module, fn.name)]
@@ -693,6 +789,26 @@ class Sema:
         locals_: Dict[str, T.Type],
         ret_ty: T.Type,
     ) -> bool:
+        self._reject_captured_assign(stmt)
+        if isinstance(stmt, A.LocalFunc):
+            inner = stmt.func
+            if inner.name in locals_ or inner.name in self.const_map:
+                raise CompileError(Diagnostic(
+                    self.filename, inner.line, inner.col, 3,
+                    f"`{inner.name}` is already defined in this function",
+                ))
+            params: List[Tuple[str, T.Type]] = []
+            for p in inner.params:
+                if any(p.name == n for n, _ in params):
+                    raise CompileError(Diagnostic(self.filename, p.line, p.col, len(p.name),
+                                                  f"duplicate parameter `{p.name}`"))
+                params.append((p.name, self._resolve_type(p.type_expr)))
+            ret = self._resolve_type(inner.return_type)
+            info = self._check_closure(fn, stmt, inner.name, params, ret, inner.body, locals_,
+                                       inner.name, inner.line, inner.col)
+            locals_[inner.name] = info.type
+            self.result.local_types[(self.current_module, fn.name, inner.name)] = info.type
+            return False
         if isinstance(stmt, A.VarDecl):
             if stmt.name in locals_ and not (stmt.implicit and locals_[stmt.name] is T.INT):
                 if stmt.implicit:
@@ -1003,6 +1119,8 @@ class Sema:
         by itself should take: `list_new()` / `[]` (spec 22, 29) and `None` /
         `Some` / `Ok` / `Err` (spec 30). Follows the list argument of nested
         `list_push` calls and both arms of a ternary."""
+        if isinstance(expr, A.Lambda) and isinstance(expected, T.FunctionType):
+            self._type_hints[id(expr)] = expected
         if isinstance(expected, T.ListType) and (
             self._is_builtin_call(expr, "list_new", locals_) or isinstance(expr, A.ListLit)
         ):
@@ -1053,6 +1171,7 @@ class Sema:
             return T.STRING
         if isinstance(expr, A.Name):
             if expr.name in locals_:
+                self._note_use(expr.name)
                 return locals_[expr.name]
             if expr.name in self.const_map:
                 cdef, cty = self.const_map[expr.name]
@@ -1077,6 +1196,30 @@ class Sema:
                 f"undefined variable: {expr.name}",
                 help=did_you_mean(expr.name, self._value_names(locals_)),
             ))
+        if isinstance(expr, A.Lambda):
+            ft = self._type_hints.get(id(expr))
+            if not isinstance(ft, T.FunctionType):
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, 6,
+                    "cannot infer the parameter types of this lambda",
+                    help="use it where a Callable type is expected: an argument, a variable "
+                         "declared with a Callable type, or a return value",
+                ))
+            if len(expr.params) != len(ft.params):
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, 6,
+                    f"lambda takes {len(expr.params)} parameter(s) but `{ft}` has {len(ft.params)}",
+                ))
+            if len(set(expr.params)) != len(expr.params):
+                raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 6,
+                                              "duplicate lambda parameter"))
+            body: List[A.Stmt] = (
+                [A.ExprStmt(expr.body, expr.line, expr.col)] if ft.ret is T.VOID
+                else [A.Return(expr.body, expr.line, expr.col)]
+            )
+            info = self._check_closure(fn, expr, "lambda", list(zip(expr.params, ft.params)), ft.ret,
+                                       body, locals_, None, expr.line, expr.col)
+            return info.type
         if isinstance(expr, A.UnaryOp):
             inner = self._check_expr(fn, expr.operand, locals_)
             if expr.op == "-":
@@ -1449,6 +1592,7 @@ class Sema:
         # Calls through function values (spec 21) come first: locals shadow
         # functions, builtins, and import qualifiers.
         if call.module is not None and call.module in locals_:
+            self._note_use(call.module)
             recv_ty = locals_[call.module]
             if isinstance(recv_ty, T.ClassType) and call.callee in recv_ty.methods:
                 # `x.m(...)`: a method call (spec 33).
@@ -1466,7 +1610,9 @@ class Sema:
             return self._check_fn_value_call(fn, fty, call.args, call.callee,
                                              call.line, call.col, locals_)
         if call.module is None and isinstance(locals_.get(call.callee), T.FunctionType):
+            self._note_use(call.callee)
             self.result.local_fn_calls.add(id(call))
+            self.result.local_fn_call_types[id(call)] = locals_[call.callee]
             return self._check_fn_value_call(fn, locals_[call.callee], call.args, call.callee,
                                              call.line, call.col, locals_)
         # Qualified calls (`mod.func`) are always user functions; skip the
@@ -1844,7 +1990,8 @@ class Sema:
                 *self._module_funcs(self.current_module)]
 
     def _module_funcs(self, module: str) -> List[str]:
-        return [name for (mod, name) in self.result.functions if mod == module and "." not in name]
+        return [name for (mod, name) in self.result.functions
+                if mod == module and "." not in name and "$" not in name]
 
     @staticmethod
     def _members(cls: T.ClassType) -> List[str]:
