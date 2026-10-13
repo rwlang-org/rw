@@ -64,6 +64,11 @@ Routes are tried in registration order and the first match wins. A path that
 matches a route only under another method gets `405 Method Not Allowed`;
 anything else goes to the not-found handler.
 
+Handlers and hooks can be closures (spec 71): a lambda route
+(`web.get(app, "/ping", lambda req: text(200, "pong\n"))`) or a hook built by a
+factory that captures its settings (`web.before(app, require_token("/admin", "secret"))`
+in `examples/web_app.rw`).
+
 A request goes through the `before` hooks, then the static mounts, then the
 routes. The `after` hooks see every response, including 404s and static
 files. `HEAD` is routed like `GET`, and the response keeps its headers

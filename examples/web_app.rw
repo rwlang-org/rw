@@ -40,11 +40,14 @@ def whoami(req: Request) -> Response:
         return text(401, "not logged in\n")
     return text(200, "you are " + user + "\n")
 
-# Middleware (spec 63): /admin needs a token; every response says who served it.
-def require_token(req: Request) -> Option[Response]:
-    if str_starts_with(req.path, "/admin") and web.header(req, "X-Token") != "secret":
-        return Some(text(403, "forbidden\n"))
-    return None
+# Middleware (spec 63) built by a closure factory (spec 71): requests under
+# `prefix` need the given token; every response says who served it.
+def require_token(prefix: string, token: string) -> Callable[[Request], Option[Response]]:
+    def check(req: Request) -> Option[Response]:
+        if str_starts_with(req.path, prefix) and web.header(req, "X-Token") != token:
+            return Some(text(403, "forbidden\n"))
+        return None
+    return check
 
 def powered_by(req: Request, res: Response) -> Response:
     return set_header(res, "X-Powered-By", "rw")
@@ -87,7 +90,8 @@ def main() -> int:
     web.get(app, "/old", old)
     web.get(app, "/admin", admin)
     web.get(app, "/page/:name", page)
-    web.before(app, require_token)
+    web.before(app, require_token("/admin", "secret"))
+    web.get(app, "/ping", lambda req: text(200, "pong\n"))
     web.after(app, powered_by)
     # Static files: examples/public by default (run from the repository root).
     public: string = "examples/public"

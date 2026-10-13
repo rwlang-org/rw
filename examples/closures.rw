@@ -1,0 +1,50 @@
+# Closures: nested def and lambda, capturing by value (spec 71).
+def make_adder(n: int) -> Callable[[int], int]:
+    def add(x: int) -> int:
+        return x + n
+    return add
+
+def apply(f: Callable[[int], int], x: int) -> int:
+    return f(x)
+
+def twice(x: int) -> int:
+    return x * 2
+
+class Counter:
+    value: int
+
+def main() -> int:
+    f = make_adder(10)
+    print(f(5))
+    print(apply(f, 1))
+    print(apply(twice, 21))
+    g: Callable[[int], int] = lambda x: x * 3
+    print(g(7))
+    print(apply(lambda y: y - 1, 100))
+    label = "n"
+    count = 0
+    def show() -> string:
+        return f"{label}={count}"
+    count = 5
+    print(show())
+    c = Counter(0)
+    def inc() -> void:
+        c.value += 1
+    inc()
+    inc()
+    print(c.value)
+    def fact(k: int) -> int:
+        if k <= 1:
+            return 1
+        return k * fact(k - 1)
+    print(fact(10))
+    base = 100
+    def outer(a: int) -> Callable[[int], int]:
+        return lambda b: base + a + b
+    print(outer(20)(3))
+    fs: List[Callable[[int], int]] = []
+    for i in range(0, 3):
+        fs = list_push(fs, make_adder(i * 10))
+    for h in fs:
+        print(h(1))
+    return 0

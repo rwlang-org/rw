@@ -129,3 +129,8 @@ uv run --frozen pytest -q
 | `x.f(...)` meaning a field call vs a module-qualified call | Locals shadow import qualifiers; sema checks locals first and reports a field-call error if `x` is a local that is not a record with a function field |
 | A local variable and a function with the same name | A local of function type wins for calls; a local of another type falls back to the function, so existing programs keep their meaning |
 | LLVM type mismatch between a referenced function and the declared function type | Both derive from the same `llvm_type_of`, and sema has already required the types to be equal |
+
+## Update (spec 71)
+
+Closures arrived in spec 71. A function value is now `{code, env}`, and a
+top-level function is passed as an environment-ignoring thunk; see that spec.

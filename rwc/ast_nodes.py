@@ -148,6 +148,16 @@ class BinOp:
 
 
 @dataclass
+class Lambda:
+    # `lambda a, b: expr` (spec 71): parameter types come from the expected
+    # Callable type.
+    params: List[str]
+    body: "Expr"
+    line: int
+    col: int
+
+
+@dataclass
 class IfExpr:
     # Conditional expression: `then if cond else els` (Python ternary syntax).
     then: "Expr"
@@ -287,7 +297,7 @@ Expr = Union[
     UnaryOp, BinOp, IfExpr, Call, SpawnExpr, AwaitExpr,
     SomeExpr, NoneExpr,
     OkExpr, ErrExpr,
-    FieldAccess, CallValue, ListLit, Index, Slice, DictLit, TupleLit, KeywordArg,
+    FieldAccess, CallValue, ListLit, Index, Slice, DictLit, TupleLit, KeywordArg, Lambda,
 ]
 
 
@@ -477,9 +487,17 @@ class TupleAssign:
     col: int
 
 
+@dataclass
+class LocalFunc:
+    # A `def` inside a function body (spec 71): a closure bound to func.name.
+    func: "FuncDef"
+    line: int
+    col: int
+
+
 Stmt = Union[
     VarDecl, Assign, ExprStmt, Return, If, While, For, MatchStmt, Break, Continue, Assert,
-    FieldAssign, ForEach, IndexAssign, TupleAssign, ValueMatch, Defer, With,
+    FieldAssign, ForEach, IndexAssign, TupleAssign, ValueMatch, Defer, With, LocalFunc,
 ]
 
 
