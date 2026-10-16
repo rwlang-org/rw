@@ -1,0 +1,5 @@
+# The sdist carries what setup.py copies into the wheel.
+recursive-include runtime *.c *.h *.S Makefile
+recursive-include stdlib *.rw
+recursive-include scripts *.sh
+global-exclude *.o *.a

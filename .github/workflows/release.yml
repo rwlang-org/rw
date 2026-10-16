@@ -1,0 +1,142 @@
+name: release
+
+# Builds the release assets and, for a tag, uploads them to its GitHub
+# Release (#78):
+#   rw-<version>-<os>-<arch>.tar.gz  standalone rwc (PyInstaller), runtime, stdlib
+#   rw-<version>-py3-none-any.whl    and the sdist
+#   *.sha256 and SHA256SUMS
+#
+# tagpr.yml calls this after it tags a release: a tag pushed with
+# GITHUB_TOKEN does not start other workflows by itself. It can also be run
+# by hand for an existing tag, and runs without uploading on pull requests
+# that touch the packaging.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and upload (e.g. v0.0.14)"
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - packaging/**
+      - setup.py
+      - MANIFEST.in
+      - rwc/resources.py
+
+permissions:
+  contents: write
+
+jobs:
+  binary:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos-arm64
+          # 22.04 for an older glibc, so the binary runs on more distros.
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+          - os: ubuntu-22.04-arm
+            platform: linux-arm64
+    runs-on: ${{ matrix.os }}
+    name: binary (${{ matrix.platform }})
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Install Boehm GC
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install bdw-gc; else sudo apt-get update && sudo apt-get install -y libgc-dev; fi
+      - name: Build C runtime
+        run: make -C runtime
+      - name: Build standalone rwc
+        run: |
+          uv venv
+          uv pip install . pyinstaller
+          uv run --no-sync pyinstaller --noconfirm --onedir --name rwc \
+            --copy-metadata rw --collect-all llvmlite \
+            --add-data runtime/librw.a:runtime \
+            --add-data stdlib:stdlib \
+            --add-data scripts:scripts \
+            packaging/rwc_entry.py
+      - name: Package
+        id: pkg
+        run: |
+          version=$(uv run --no-sync python -c "import rwc; print(rwc.__version__)")
+          name="rw-${version}-${{ matrix.platform }}"
+          mkdir -p "out/$name"
+          cp -R dist/rwc/. "out/$name/"
+          cp LICENSE README.md packaging/README-binary.md "out/$name/"
+          tar -C out -czf "$name.tar.gz" "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - name: Smoke test (outside the checkout, without Python)
+        run: |
+          tmp=$(mktemp -d)
+          tar -C "$tmp" -xzf "${{ steps.pkg.outputs.name }}.tar.gz"
+          cp examples/hello.rw examples/json_basic.rw examples/json_basic.rw.expected "$tmp/"
+          cd "$tmp"
+          ./"${{ steps.pkg.outputs.name }}"/rwc --version
+          ./"${{ steps.pkg.outputs.name }}"/rwc run hello.rw
+          ./"${{ steps.pkg.outputs.name }}"/rwc run json_basic.rw | diff - json_basic.rw.expected
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: ${{ steps.pkg.outputs.name }}.tar.gz
+
+  wheel:
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Build wheel and sdist
+        run: uv build
+      - name: Smoke test (fresh venv, runtime built on first use)
+        run: |
+          sudo apt-get update && sudo apt-get install -y libgc-dev
+          tmp=$(mktemp -d)
+          uv venv "$tmp/venv"
+          VIRTUAL_ENV="$tmp/venv" uv pip install dist/*.whl
+          cp examples/hello.rw examples/json_basic.rw examples/json_basic.rw.expected "$tmp/"
+          cd "$tmp"
+          venv/bin/rwc run hello.rw
+          venv/bin/rwc run json_basic.rw | diff - json_basic.rw.expected
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-dist
+          path: dist/*
+
+  publish:
+    needs: [binary, wheel]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        working-directory: assets
+        run: |
+          for f in *.tar.gz *.whl; do sha256sum "$f" > "$f.sha256"; done
+          sha256sum *.tar.gz *.whl > SHA256SUMS
+          cat SHA256SUMS
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" assets/* --clobber --repo "$GITHUB_REPOSITORY"

@@ -22,21 +22,21 @@ from .diagnostics import CompileError, Diagnostic
 from .irgen import generate as irgen_generate
 from .lexer import LexerError
 from .loader import load_program
+from . import __version__
 from .parser import ParserError
+from .resources import cache_dir, rw_home
 from .sema import analyze_program
 
 
 def _find_runtime_dir() -> Path:
-    """Locate the C runtime directory (`runtime/` next to the `rwc` package)."""
-    here = Path(__file__).resolve()
-    # repo layout: <repo>/rwc/driver.py and <repo>/runtime/librw.a
-    repo_root = here.parent.parent
-    rt_dir = repo_root / "runtime"
-    return rt_dir
+    """Locate the C runtime directory (see rwc/resources.py)."""
+    return rw_home() / "runtime"
 
 
 def _ensure_runtime_built(rt_dir: Path) -> Path:
-    """Build `librw.a` on first use if it's missing."""
+    """Build `librw.a` on first use if it's missing. An installed copy may
+    be read-only; then the sources are copied to the user cache and built
+    there."""
     lib = rt_dir / "librw.a"
     if lib.exists():
         return lib
@@ -45,6 +45,18 @@ def _ensure_runtime_built(rt_dir: Path) -> Path:
             "<driver>", 1, 1, 1,
             f"runtime directory not found at {rt_dir}",
         ))
+    if not os.access(rt_dir, os.W_OK):
+        home = cache_dir() / __version__
+        cached = home / "runtime" / "librw.a"
+        if cached.exists():
+            return cached
+        for name, src in (("runtime", rt_dir), ("scripts", rt_dir.parent / "scripts")):
+            # copyfile, not copy2: the copies must be writable for make.
+            shutil.copytree(src, home / name, dirs_exist_ok=True, copy_function=shutil.copyfile,
+                            ignore=shutil.ignore_patterns("*.o", "*.a"))
+            for d, _, _ in os.walk(home / name):
+                os.chmod(d, 0o755)
+        rt_dir, lib = home / "runtime", cached
     res = subprocess.run(["make", "-C", str(rt_dir)], capture_output=True, text=True)
     if res.returncode != 0:
         raise CompileError(Diagnostic(
@@ -75,7 +87,7 @@ def gc_link_flags() -> list:
     scripts/gc-prefix.sh (RW_GC_PREFIX overrides it)."""
     global _GC_FLAGS
     if _GC_FLAGS is None:
-        script = _find_runtime_dir().parent / "scripts" / "gc-prefix.sh"
+        script = rw_home() / "scripts" / "gc-prefix.sh"
         res = subprocess.run(["sh", str(script)], capture_output=True, text=True)
         if res.returncode != 0:
             raise CompileError(Diagnostic(

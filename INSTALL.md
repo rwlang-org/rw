@@ -1,7 +1,32 @@
 # Installing rw
 
 `rw` consists of a Python-based compiler (`rwc`) and a small C runtime
-(`librw.a`). Both need to be built before you can run programs.
+(`librw.a`). Both need to be built before you can run programs, unless you
+use a release build.
+
+## Release builds
+
+Each [GitHub Release](https://github.com/rwlang-org/rw/releases) has:
+
+| Asset | What it is | Needs |
+|---|---|---|
+| `rw-<version>-macos-arm64.tar.gz`, `-linux-x86_64`, `-linux-arm64` | standalone `rwc` with the prebuilt runtime and the standard library | clang, Boehm GC (`bdw-gc` / `libgc-dev`) |
+| `rw-<version>-py3-none-any.whl` | the Python package; the runtime is built on first use | Python 3.11+, clang, make, Boehm GC |
+| `*.sha256`, `SHA256SUMS` | SHA-256 checksums | |
+
+```sh
+# standalone
+tar xzf rw-<version>-linux-x86_64.tar.gz
+./rw-<version>-linux-x86_64/rwc run hello.rw
+
+# wheel
+pip install https://github.com/rwlang-org/rw/releases/download/v<version>/rw-<version>-py3-none-any.whl
+rwc run hello.rw
+```
+
+An installed wheel builds `librw.a` next to its copy of the runtime, or under
+`~/.cache/rw/<version>/` if that directory is read-only. `RW_HOME` points rwc
+at another directory holding `runtime/`, `stdlib/`, and `scripts/`.
 
 ## 1. Prerequisites
 

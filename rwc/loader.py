@@ -24,6 +24,7 @@ from .desugar import desugar_module
 from .diagnostics import CompileError, Diagnostic
 from .lexer import LexerError, tokenize
 from .parser import ParserError, parse
+from .resources import rw_home
 
 
 @dataclass
@@ -58,12 +59,12 @@ def _find_main(mod: A.Module) -> Optional[A.FuncDef]:
 
 
 def stdlib_dir() -> Path:
-    """The bundled standard library (`stdlib/` next to the `rwc` package, like
-    `runtime/`). `RW_STDLIB` overrides it."""
+    """The bundled standard library (`stdlib/` beside `runtime/`, see
+    rwc/resources.py). `RW_STDLIB` overrides it."""
     env = os.environ.get("RW_STDLIB")
     if env:
         return Path(env)
-    return Path(__file__).resolve().parent.parent / "stdlib"
+    return rw_home() / "stdlib"
 
 
 def load_program(root_source: str, root_filename: str) -> LoadedProgram:
