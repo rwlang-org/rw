@@ -89,8 +89,16 @@ class TypeTuple:
     col: int
 
 
+@dataclass
+class TypePtr:
+    """`ptr[T]`: an opaque C pointer (spec 74)."""
+    elem: "TypeExpr"
+    line: int
+    col: int
+
+
 TypeExpr = Union[TypeName, TypeFuture, TypeCallable, TypeList, TypeOption, TypeResult, TypeDict,
-                 TypeTuple, TypeChannel]
+                 TypeTuple, TypeChannel, TypePtr]
 
 
 # ----- Expressions -----
@@ -521,6 +529,8 @@ class FuncDef:
     body: List[Stmt]
     line: int
     col: int
+    # `extern "c" def ...` (spec 74): the C symbol it names; the body is empty.
+    extern_symbol: Optional[str] = None
 
 
 @dataclass

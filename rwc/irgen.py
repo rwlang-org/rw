@@ -51,6 +51,8 @@ def llvm_type_of(t: T.Type) -> ir.Type:
         return F64
     if t is T.BOOL:
         return I8  # ABI: pass bool as i8
+    if isinstance(t, T.PtrType):
+        return I8P  # an opaque C pointer (spec 74)
     if t is T.STRING:
         return RW_STR_TY
     if t is T.BYTES:
@@ -163,6 +165,11 @@ class IRGen:
             m, ir.FunctionType(RW_STR_TY, [I64]), "rw_str_from_int")
         self._rw_str_from_u64 = ir.Function(
             m, ir.FunctionType(RW_STR_TY, [I64]), "rw_str_from_u64")
+        # C interop (spec 74)
+        self._rw_cstr = ir.Function(m, ir.FunctionType(I8P, [RW_STR_TY]), "rw_cstr")
+        self._rw_str_from_cstr = ir.Function(m, ir.FunctionType(RW_STR_TY, [I8P]), "rw_str_from_cptr")
+        self._rw_bytes_from_ptr = ir.Function(
+            m, ir.FunctionType(RW_STR_TY, [I8P, I64]), "rw_bytes_from_ptr")
         # conversions and string ordering (spec 26)
         self._rw_str_from_float = ir.Function(
             m, ir.FunctionType(RW_STR_TY, [F64]), "rw_str_from_float")
@@ -442,6 +449,9 @@ class IRGen:
                 param_tys = [llvm_type_of(pt) for _, pt in sig.params]
                 ret_ll = llvm_type_of(sig.return_type)
                 fty = ir.FunctionType(ret_ll, param_tys)
+                if ast_fn.extern_symbol is not None:
+                    self.funcs[key] = self._declare_extern(ast_fn.extern_symbol, fty, sig)
+                    continue
                 fn = ir.Function(self.mod, fty, self._symbol(key))
                 for i, (pname, _) in enumerate(sig.params):
                     fn.args[i].name = pname
@@ -450,7 +460,8 @@ class IRGen:
         # Second pass: emit bodies.
         for mod_name, mod in self._all_modules:
             for ast_fn in mod.functions:
-                self._emit_function((mod_name, ast_fn.name), ast_fn)
+                if ast_fn.extern_symbol is None:
+                    self._emit_function((mod_name, ast_fn.name), ast_fn)
         # Closure bodies (spec 71), including closures created inside them.
         while self._pending_closures:
             self._emit_closure(self._pending_closures.pop(0))
@@ -458,6 +469,29 @@ class IRGen:
         # Synthesize the real C @main.
         self._emit_c_main()
         return self.mod
+
+    def _declare_extern(self, symbol: str, fty: ir.FunctionType, sig) -> ir.Function:
+        """`declare` a C function (spec 74). Sema has checked that every
+        declaration of one symbol has the same signature. Integers narrower
+        than 32 bits and bools carry signext / zeroext, as clang emits them,
+        so the C ABI's promotion to int is done by the caller."""
+        if symbol in self.mod.globals:
+            return self.mod.get_global(symbol)
+        fn = ir.Function(self.mod, fty, symbol)
+
+        def ext(t: T.Type) -> Optional[str]:
+            if t is T.BOOL:
+                return "zeroext"
+            if isinstance(t, T.IntType) and t.bits < 32:
+                return "signext" if t.signed else "zeroext"
+            return None
+        for i, (pname, pt) in enumerate(sig.params):
+            fn.args[i].name = pname
+            if ext(pt):
+                fn.args[i].add_attribute(ext(pt))
+        if ext(sig.return_type):
+            fn.return_value.add_attribute(ext(sig.return_type))
+        return fn
 
     # ---------- C main shim ----------
     def _emit_c_main(self) -> None:
@@ -1334,7 +1368,7 @@ class IRGen:
                     "==": "==", "!=": "!=",
                 }[op]
                 i1 = b.fcmp_ordered(pred, l, r)
-            elif lty is T.BOOL and op in ("==", "!="):
+            elif (lty is T.BOOL or isinstance(lty, T.PtrType)) and op in ("==", "!="):
                 i1 = b.icmp_unsigned(op, l, r)
             elif is_str and op in ("<", "<=", ">", ">="):
                 cmp = b.call(self._rw_str_cmp, [l, r])
@@ -1378,6 +1412,20 @@ class IRGen:
             return b.select(is_true, self._emit_string_literal("true", b),
                             self._emit_string_literal("false", b))
         return v
+
+    def _emit_ptr_builtin(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
+        """C pointer helpers (spec 74)."""
+        b = ctx.builder
+        if call.callee == "ptr_null":
+            return ir.Constant(I8P, None)
+        args = [self._emit_expr(a, ctx) for a in call.args]
+        if call.callee == "ptr_is_null":
+            return b.zext(b.icmp_unsigned("==", args[0], ir.Constant(I8P, None)), I8)
+        if call.callee == "bytes_ptr":
+            return b.extract_value(args[0], 1)   # the data pointer of {len, ptr}
+        fn = {"cstr": self._rw_cstr, "str_from_cstr": self._rw_str_from_cstr,
+              "bytes_from_ptr": self._rw_bytes_from_ptr}[call.callee]
+        return b.call(fn, args)
 
     @staticmethod
     def _int_cast(b: ir.IRBuilder, v: ir.Value, src: T.IntType, dst: T.IntType) -> ir.Value:
@@ -1463,6 +1511,8 @@ class IRGen:
                 ctx.builder.store(v, slot)
                 return ctx.builder.call(self._rw_list_int_len, [slot])
             return ctx.builder.call(self._rw_str_len, [v])
+        if call.callee in ("ptr_null", "ptr_is_null", "cstr", "str_from_cstr", "bytes_ptr", "bytes_from_ptr"):
+            return self._emit_ptr_builtin(call, ctx)
         if call.callee in ("bytes_from_str", "str_from_bytes"):
             # Both are noops at the IR level: the value carries the
             # same {len, ptr} layout, only the sema type changes.

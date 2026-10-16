@@ -106,6 +106,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "str_find", "str_slice", "str_starts_with", "str_from_int", "str_to_int",
     "int", "float", "str",
     "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
+    "ptr_null", "ptr_is_null", "cstr", "str_from_cstr", "bytes_ptr", "bytes_from_ptr",
     "str_split", "str_join", "str_strip", "str_replace", "str_lower", "str_upper",
     "str_contains", "str_ends_with",
     "str_lstrip", "str_rstrip", "str_rfind",
@@ -132,6 +133,10 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
 
 # Binary operators whose result has the type of their operands.
 _INT_RESULT_OPS = frozenset({"+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"})
+
+
+def _ffi_type(t: T.Type) -> bool:
+    return T.is_integer(t) or t is T.FLOAT or t is T.BOOL or isinstance(t, T.PtrType)
 
 
 def _is_int_literal(e: A.Expr) -> bool:
@@ -165,7 +170,13 @@ for _name, _ity in T.INT_TYPE_NAMES.items():
 
 # Fixed signatures (parameter types, return type) for builtins that need no
 # special-casing beyond argument count and type checks. See spec 18.
+_PTR_U8 = T.PtrType(T.U8)
 _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
+    # C interop (spec 74)
+    "cstr": ((T.STRING,), _PTR_U8),
+    "str_from_cstr": ((_PTR_U8,), T.STRING),
+    "bytes_ptr": ((T.BYTES,), _PTR_U8),
+    "bytes_from_ptr": ((_PTR_U8, T.INT), T.BYTES),
     "str_find": ((T.STRING, T.STRING), T.INT),
     "str_slice": ((T.STRING, T.INT, T.INT), T.STRING),
     "str_starts_with": ((T.STRING, T.STRING), T.BOOL),
@@ -343,6 +354,8 @@ class Sema:
                 self.filename, ty.line, ty.col, len(ty.name), f"unknown type: {ty.name}",
                 help=did_you_mean(ty.name, [*_BUILTIN_TYPES, *self.type_alias_map, *self.class_map]),
             ))
+        if isinstance(ty, A.TypePtr):
+            return T.PtrType(self._resolve_type(ty.elem))
         if isinstance(ty, A.TypeChannel):
             elem = self._resolve_type(ty.elem)
             if elem is T.VOID:
@@ -505,6 +518,18 @@ class Sema:
                         self.filename, fn.line, fn.col, len(fn.name),
                         f"duplicate function: {fn.name}",
                     ))
+                if fn.extern_symbol is not None and (fn.extern_symbol == "main"
+                                                     or fn.extern_symbol.startswith("rw_")):
+                    raise CompileError(Diagnostic(
+                        self.filename, fn.line, fn.col, len(fn.name),
+                        f"C symbol `{fn.extern_symbol}` is reserved by the rw runtime",
+                    ))
+                if fn.extern_symbol is not None and fn.name in _BUILTIN_FUNCS:
+                    raise CompileError(Diagnostic(
+                        self.filename, fn.line, fn.col, len(fn.name),
+                        f"`{fn.name}` is a builtin; give the extern function another name",
+                        help=f'keep the C symbol with `as`: `extern "c" def c_{fn.name}(...) -> ... as "{fn.name}"`',
+                    ))
                 params: List[Tuple[str, T.Type]] = []
                 seen: set[str] = set()
                 for p in fn.params:
@@ -529,6 +554,8 @@ class Sema:
                         ))
                     params.append((p.name, pt))
                 rt = self._resolve_type(fn.return_type)
+                if fn.extern_symbol is not None:
+                    self._check_extern_types(fn, params, rt)
                 self.result.functions[key] = FuncSig(fn.name, params, rt, fn, mod_name)
 
         # main is required, in the entry module only.
@@ -798,7 +825,37 @@ class Sema:
         self.result.closures[id(node)] = info
         return info
 
+    def _check_extern_types(self, fn: A.FuncDef, params: List[Tuple[str, T.Type]], rt: T.Type) -> None:
+        """Only integers, float, bool, and ptr[T] cross the C boundary (spec 74)."""
+        def bad(t: T.Type, what: str, line: int, col: int, length: int) -> CompileError:
+            hint = None
+            if t is T.STRING:
+                hint = "pass a NUL-terminated copy with `cstr(s)` as a `ptr[u8]`"
+            elif t is T.BYTES:
+                hint = "pass the bytes with `bytes_ptr(b)` as a `ptr[u8]` and the length separately"
+            return CompileError(Diagnostic(
+                self.filename, line, col, length,
+                f"{what} of extern function `{fn.name}` cannot be `{t}`: "
+                "only integers, float, bool, and ptr[T] can be passed to C",
+                help=hint,
+            ))
+        for (pname, pt), prm in zip(params, fn.params, strict=True):
+            if not _ffi_type(pt):
+                raise bad(pt, f"parameter `{pname}`", prm.line, prm.col, len(pname))
+        if rt is not T.VOID and not _ffi_type(rt):
+            raise bad(rt, "the return type", fn.line, fn.col, len(fn.name))
+        others = [(k, s) for k, s in self.result.functions.items()
+                  if s.node.extern_symbol == fn.extern_symbol]
+        for _, other in others:
+            if ([t for _, t in other.params], other.return_type) != ([t for _, t in params], rt):
+                raise CompileError(Diagnostic(
+                    self.filename, fn.line, fn.col, len(fn.name),
+                    f"C symbol `{fn.extern_symbol}` is already declared with a different signature",
+                ))
+
     def _check_func(self, fn: A.FuncDef) -> None:
+        if fn.extern_symbol is not None:
+            return
         self._reject_nested_defer(fn.body, True)
         sig = self.result.functions[(self.current_module, fn.name)]
         # Local scope: param name -> Type. New scopes are pushed for if/while bodies,
@@ -1180,6 +1237,8 @@ class Sema:
             self._is_builtin_call(expr, "dict_new", locals_) or isinstance(expr, A.DictLit)
         ):
             self._type_hints[id(expr)] = expected
+        elif isinstance(expected, T.PtrType) and self._is_builtin_call(expr, "ptr_null", locals_):
+            self._type_hints[id(expr)] = expected
         elif isinstance(expected, T.ChannelType) and self._is_builtin_call(expr, "chan_new", locals_):
             self._type_hints[id(expr)] = expected
         elif isinstance(expected, T.TupleType) and isinstance(expr, A.TupleLit):
@@ -1355,7 +1414,8 @@ class Sema:
                         self.filename, expr.line, expr.col, len(op),
                         f"`{op}` requires same type, found `{lt}` and `{rt}`",
                     ))
-                if not T.is_integer(lt) and lt not in (T.FLOAT, T.BOOL, T.STRING, T.BYTES):
+                if (not T.is_integer(lt) and not isinstance(lt, T.PtrType)
+                        and lt not in (T.FLOAT, T.BOOL, T.STRING, T.BYTES)):
                     raise CompileError(Diagnostic(
                         self.filename, expr.line, expr.col, len(op),
                         f"cannot compare `{lt}` with `{op}`",
@@ -1830,6 +1890,24 @@ class Sema:
                         f"{call.callee} argument {i} must be {want}, found `{at}`",
                     ))
             return ret
+        # C pointers (spec 74): ptr_null() takes the expected ptr type.
+        if call.callee in ("ptr_null", "ptr_is_null"):
+            want = 0 if call.callee == "ptr_null" else 1
+            if len(call.args) != want:
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"{call.callee} takes {want} argument{'s' if want != 1 else ''}, got {len(call.args)}",
+                ))
+            if call.callee == "ptr_null":
+                hint = self._type_hints.get(id(call))
+                return hint if isinstance(hint, T.PtrType) else T.PtrType(T.VOID)
+            at = self._check_expr(fn, call.args[0], locals_)
+            if not isinstance(at, T.PtrType):
+                raise CompileError(Diagnostic(
+                    self.filename, call.line, call.col, len(call.callee),
+                    f"ptr_is_null argument must be a ptr, found `{at}`",
+                ))
+            return T.BOOL
         # Builtin: list_new() -> List[T]. With no expected type (see
         # _check_expr_expect) it is List[int], as before spec 22.
         if call.callee == "list_new":

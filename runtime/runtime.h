@@ -47,6 +47,11 @@ int8_t  rw_str_starts_with(rw_str s, rw_str prefix);
 rw_str  rw_str_from_int   (int64_t n);
 rw_str  rw_str_from_u64   (int64_t n);
 
+/* C interop (spec 74). */
+char   *rw_cstr          (rw_str s);
+rw_str  rw_str_from_cptr (const char *p);
+rw_str  rw_bytes_from_ptr(const char *p, int64_t n);
+
 /* Conversions and ordering (spec 26). */
 rw_str  rw_str_from_float(double v);       /* shortest round-trip text */
 int64_t rw_str_cmp       (rw_str a, rw_str b);  /* <0, 0, >0 by bytes */

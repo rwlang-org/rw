@@ -66,8 +66,8 @@ are no mutable global variables.
 
 | Command | Description |
 |---|---|
-| `rwc build FILE [-o OUT] [-O N] [--unchecked]` | Build an executable. Without `-o`, the output is `FILE` with its extension removed |
-| `rwc run FILE [-O N] [--unchecked]` | Build in a temporary directory, run it, and return its exit status. No arguments can be passed to the program |
+| `rwc build FILE [-o OUT] [-O N] [--unchecked] [-l LIB] [-L DIR]` | Build an executable. Without `-o`, the output is `FILE` with its extension removed. `-l` / `-L` link C libraries ([4.16](#416-calling-c-extern-c)) |
+| `rwc run FILE [-O N] [--unchecked] [-l LIB] [-L DIR]` | Build in a temporary directory, run it, and return its exit status. No arguments can be passed to the program |
 | `rwc check [-q] FILE...` | Type-check only; no IR generation or linking. Prints `FILE: ok` for each file that passes (`-q` suppresses it). Exit status 1 if any file fails |
 | `rwc test [PATH...] [-k SUBSTR] [--timeout SEC] [-v]` | Run the `test_*` functions in `test_*.rw` / `*_test.rw` files ([9.4](#94-tests-rwc-test-and-assert_eq)) |
 | `rwc emit-ir FILE [--unchecked]` | Write the generated LLVM IR to stdout |
@@ -151,7 +151,7 @@ void int float bool string Bytes List Option Result Future
 Some None Ok Err
 ```
 
-`extern` is only reserved; it has no meaning in the grammar.
+`extern` introduces a C function declaration ([4.16](#416-calling-c-extern-c)).
 
 ### 2.5 Names that are special in context
 
@@ -257,6 +257,7 @@ There is no `**`, `//`, `<<=`, `>>=`, `++`, `--`, or `!`.
 | `Future[T]` | `spawn f()` | result of a running fiber |
 | `Channel[T]` | `chan_new(8)` | channel between fibers; reference |
 | `Mutex` | `mutex_new()` | lock; reference |
+| `ptr[T]` | `cstr("hi")` | opaque C pointer ([4.16](#416-calling-c-extern-c)); value |
 | record | `Point(1, 2)` | a type declared with `class`; reference |
 | `void` | — | no value. Only as a return type, a `Callable` return type, and in `Future[void]` |
 
@@ -950,6 +951,39 @@ def main() -> int:
 - A closure cannot be started with `spawn`.
 
 Details: [spec 71](specs/71-closures.md)
+
+### 4.16 Calling C (extern "c")
+
+```rw
+extern "c" def strlen(s: ptr[u8]) -> usize
+extern "c" def getenv(name: ptr[u8]) -> ptr[u8]
+extern "c" def c_write(fd: i32, buf: ptr[u8], n: usize) -> isize as "write"
+
+def main() -> int:
+    print(strlen(cstr("hello")))                     # 5
+    home = getenv(cstr("HOME"))
+    if not ptr_is_null(home):
+        print(str_from_cstr(home))
+    msg = bytes_from_str("to stderr\n")
+    c_write(2, bytes_ptr(msg), usize(len(msg)))
+    return 0
+```
+
+- `extern "c" def name(params) -> R` at module level declares a C function;
+  there is no body. `as "symbol"` gives the C symbol when the rw name differs
+  (needed when the C name is an rw builtin such as `write`).
+- Parameters and the result may be integers ([3.2](#32-int-float-bool)),
+  `float` (`double`), `bool`, and `ptr[T]`. Strings and bytes go through
+  `cstr(s)` (a NUL-terminated copy) and `bytes_ptr(b)`.
+- `ptr[T]` is opaque. Use `ptr_null()`, `ptr_is_null(p)`, `==`,
+  `str_from_cstr(p)` (copy a C string; `""` for NULL), and
+  `bytes_from_ptr(p, n)` (copy n bytes). There is no dereference.
+- libc is always linked. Name other libraries with `-l` / `-L`:
+  `rwc run app.rw -l z`.
+- A C call blocks its worker thread and runs on the fiber's 64 KiB stack.
+  Variadic functions (`printf`) cannot be declared.
+
+Details: [spec 74](specs/74-extern-c.md)
 
 ---
 
@@ -1650,6 +1684,7 @@ inference, no `for`, and so on).
 | Option / Result / match | [10](specs/10-option-type.md), [11](specs/11-result-type.md), [30](specs/30-generic-option-result.md), [38](specs/38-value-match.md) |
 | Syntax | [13](specs/13-for-range-loop.md), [14](specs/14-ternary-expr.md), [27](specs/27-compound-assignment.md), [32](specs/32-local-inference.md), [34](specs/34-fstrings.md), [35](specs/35-constants.md), [41](specs/41-default-keyword-args.md), [47](specs/47-with-defer.md) |
 | Records, function values, closures | [20](specs/20-records.md), [21](specs/21-function-values.md), [33](specs/33-methods.md), [71](specs/71-closures.md) |
+| C interop | [74](specs/74-extern-c.md) |
 | Conversions and arithmetic | [26](specs/26-conversions.md), [42](specs/42-checked-division.md), [73](specs/73-sized-integers.md) |
 | Modules | [17](specs/17-namespaced-imports.md), [54](specs/54-stdlib-bufio.md) |
 | Concurrency | [39](specs/39-sleep-and-clocks.md), [44](specs/44-channels.md), [45](specs/45-await-all-any.md), [46](specs/46-mutex.md) |

@@ -723,3 +723,29 @@ def test_parse_defer_requires_call():
     with pytest.raises(ParserError) as ei:
         parse_src("def main() -> int:\n    defer x\n    return 0\n")
     assert "defer must be followed by a call" in str(ei.value)
+
+
+# ----- extern "c" (spec 74) -----
+
+def test_parse_extern_declarations():
+    mod = parse_src(
+        'extern "c" def strlen(s: ptr[u8]) -> usize\n'
+        'extern "c" def c_write(fd: i32, buf: ptr[u8], n: usize) -> isize as "write"\n\n'
+        "def main() -> int:\n    return 0\n"
+    )
+    strlen, c_write = mod.functions[0], mod.functions[1]
+    assert strlen.extern_symbol == "strlen" and strlen.body == []
+    assert isinstance(strlen.params[0].type_expr, A.TypePtr)
+    assert c_write.name == "c_write" and c_write.extern_symbol == "write"
+    assert mod.functions[2].extern_symbol is None
+
+
+@pytest.mark.parametrize("src, msg", [
+    ('extern "rust" def f() -> void\n', 'unsupported ABI "rust"'),
+    ('extern "c" def f() -> void:\n    pass\n', "an extern function has no body"),
+    ('extern "c" def f(x: int = 1) -> void\n', "cannot have default values"),
+])
+def test_extern_parse_errors(src, msg):
+    with pytest.raises(ParserError) as ei:
+        parse_src(src)
+    assert msg in ei.value.message

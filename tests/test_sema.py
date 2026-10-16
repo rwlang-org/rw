@@ -2359,3 +2359,39 @@ def test_sized_int_mismatch_suggests_conversion():
 def test_function_named_like_an_int_type_is_rejected():
     e = err("def u8(x: int) -> int:\n    return x\n\ndef main() -> int:\n    return 0\n")
     assert "`u8` is an integer type and its conversion function" in e.diagnostic.message
+# ----- extern "c" (spec 74) -----
+
+def test_extern_signature_and_ptr_builtins():
+    res = check(
+        'extern "c" def getenv(name: ptr[u8]) -> ptr[u8]\n'
+        'extern "c" def c_write(fd: i32, buf: ptr[u8], n: usize) -> isize as "write"\n\n'
+        "def main() -> int:\n"
+        '    p = getenv(cstr("HOME"))\n'
+        "    q: ptr[u8] = ptr_null()\n"
+        "    print(ptr_is_null(p) and p == q)\n"
+        '    b = bytes_from_str("x")\n'
+        "    print(c_write(1, bytes_ptr(b), 1) == 1)\n"
+        "    print(str_from_cstr(p) + str_from_bytes(bytes_from_ptr(p, 1)))\n"
+        "    return 0\n"
+    )
+    sig = res.functions[(None, "c_write")]
+    assert [t for _, t in sig.params] == [T.I32, T.PtrType(T.U8), T.U64]
+    assert sig.return_type is T.INT
+    assert res.local_types[(None, "main", "p")] == T.PtrType(T.U8)
+
+
+@pytest.mark.parametrize("decl, msg", [
+    ('extern "c" def puts(s: string) -> i32\n', "parameter `s` of extern function `puts` cannot be `string`"),
+    ('extern "c" def f() -> List[int]\n', "the return type of extern function `f` cannot be `List[int]`"),
+    ('extern "c" def write(fd: i32, b: ptr[u8], n: usize) -> isize\n', "`write` is a builtin"),
+    ('extern "c" def init() -> void as "rw_init"\n', "C symbol `rw_init` is reserved"),
+    ('extern "c" def a(x: i32) -> i32 as "abs"\nextern "c" def b(x: int) -> int as "abs"\n',
+     "C symbol `abs` is already declared with a different signature"),
+])
+def test_extern_errors(decl, msg):
+    assert msg in err(decl + "\ndef main() -> int:\n    return 0\n").diagnostic.message
+
+
+def test_ptr_is_null_needs_a_pointer():
+    e = err("def main() -> int:\n    print(ptr_is_null(3))\n    return 0\n")
+    assert "ptr_is_null argument must be a ptr" in e.diagnostic.message
