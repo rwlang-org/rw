@@ -356,3 +356,24 @@ def test_integer_division_is_checked_unless_unchecked():
     program2 = LoadedProgram(root=ast2, root_name="<root>")
     unchecked = str(generate(program2, analyze_program(program2), checked=False))
     assert "division by zero" not in unchecked
+
+
+# ----- sized integer types (spec 73) -----
+
+def test_sized_ints_use_their_width_and_signedness():
+    ir_text = ir_for(
+        "def f(a: u8, b: u8) -> u8:\n    return a / b\n\n"
+        "def g(a: i32, b: i32) -> bool:\n    return a < b\n\n"
+        "def h(a: u32) -> u32:\n    return a >> 1\n\n"
+        "def main() -> int:\n    return 0\n"
+    )
+    assert 'define i8 @"rw_user_f"(i8 %"a", i8 %"b")' in ir_text
+    assert "udiv i8" in ir_text
+    assert "icmp slt i32" in ir_text
+    assert "lshr i32" in ir_text
+
+
+def test_u64_literal_above_i64_max_is_emitted_as_its_bits():
+    ir_text = ir_for("def main() -> int:\n    x: u64 = 18446744073709551615\n    print(x)\n    return 0\n")
+    assert "i64 -1" in ir_text
+    assert "rw_print_u64" in ir_text

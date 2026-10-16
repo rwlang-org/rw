@@ -52,6 +52,7 @@ syntax keyword rwBuiltin print
 " Types
 " ---------------------------------------------------------------------
 syntax keyword rwType    int float bool string void
+syntax keyword rwType    i8 i16 i32 i64 isize u8 u16 u32 u64 usize
 syntax keyword rwTypeCon Future
 
 " ---------------------------------------------------------------------

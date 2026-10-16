@@ -38,9 +38,15 @@ RW_OPTION_INT_TY = ir.LiteralStructType([I64, I64])  # {tag, payload}
 FN_VALUE_TY = ir.LiteralStructType([I8P, I8P])
 
 
+def _spawn_slot(t: T.Type) -> T.Type:
+    """The type a Future carries through the runtime: every integer type
+    travels as int (spec 73)."""
+    return T.INT if isinstance(t, T.IntType) else t
+
+
 def llvm_type_of(t: T.Type) -> ir.Type:
-    if t is T.INT:
-        return I64
+    if isinstance(t, T.IntType):
+        return I64 if t.bits == 64 else ir.IntType(t.bits)
     if t is T.FLOAT:
         return F64
     if t is T.BOOL:
@@ -133,6 +139,7 @@ class IRGen:
         m = self.mod
         # print
         self._rw_print_i64 = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_print_i64")
+        self._rw_print_u64 = ir.Function(m, ir.FunctionType(ir.VoidType(), [I64]), "rw_print_u64")
         self._rw_print_f64 = ir.Function(m, ir.FunctionType(ir.VoidType(), [F64]), "rw_print_f64")
         self._rw_print_bool = ir.Function(m, ir.FunctionType(ir.VoidType(), [I8]), "rw_print_bool")
         self._rw_print_str = ir.Function(m, ir.FunctionType(ir.VoidType(), [RW_STR_TY]), "rw_print_str")
@@ -154,6 +161,8 @@ class IRGen:
             m, ir.FunctionType(I8, [RW_STR_TY, RW_STR_TY]), "rw_str_starts_with")
         self._rw_str_from_int = ir.Function(
             m, ir.FunctionType(RW_STR_TY, [I64]), "rw_str_from_int")
+        self._rw_str_from_u64 = ir.Function(
+            m, ir.FunctionType(RW_STR_TY, [I64]), "rw_str_from_u64")
         # conversions and string ordering (spec 26)
         self._rw_str_from_float = ir.Function(
             m, ir.FunctionType(RW_STR_TY, [F64]), "rw_str_from_float")
@@ -243,6 +252,8 @@ class IRGen:
         # assert_eq failures (spec 68)
         self._rw_assert_eq_fail_i64 = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [I64, I64, RW_STR_TY]), "rw_assert_eq_fail_i64")
+        self._rw_assert_eq_fail_u64 = ir.Function(
+            m, ir.FunctionType(ir.VoidType(), [I64, I64, RW_STR_TY]), "rw_assert_eq_fail_u64")
         self._rw_assert_eq_fail_f64 = ir.Function(
             m, ir.FunctionType(ir.VoidType(), [F64, F64, RW_STR_TY]), "rw_assert_eq_fail_f64")
         self._rw_assert_eq_fail_bool = ir.Function(
@@ -376,6 +387,7 @@ class IRGen:
             m, ir.FunctionType(ir.VoidType(), [I8P]), "rw_detach")
 
     def _decl_spawn(self, ret_ty: T.Type) -> ir.Function:
+        ret_ty = _spawn_slot(ret_ty)
         key = repr(ret_ty)
         if key in self._spawn_funcs:
             return self._spawn_funcs[key]
@@ -399,6 +411,7 @@ class IRGen:
         return fn
 
     def _decl_await(self, ret_ty: T.Type) -> ir.Function:
+        ret_ty = _spawn_slot(ret_ty)
         key = repr(ret_ty)
         if key in self._await_funcs:
             return self._await_funcs[key]
@@ -727,7 +740,7 @@ class IRGen:
                     if tt is T.STRING:
                         eq = b.icmp_unsigned("!=", b.call(self._rw_str_eq, [v, pv]), ir.Constant(I8, 0))
                     else:
-                        eq = b.icmp_signed("==", v, pv)
+                        eq = b.icmp_unsigned("==", v, pv)
                     hit = eq if hit is None else b.or_(hit, eq)
                 b.cbranch(hit, body_bb, next_bb)
             else:
@@ -897,12 +910,11 @@ class IRGen:
         lt = self.sema.expr_types[id(call.args[0])]
         assert isinstance(lt, T.ListType) and isinstance(lt.elem, T.FutureType)
         inner = lt.elem.inner
-        await_fn = self._decl_await(inner)
         slot = ctx.alloca(RW_LIST_INT_TY)
         b.store(self._emit_expr(call.args[0], ctx), slot)
         if call.callee == "await_any":
             idx = b.call(self._rw_await_any, [slot])
-            value = b.call(await_fn, [self._list_get(ctx, slot, lt, idx)])
+            value = self._await_value(self._list_get(ctx, slot, lt, idx), inner, b)
             tup = ir.Constant(llvm_type_of(T.TupleType([T.INT, inner])), None)
             return b.insert_value(b.insert_value(tup, idx, 0), value, 1)
         out_ty = T.list_of(inner)
@@ -919,7 +931,7 @@ class IRGen:
         i = b.load(idx_slot)
         b.cbranch(b.icmp_signed("<", i, n), body_bb, end_bb)
         b.position_at_end(body_bb)
-        value = b.call(await_fn, [self._list_get(ctx, slot, lt, i)])
+        value = self._await_value(self._list_get(ctx, slot, lt, i), inner, b)
         b.store(self._list_push_value(ctx, b.load(out), out_ty, value), out)
         b.store(b.add(i, ir.Constant(I64, 1)), idx_slot)
         b.branch(cond_bb)
@@ -1117,7 +1129,12 @@ class IRGen:
             assert isinstance(obj_ty, T.ClassType)
             return b.load(self._field_ptr(self._emit_expr(expr.obj, ctx), obj_ty, expr.field, b))
         if isinstance(expr, A.IntLit):
-            return ir.Constant(I64, expr.value)
+            ity = self.sema.expr_types[id(expr)]
+            assert isinstance(ity, T.IntType)
+            # Two's complement in the type's width: u64 values above 2**63 and
+            # the 128 of `-128` (an i8) are stored as their signed equivalent.
+            half = 1 << (ity.bits - 1)
+            return ir.Constant(llvm_type_of(ity), (expr.value + half) % (2 * half) - half)
         if isinstance(expr, A.FloatLit):
             return ir.Constant(F64, expr.value)
         if isinstance(expr, A.BoolLit):
@@ -1167,7 +1184,7 @@ class IRGen:
             v = self._emit_expr(expr.operand, ctx)
             ty = self.sema.expr_types[id(expr.operand)]
             if expr.op == "-":
-                if ty is T.INT:
+                if T.is_integer(ty):
                     return b.neg(v)
                 else:
                     return b.fneg(v)
@@ -1175,7 +1192,7 @@ class IRGen:
                 # v is i8 with 0/1; flip lsb
                 return b.xor(v, ir.Constant(I8, 1))
             if expr.op == "~":
-                # v is i64; bitwise complement
+                # v is an integer; bitwise complement
                 return b.not_(v)
             raise RuntimeError(f"bad unary {expr.op}")
         if isinstance(expr, A.BinOp):
@@ -1272,17 +1289,18 @@ class IRGen:
         r = self._emit_expr(expr.right, ctx)
         lty = self.sema.expr_types[id(expr.left)]
         is_float = lty is T.FLOAT
-        is_int = lty is T.INT
+        is_int = T.is_integer(lty)
+        signed = is_int and lty.signed
         is_str = lty is T.STRING
         is_strlike = lty is T.STRING or lty is T.BYTES
 
         if op in ("/", "%") and is_int and self.checked:
-            return self._checked_int_div(op, l, r, expr, ctx)
+            return self._checked_int_div(op, l, r, lty, expr, ctx)
         if op in ("+", "-", "*", "/", "%"):
             if is_int:
                 table = {
                     "+": b.add, "-": b.sub, "*": b.mul,
-                    "/": b.sdiv, "%": b.srem,
+                    "/": b.sdiv if signed else b.udiv, "%": b.srem if signed else b.urem,
                 }
                 return table[op](l, r)
             if is_float:
@@ -1299,7 +1317,7 @@ class IRGen:
             if is_int:
                 table = {
                     "&": b.and_, "|": b.or_, "^": b.xor,
-                    "<<": b.shl, ">>": b.ashr,
+                    "<<": b.shl, ">>": b.ashr if signed else b.lshr,
                 }
                 return table[op](l, r)
             raise RuntimeError(f"bitwise op {op} on {lty}")
@@ -1309,7 +1327,7 @@ class IRGen:
                 pred = {
                     "<": "<", "<=": "<=", ">": ">", ">=": ">=", "==": "==", "!=": "!=",
                 }[op]
-                i1 = b.icmp_signed(pred, l, r)
+                i1 = b.icmp_signed(pred, l, r) if signed else b.icmp_unsigned(pred, l, r)
             elif is_float:
                 pred = {
                     "<": "<", "<=": "<=", ">": ">", ">=": ">=",
@@ -1333,20 +1351,26 @@ class IRGen:
         raise RuntimeError(f"unknown binop {op}")
 
     def _emit_conversion(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
-        """int(x) / float(x) / str(x) (spec 26)."""
+        """int(x) / u8(x) / ... / float(x) / str(x) (spec 26, 73)."""
         b = ctx.builder
         v = self._emit_expr(call.args[0], ctx)
         at = self.sema.expr_types[id(call.args[0])]
-        if call.callee == "int":
+        if call.callee in T.INT_TYPE_NAMES:
+            dst = T.INT_TYPE_NAMES[call.callee]
             if at is T.FLOAT:
-                return b.fptosi(v, I64)
+                return (b.fptosi if dst.signed else b.fptoui)(v, llvm_type_of(dst))
             if at is T.BOOL:
-                return b.zext(v, I64)
-            return v
+                return b.zext(v, llvm_type_of(dst)) if dst.bits > 8 else v
+            assert isinstance(at, T.IntType)
+            return self._int_cast(b, v, at, dst)
         if call.callee == "float":
-            return b.sitofp(v, F64) if at is T.INT else v
-        if at is T.INT:
-            return b.call(self._rw_str_from_int, [v])
+            if isinstance(at, T.IntType):
+                return (b.sitofp if at.signed else b.uitofp)(v, F64)
+            return v
+        if at is T.U64:
+            return b.call(self._rw_str_from_u64, [v])
+        if isinstance(at, T.IntType):
+            return b.call(self._rw_str_from_int, [self._int_cast(b, v, at, T.INT)])
         if at is T.FLOAT:
             return b.call(self._rw_str_from_float, [v])
         if at is T.BOOL:
@@ -1355,11 +1379,21 @@ class IRGen:
                             self._emit_string_literal("false", b))
         return v
 
+    @staticmethod
+    def _int_cast(b: ir.IRBuilder, v: ir.Value, src: T.IntType, dst: T.IntType) -> ir.Value:
+        """Convert between integer types: truncate, or extend by the
+        source's signedness (spec 73)."""
+        if dst.bits == src.bits:
+            return v
+        if dst.bits < src.bits:
+            return b.trunc(v, llvm_type_of(dst))
+        return (b.sext if src.signed else b.zext)(v, llvm_type_of(dst))
+
     def _emit_call(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
         b = ctx.builder
         if (
             call.module is None
-            and call.callee in ("int", "float", "str")
+            and (call.callee in ("float", "str") or call.callee in T.INT_TYPE_NAMES)
             and id(call) not in self.sema.call_resolution
             and id(call) not in self.sema.local_fn_calls
             and id(call) not in self.sema.constructor_calls
@@ -1397,8 +1431,10 @@ class IRGen:
             arg_ast = call.args[0]
             v = self._emit_expr(arg_ast, ctx)
             aty = self.sema.expr_types[id(arg_ast)]
-            if aty is T.INT:
-                ctx.builder.call(self._rw_print_i64, [v])
+            if aty is T.U64:
+                ctx.builder.call(self._rw_print_u64, [v])
+            elif isinstance(aty, T.IntType):
+                ctx.builder.call(self._rw_print_i64, [self._int_cast(b, v, aty, T.INT)])
             elif aty is T.FLOAT:
                 ctx.builder.call(self._rw_print_f64, [v])
             elif aty is T.BOOL:
@@ -1675,8 +1711,12 @@ class IRGen:
         fut = self._emit_expr(expr.target, ctx)
         target_ty = self.sema.expr_types[id(expr.target)]
         assert isinstance(target_ty, T.FutureType)
-        await_fn = self._decl_await(target_ty.inner)
-        return b.call(await_fn, [fut])
+        return self._await_value(fut, target_ty.inner, b)
+
+    def _await_value(self, fut: ir.Value, ty: T.Type, b: ir.IRBuilder) -> ir.Value:
+        """rw_await_<slot>(fut), narrowed back to a sized integer (spec 73)."""
+        v = b.call(self._decl_await(ty), [fut])
+        return self._int_cast(b, v, T.INT, ty) if isinstance(ty, T.IntType) else v
 
     def _get_or_make_trampoline(self, key: FuncKey, sig) -> ir.Function:
         # Each callee gets exactly one trampoline reused at every spawn site.
@@ -1688,7 +1728,7 @@ class IRGen:
         arg_llvm_types = [llvm_type_of(pt) for _, pt in sig.params]
         closure_ty = ir.LiteralStructType(arg_llvm_types) if arg_llvm_types else ir.LiteralStructType([])
         closure_ptr_ty = closure_ty.as_pointer()
-        ret_llvm = llvm_type_of(ret_ty)
+        ret_llvm = llvm_type_of(_spawn_slot(ret_ty))
         fty = ir.FunctionType(ret_llvm, [I8P])
         fn = ir.Function(self.mod, fty, name)
         bb = fn.append_basic_block("entry")
@@ -1704,6 +1744,8 @@ class IRGen:
         b.call(self._free, [fn.args[0]])
         if ret_ty is T.VOID:
             b.ret_void()
+        elif isinstance(ret_ty, T.IntType):
+            b.ret(self._int_cast(b, result, ret_ty, T.INT))   # widened for rw_spawn_i64
         else:
             b.ret(result)
         return fn
@@ -1720,23 +1762,26 @@ class IRGen:
         b.unreachable()
         b.position_at_end(ok)
 
-    def _checked_int_div(self, op: str, l: ir.Value, r: ir.Value, expr: A.BinOp,
+    def _checked_int_div(self, op: str, l: ir.Value, r: ir.Value, ty: T.IntType, expr: A.BinOp,
                          ctx: "FunctionCtx") -> ir.Value:
         """Integer `/` and `%` without LLVM undefined behaviour (spec 42):
-        dividing by zero panics, INT64_MIN / -1 panics (the quotient does not
-        fit), and INT64_MIN % -1 is 0."""
+        dividing by zero panics, MIN / -1 panics for a signed type (the
+        quotient does not fit), and MIN % -1 is 0."""
         b = ctx.builder
+        lt = llvm_type_of(ty)
         where = f"in {ctx.func_key[1]} (line {expr.line})"
-        self._panic_if(b.icmp_signed("==", r, ir.Constant(I64, 0)),
+        self._panic_if(b.icmp_signed("==", r, ir.Constant(lt, 0)),
                        f"division by zero {where}", ctx)
-        minus_one = b.icmp_signed("==", r, ir.Constant(I64, -1))
+        if not ty.signed:
+            return b.udiv(l, r) if op == "/" else b.urem(l, r)
+        minus_one = b.icmp_signed("==", r, ir.Constant(lt, -1))
         if op == "/":
-            overflow = b.and_(b.icmp_signed("==", l, ir.Constant(I64, -(2 ** 63))), minus_one)
+            overflow = b.and_(b.icmp_signed("==", l, ir.Constant(lt, ty.min)), minus_one)
             self._panic_if(overflow, f"integer overflow in division {where}", ctx)
             return b.sdiv(l, r)
-        # x % -1 == 0 for every x; avoid srem's INT64_MIN % -1 trap.
-        safe_r = b.select(minus_one, ir.Constant(I64, 1), r)
-        return b.select(minus_one, ir.Constant(I64, 0), b.srem(l, safe_r))
+        # x % -1 == 0 for every x; avoid srem's MIN % -1 trap.
+        safe_r = b.select(minus_one, ir.Constant(lt, 1), r)
+        return b.select(minus_one, ir.Constant(lt, 0), b.srem(l, safe_r))
 
     def _emit_assert_eq(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
         """assert_eq(a, b) (spec 68): on inequality, print both values (a
@@ -1754,9 +1799,14 @@ class IRGen:
         elif ty is T.BOOL:
             eq = b.icmp_unsigned("==", l, r)
             fail_fn = self._rw_assert_eq_fail_bool
+        elif ty is T.U64:
+            eq = b.icmp_signed("==", l, r)
+            fail_fn = self._rw_assert_eq_fail_u64
         else:
             eq = b.icmp_signed("==", l, r)
             fail_fn = self._rw_assert_eq_fail_i64
+            if isinstance(ty, T.IntType):
+                l, r = self._int_cast(b, l, ty, T.INT), self._int_cast(b, r, ty, T.INT)
         fail = ctx.function.append_basic_block("assert_eq.fail")
         ok = ctx.function.append_basic_block("assert_eq.ok")
         b.cbranch(eq, ok, fail)

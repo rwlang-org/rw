@@ -80,6 +80,9 @@ def conversion_hint(expected: object, found: object) -> Optional[str]:
     """A fix-it hint for a type mismatch between two types, keyed by their
     printed names (spec 49)."""
     e, f = str(expected), str(found)
+    ints = ("int", "i8", "i16", "i32", "u8", "u16", "u32", "u64")
+    if e in ints and f in ints:
+        return f"convert with `{e}(...)` (truncates or wraps if the value does not fit)"
     conv = {"int": "int", "float": "float", "string": "str"}
     if e in conv and f in ("int", "float", "bool") and e != f:
         if e == "int" and f == "float":

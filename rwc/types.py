@@ -27,7 +27,39 @@ class _Primitive(Type):
         self.name = name
 
 
-INT = _Primitive("int")
+class IntType(_Primitive):
+    """An integer type of a fixed width (spec 73). `int` is the 64-bit
+    signed one; `i64` / `isize` name the same object, `usize` names `u64`."""
+
+    def __init__(self, name: str, bits: int, signed: bool) -> None:
+        super().__init__(name)
+        self.bits = bits
+        self.signed = signed
+
+    @property
+    def min(self) -> int:
+        return -(1 << (self.bits - 1)) if self.signed else 0
+
+    @property
+    def max(self) -> int:
+        return (1 << (self.bits - 1)) - 1 if self.signed else (1 << self.bits) - 1
+
+
+INT = IntType("int", 64, True)
+I8 = IntType("i8", 8, True)
+I16 = IntType("i16", 16, True)
+I32 = IntType("i32", 32, True)
+U8 = IntType("u8", 8, False)
+U16 = IntType("u16", 16, False)
+U32 = IntType("u32", 32, False)
+U64 = IntType("u64", 64, False)
+
+# Integer type names, including the aliases (spec 73).
+INT_TYPE_NAMES: Dict[str, IntType] = {
+    "int": INT, "i64": INT, "isize": INT,
+    "i8": I8, "i16": I16, "i32": I32,
+    "u8": U8, "u16": U16, "u32": U32, "u64": U64, "usize": U64,
+}
 FLOAT = _Primitive("float")
 BOOL = _Primitive("bool")
 STRING = _Primitive("string")
@@ -157,9 +189,13 @@ class ChannelType(Type):
         self.name = f"Channel[{elem}]"
 
 
+def is_integer(t: object) -> bool:
+    return isinstance(t, IntType)
+
+
 def is_numeric(t: Type) -> bool:
-    return t is INT or t is FLOAT
+    return is_integer(t) or t is FLOAT
 
 
 def is_printable(t: Type) -> bool:
-    return t in (INT, FLOAT, BOOL, STRING)
+    return is_integer(t) or t in (FLOAT, BOOL, STRING)

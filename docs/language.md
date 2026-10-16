@@ -243,6 +243,7 @@ There is no `**`, `//`, `<<=`, `>>=`, `++`, `--`, or `!`.
 | Type | Example | Semantics |
 |---|---|---|
 | `int` | `42` | 64-bit signed integer; value |
+| `i8` … `i32`, `u8` … `u64` | `x: u8 = 255` | sized integers ([3.2](#32-int-float-bool)); value |
 | `float` | `3.14` | double-precision float; value |
 | `bool` | `true` | value |
 | `string` | `"hi"` | immutable byte string; value |
@@ -262,8 +263,9 @@ There is no `**`, `//`, `<<=`, `>>=`, `++`, `--`, or `!`.
 `void` cannot be the type of a variable, parameter, field, list element, or
 the payload of `Option` and the like.
 
-There are no implicit conversions. Arithmetic cannot mix `int` and `float`
-either; convert explicitly, as in `float(n)`.
+There are no implicit conversions. Arithmetic cannot mix `int` and `float`,
+or two different integer types, either; convert explicitly, as in `float(n)`
+or `int(b)`.
 
 ### 3.2 int, float, bool
 
@@ -275,6 +277,33 @@ either; convert explicitly, as in `float(n)`.
   `1.0 / 0.0` is `inf`.
 - `bool` is only `true` / `false` and does not convert to or from integers
   implicitly (`int(true)` is 1).
+
+**Sized integers.** `i8`, `i16`, `i32`, `u8`, `u16`, `u32`, and `u64` are
+integers of a fixed width; `i64` and `isize` are other names for `int`, and
+`usize` for `u64`. They work wherever `int` does as a value (fields, lists,
+options, channels, `spawn`, value `match`, ...), but indices, `len`, `range`,
+and builtins that take an `int` stay `int`.
+
+- An integer literal takes the integer type the context expects
+  ([3.14](#314-typing-from-the-expected-type)), including the other operand
+  of an operator: in `x + 1` with `x: u8`, `1` is a `u8`. A literal that does
+  not fit is a compile-time error.
+- Arithmetic wraps at the type's width. Unsigned types divide, shift (`>>`
+  is logical), and compare as unsigned. Unary `-` is an error on an unsigned
+  type.
+- Convert with the type's name: `u8(x)`, `int(x)`, `u64(x)`. Between integer
+  types this truncates or extends and keeps the bits (`u8(-1) == 255`,
+  `i8(200) == -56`).
+
+```rw
+def checksum(data: List[u8]) -> u8:
+    s: u8 = 0
+    for x in data:
+        s += x          # wraps modulo 256
+    return s
+```
+
+Details: [spec 73](specs/73-sized-integers.md)
 
 ### 3.3 string and Bytes
 
@@ -500,7 +529,7 @@ references are not allowed; a later alias may refer to an earlier one.
 
 | Types that behave as values | Types that behave as references |
 |---|---|
-| `int`, `float`, `bool`, `string`, `Bytes`, `List[T]`, `tuple[...]`, `Option[T]`, `Result[T, E]` | records, `Dict[K, V]`, `Channel[T]`, `Mutex` |
+| integers, `float`, `bool`, `string`, `Bytes`, `List[T]`, `tuple[...]`, `Option[T]`, `Result[T, E]` | records, `Dict[K, V]`, `Channel[T]`, `Mutex` |
 
 Value types are immutable, so assignment and argument passing behave as
 copies, and nothing the receiver does affects the original variable. Records
@@ -519,10 +548,10 @@ Details: [spec 67](specs/67-garbage-collection.md)
 | Operation | Types |
 |---|---|
 | `==`, `!=` | `int`, `float`, `bool`, `string`, `Bytes` (both sides the same type) |
-| `<`, `<=`, `>`, `>=` | `int`, `float`, `string` (both sides the same type; strings compare byte-wise lexicographically) |
-| `print(x)` | `int`, `float`, `bool`, `string` |
-| `str(x)` | `int`, `float`, `bool`, `string` |
-| `assert_eq(a, b)` | `int`, `float`, `bool`, `string` |
+| `<`, `<=`, `>`, `>=` | integers, `float`, `string` (both sides the same type; strings compare byte-wise lexicographically) |
+| `print(x)` | integers, `float`, `bool`, `string` |
+| `str(x)` | integers, `float`, `bool`, `string` |
+| `assert_eq(a, b)` | integers, `float`, `bool`, `string` |
 
 Lists, dicts, tuples, Option, Result, records, and function values can be
 neither compared nor printed. Write a function when you need to.
@@ -546,11 +575,14 @@ type the context expects.
 | `chan_new(n)` | error |
 | `None`, `Some(x)`, `Ok(x)`, `Err(e)` | the defaults in [3.7](#37-optiont-and-resultt-e) |
 | `lambda ...` | error |
+| an integer literal | `int` |
 
 The contexts that supply an expected type are: an annotated declaration, an
 assignment to an existing variable, `return`, arguments of functions, methods,
 and constructors, elements of list, tuple, and dict literals, the first
 argument of `list_push`, and both branches of a conditional expression.
+For an integer literal, the other operand of an arithmetic, bitwise, or
+comparison operator and the target of a value `match` are also contexts.
 
 ---
 
@@ -952,9 +984,9 @@ syntax error; write `a < b and b < c`.
 
 | Operator | Operands | Result |
 |---|---|---|
-| `+` `-` `*` `/` `%` | two `int`s or two `float`s | the operand type |
+| `+` `-` `*` `/` `%` | two integers of the same type, or two `float`s | the operand type |
 | `+` | two `string`s | the concatenated `string` |
-| unary `-` | `int` or `float` | the same type |
+| unary `-` | a signed integer or `float` | the same type |
 
 For the details of integer arithmetic, see [3.2](#32-int-float-bool).
 
@@ -967,9 +999,10 @@ The result is a `bool`. The allowed types are in the table in
 
 ### 5.4 Bitwise operators
 
-`&`, `|`, `^`, `<<`, `>>`, and unary `~` work on `int` only. `>>` is an
-arithmetic shift (it keeps the sign). The result of a shift by a count outside
-0–63 is unspecified.
+`&`, `|`, `^`, `<<`, `>>`, and unary `~` work on integers; both sides have
+the same type. `>>` is an arithmetic shift (it keeps the sign) on signed types
+and a logical shift on unsigned ones. The result of a shift by a count outside
+0 to bits−1 (0–63 for `int`) is unspecified.
 
 ### 5.5 Logical operators
 
@@ -1021,14 +1054,14 @@ See [2.6](#26-literals).
 
 | Call | Accepts | Result |
 |---|---|---|
-| `int(x)` | `int`, `float`, `bool` | a `float` truncates toward zero; a `bool` gives 0 / 1. The result for NaN or an out-of-range `float` is unspecified |
-| `float(x)` | `int`, `float` | `float` |
-| `str(x)` | `int`, `float`, `bool`, `string` | decimal, the shortest round-trip text ([3.13](#313-equality-ordering-print)), `"true"` / `"false"`, the string itself |
+| `int(x)`, `u8(x)`, … `u64(x)` | integers, `float`, `bool` | another integer is truncated or extended, keeping the bits; a `float` truncates toward zero; a `bool` gives 0 / 1. The result for NaN or an out-of-range `float` is unspecified |
+| `float(x)` | integers, `float` | `float` |
+| `str(x)` | integers, `float`, `bool`, `string` | decimal, the shortest round-trip text ([3.13](#313-equality-ordering-print)), `"true"` / `"false"`, the string itself |
 
 Converting from a string can fail, so use the functions that return an
 `Option`: `str_to_int(s)` and `str_to_float(s)`.
 
-Details: [spec 26](specs/26-conversions.md)
+Details: [spec 26](specs/26-conversions.md), [spec 73](specs/73-sized-integers.md)
 
 ---
 
@@ -1528,7 +1561,7 @@ first error.
 | `assert` fails | `rw: assertion failed: <message>` | exit status 1 |
 | `assert_eq` fails | `rw: assert_eq failed in <function> (line N)` and both values | exit status 1 |
 | integer division by zero (`/`, `%`) | `rw: assertion failed: division by zero in <function> (line N)` | exit status 1 |
-| `INT64_MIN / -1` | `rw: assertion failed: integer overflow in division in <function> (line N)` | exit status 1 |
+| `INT64_MIN / -1` (the minimum of any signed type divided by -1) | `rw: assertion failed: integer overflow in division in <function> (line N)` | exit status 1 |
 | list index out of range (`xs[i]`, `list_at`) | `rw: list_at: index out of bounds` | abort (SIGABRT) |
 | string index out of range | `rw: string index out of range` | abort |
 | missing dict key (`d[k]`) | `rw: dict key not found: <key>` | abort |
@@ -1617,7 +1650,7 @@ inference, no `for`, and so on).
 | Option / Result / match | [10](specs/10-option-type.md), [11](specs/11-result-type.md), [30](specs/30-generic-option-result.md), [38](specs/38-value-match.md) |
 | Syntax | [13](specs/13-for-range-loop.md), [14](specs/14-ternary-expr.md), [27](specs/27-compound-assignment.md), [32](specs/32-local-inference.md), [34](specs/34-fstrings.md), [35](specs/35-constants.md), [41](specs/41-default-keyword-args.md), [47](specs/47-with-defer.md) |
 | Records, function values, closures | [20](specs/20-records.md), [21](specs/21-function-values.md), [33](specs/33-methods.md), [71](specs/71-closures.md) |
-| Conversions and arithmetic | [26](specs/26-conversions.md), [42](specs/42-checked-division.md) |
+| Conversions and arithmetic | [26](specs/26-conversions.md), [42](specs/42-checked-division.md), [73](specs/73-sized-integers.md) |
 | Modules | [17](specs/17-namespaced-imports.md), [54](specs/54-stdlib-bufio.md) |
 | Concurrency | [39](specs/39-sleep-and-clocks.md), [44](specs/44-channels.md), [45](specs/45-await-all-any.md), [46](specs/46-mutex.md) |
 | I/O and networking | [12](specs/12-netpoller-tcp.md), [15](specs/15-file-io.md), [16](specs/16-async-file-io.md), [25](specs/25-blocking-fd-offload.md), [50](specs/50-dial-listen-open.md), [51](specs/51-io-errors.md), [52](specs/52-write-all.md), [53](specs/53-io-timeouts.md), [56](specs/56-socket-options.md), [69](specs/69-udp.md) |
