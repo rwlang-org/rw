@@ -723,3 +723,15 @@ def test_parse_defer_requires_call():
     with pytest.raises(ParserError) as ei:
         parse_src("def main() -> int:\n    defer x\n    return 0\n")
     assert "defer must be followed by a call" in str(ei.value)
+
+
+# ----- ? error propagation (spec 72) -----
+
+def test_parse_try_postfix():
+    mod = parse_src("def main() -> int:\n    x = f(1)?.n\n    y = xs[0]??\n    return 0\n")
+    x = mod.functions[0].body[0].value
+    assert isinstance(x, A.FieldAccess) and isinstance(x.obj, A.TryExpr)
+    assert isinstance(x.obj.target, A.Call)
+    y = mod.functions[0].body[1].value
+    assert isinstance(y, A.TryExpr) and isinstance(y.target, A.TryExpr)
+    assert isinstance(y.target.target, A.Index)

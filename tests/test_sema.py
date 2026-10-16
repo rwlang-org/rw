@@ -2316,3 +2316,41 @@ def test_await_all_any_errors(body, msg):
 ])
 def test_with_defer_errors(src, msg):
     assert msg in err(src).diagnostic.message
+
+
+# ----- ? error propagation (spec 72) -----
+
+def test_try_payload_types():
+    res = check(
+        "def p(s: string) -> Result[int, string]:\n    return Ok(1)\n\n"
+        "def f() -> Result[string, string]:\n"
+        "    n = p(\"1\")?\n"
+        "    return Ok(f\"{n + 1}\")\n\n"
+        "def g(xs: List[int]) -> Option[bool]:\n"
+        "    v = list_at_opt(xs, 0)?\n"
+        "    return Some(v > 0)\n\n"
+        "def main() -> int:\n    return 0\n"
+    )
+    assert res.functions[(None, "f")].return_type == T.result_of(T.STRING, T.STRING)
+
+
+@pytest.mark.parametrize("src, msg", [
+    ("def main() -> int:\n    x = 3?\n    return x\n",
+     "`?` requires an Option or a Result, found `int`"),
+    ("def main() -> int:\n    x = str_to_int(\"1\")?\n    return x\n",
+     "`?` on `Option[int]` needs the function to return an Option, but it returns `int`"),
+    ("def f() -> Result[int, int]:\n    return Ok(1)\n\n"
+     "def g() -> Result[int, string]:\n    x = f()?\n    return Ok(x)\n\n"
+     "def main() -> int:\n    return 0\n",
+     "needs the function to return `Result[_, int]`, but it returns `Result[int, string]`"),
+    ("def f() -> Option[int]:\n    return None\n\n"
+     "def g() -> Result[int, int]:\n    x = f()?\n    return Ok(x)\n\n"
+     "def main() -> int:\n    return 0\n",
+     "needs the function to return an Option"),
+    ("def f() -> Option[int]:\n    return None\n\n"
+     "def g() -> Option[int]:\n    defer print(f()?)\n    return None\n\n"
+     "def main() -> int:\n    return 0\n",
+     "`?` cannot be used in a deferred statement"),
+])
+def test_try_errors(src, msg):
+    assert msg in err(src).diagnostic.message

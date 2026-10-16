@@ -193,6 +193,14 @@ class AwaitExpr:
 
 
 @dataclass
+class TryExpr:
+    """`expr?`: unwrap an Option / Result or return its None / Err (spec 72)."""
+    target: "Expr"
+    line: int
+    col: int
+
+
+@dataclass
 class SomeExpr:
     arg: "Expr"
     line: int
@@ -294,7 +302,7 @@ class FieldAccess:
 
 Expr = Union[
     IntLit, FloatLit, BoolLit, StringLit, Name,
-    UnaryOp, BinOp, IfExpr, Call, SpawnExpr, AwaitExpr,
+    UnaryOp, BinOp, IfExpr, Call, SpawnExpr, AwaitExpr, TryExpr,
     SomeExpr, NoneExpr,
     OkExpr, ErrExpr,
     FieldAccess, CallValue, ListLit, Index, Slice, DictLit, TupleLit, KeywordArg, Lambda,

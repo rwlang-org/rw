@@ -1186,6 +1186,8 @@ class IRGen:
             return self._emit_spawn(expr, ctx)
         if isinstance(expr, A.AwaitExpr):
             return self._emit_await(expr, ctx)
+        if isinstance(expr, A.TryExpr):
+            return self._emit_try(expr, ctx)
         if isinstance(expr, (A.SomeExpr, A.NoneExpr, A.OkExpr, A.ErrExpr)):
             # Start from all-zero (tag 0) and insert the tag and the payload
             # (spec 30): Some/Ok have tag 1; Some/Ok store at 1, Err at 2.
@@ -1200,6 +1202,26 @@ class IRGen:
         if isinstance(expr, A.IfExpr):
             return self._emit_if_expr(expr, ctx)
         raise RuntimeError(f"unsupported expr: {type(expr).__name__}")
+
+    def _emit_try(self, expr: A.TryExpr, ctx: "FunctionCtx") -> ir.Value:
+        """`x?` (spec 72): on tag 0 return `None` / `Err(e)` from the
+        function, running the pending cleanups like `return`; otherwise the
+        payload at index 1."""
+        b = ctx.builder
+        tgt_ty = self.sema.expr_types[id(expr.target)]
+        v = self._emit_expr(expr.target, ctx)
+        tag = b.extract_value(v, 0)
+        fail_bb = ctx.function.append_basic_block("try.fail")
+        ok_bb = ctx.function.append_basic_block("try.ok")
+        b.cbranch(b.icmp_signed("!=", tag, ir.Constant(I64, 0)), ok_bb, fail_bb)
+        b.position_at_end(fail_bb)
+        out = ir.Constant(llvm_type_of(ctx.return_ty), None)
+        if isinstance(tgt_ty, T.ResultType):
+            out = b.insert_value(out, b.extract_value(v, 2), 2)
+        self._emit_cleanups(ctx, 0)
+        b.ret(out)
+        b.position_at_end(ok_bb)
+        return b.extract_value(v, 1)
 
     def _emit_if_expr(self, expr: A.IfExpr, ctx: "FunctionCtx") -> ir.Value:
         # `then if cond else els` lowered to cbranch + phi, mirroring the

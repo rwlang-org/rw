@@ -1106,7 +1106,14 @@ class Parser:
             self.i += 1  # consume '('
             args = self._parse_arglist()
             atom = A.Call(atom.name, args, atom.line, atom.col)
-        while self.cur.kind in (TokenKind.DOT, TokenKind.LPAREN, TokenKind.LBRACK):
+        while self.cur.kind in (TokenKind.DOT, TokenKind.LPAREN, TokenKind.LBRACK,
+                                TokenKind.QUESTION):
+            if self.cur.kind == TokenKind.QUESTION:
+                # `expr?` propagates None / Err to the caller (spec 72).
+                q = self.cur
+                self.i += 1
+                atom = A.TryExpr(atom, q.line, q.col)
+                continue
             if self.cur.kind == TokenKind.LBRACK:
                 atom = self._parse_subscript(atom)
                 continue

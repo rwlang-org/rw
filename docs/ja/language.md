@@ -220,7 +220,7 @@ Some None Ok Err
 +  -  *  /  %  &  |  ^  ~  <<  >>
 == !=  <  <=  >  >=
 =  +=  -=  *=  /=  %=  &=  |=  ^=
-(  )  [  ]  {  }  ,  :  .  ->
+(  )  [  ]  {  }  ,  :  .  ->  ?
 ```
 
 `**`、`//`、`<<=`、`>>=`、`++`、`--`、`!` はありません。
@@ -373,7 +373,7 @@ def main() -> int:
 
 `Option[T]` は `Some(x)` か `None`、`Result[T, E]` は `Ok(x)` か `Err(e)` です。
 `T` と `E` は `void` 以外の任意の型で、入れ子にできます。中身を取り出すには
-`match` を使います（[4.10](#410-match)）。`==` と `print` は使えず、
+`match` を使うか、`?` で呼び出し元へ伝播します（後述）。`==` と `print` は使えず、
 `unwrap` のようなメソッドもありません。
 
 `None`、`Some(...)`、`Ok(...)`、`Err(...)` は期待型があればその型になります。
@@ -399,8 +399,24 @@ def main() -> int:
     return 0
 ```
 
+**`?` による伝播** `x?` は `Some` / `Ok` の中身を取り出します。`x` が
+`None` や `Err(e)` のときは、それを囲む関数（最も内側の `def` か `lambda`）が
+代わりに `None` / `Err(e)` を返します。このとき `return` と同じく、保留中の
+`defer` と `with` の後始末が実行されます。`Option` に使うときは関数の戻り値も
+`Option`、`Result[T, E]` に使うときは同じ `E` を持つ `Result[_, E]` で
+なければなりません。`?` は呼び出しやフィールドアクセスと同じ強さで結合します
+（`f(x)?.name`）。`await` した値を取り出すには `(await fut)?` と書きます。
+`defer` の中では使えません。
+
+```rw
+def add(a: string, b: string) -> Result[int, string]:
+    x = parse(a)?        # a が数でなければ Err(...) を返す
+    y = parse(b)?
+    return Ok(x + y)
+```
+
 詳細: [spec 10](../specs/10-option-type.md)、[spec 11](../specs/11-result-type.md)、
-[spec 30](../specs/30-generic-option-result.md)
+[spec 30](../specs/30-generic-option-result.md)、[spec 72](../specs/72-error-handling.md)
 
 ### 3.8 Callable（関数値）
 
@@ -908,7 +924,7 @@ def main() -> int:
 | 11 | `+` `-` | 左結合 |
 | 12 | `*` `/` `%` | 左結合 |
 | 13 | 単項 `-` `~`、`await`、`spawn` | 前置 |
-| 14 | 呼び出し `f(...)`、インデックス `x[i]`、スライス `x[a:b]`、フィールド `x.f` | 左結合 |
+| 14 | 呼び出し `f(...)`、インデックス `x[i]`、スライス `x[a:b]`、フィールド `x.f`、`x?` | 左結合 |
 
 ビット演算子は比較より強く結合します（Python と同じで、C とは異なります）。
 `x & 1 == 1` は `(x & 1) == 1` です。比較の連鎖 `a < b < c` は構文エラー
@@ -1472,7 +1488,9 @@ IPv6 は `tcp://[::1]:80` のように角括弧で囲みます。`listen` では
 
 rw に例外はありません。失敗しうる操作は `Option` / `Result` か -1 などの
 番兵値で結果を返し、回復できない誤りはプロセスを終了させます（パニック）。
-パニックを捕まえる手段はありません。
+パニックを捕まえる手段はありません。`x?` で `None` / `Err` を呼び出し元へ
+伝播できます（[3.7](#37-optiont-と-resultt-e)）。この設計の理由と、API ごとに
+どの仕組みを使うべきかは [spec 72](../specs/72-error-handling.md) にあります。
 
 ### 9.1 コンパイル時のエラー
 
@@ -1570,7 +1588,7 @@ def test_add() -> void:
 | ファイバーとスケジューラ | [05](../specs/05-fibers.md), [06](../specs/06-scheduler-mn.md), [19](../specs/19-fiber-lifecycle.md), [23](../specs/23-preemption.md), [24](../specs/24-park-after-save.md) |
 | 文字列と Bytes | [07](../specs/07-string-builtins.md), [08](../specs/08-bytes-type.md), [18](../specs/18-string-search.md), [28](../specs/28-string-builtins.md), [55](../specs/55-string-extras.md) |
 | コレクション | [09](../specs/09-list-type.md), [22](../specs/22-generic-list.md), [29](../specs/29-list-syntax.md), [31](../specs/31-dict.md), [36](../specs/36-dict-literals.md), [37](../specs/37-tuples.md) |
-| Option / Result / match | [10](../specs/10-option-type.md), [11](../specs/11-result-type.md), [30](../specs/30-generic-option-result.md), [38](../specs/38-value-match.md) |
+| Option / Result / match | [10](../specs/10-option-type.md), [11](../specs/11-result-type.md), [30](../specs/30-generic-option-result.md), [38](../specs/38-value-match.md), [72](../specs/72-error-handling.md) |
 | 構文 | [13](../specs/13-for-range-loop.md), [14](../specs/14-ternary-expr.md), [27](../specs/27-compound-assignment.md), [32](../specs/32-local-inference.md), [34](../specs/34-fstrings.md), [35](../specs/35-constants.md), [41](../specs/41-default-keyword-args.md), [47](../specs/47-with-defer.md) |
 | レコード・関数値・クロージャ | [20](../specs/20-records.md), [21](../specs/21-function-values.md), [33](../specs/33-methods.md), [71](../specs/71-closures.md) |
 | 変換と演算 | [26](../specs/26-conversions.md), [42](../specs/42-checked-division.md) |
