@@ -494,6 +494,12 @@ class Sema:
                         self.filename, fn.line, fn.col, len(fn.name),
                         f"`{fn.name}` is already a class",
                     ))
+                if fn.name in T.INT_TYPE_NAMES:
+                    raise CompileError(Diagnostic(
+                        self.filename, fn.line, fn.col, len(fn.name),
+                        f"`{fn.name}` is an integer type and its conversion function; "
+                        "a function cannot use this name",
+                    ))
                 if key in self.result.functions:
                     raise CompileError(Diagnostic(
                         self.filename, fn.line, fn.col, len(fn.name),

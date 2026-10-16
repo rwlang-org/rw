@@ -2354,3 +2354,8 @@ def test_sized_int_errors(body, msg):
 def test_sized_int_mismatch_suggests_conversion():
     e = err("def main() -> int:\n    a: i32 = 1\n    b: int = a\n    return 0\n")
     assert "convert with `int(...)`" in e.diagnostic.help
+
+
+def test_function_named_like_an_int_type_is_rejected():
+    e = err("def u8(x: int) -> int:\n    return x\n\ndef main() -> int:\n    return 0\n")
+    assert "`u8` is an integer type and its conversion function" in e.diagnostic.message
