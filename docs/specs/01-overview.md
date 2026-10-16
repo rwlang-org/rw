@@ -58,5 +58,5 @@ spawn_string) should be **green on both macOS arm64 and Linux x86_64**.
 - GC (leaks are tolerated for now; only Future and malloc/free pairs are managed)
 - String concatenation / slicing
 - Direct Python calls (to be supported later via `extern "c"` + process isolation)
-- Exceptions / Result type
+- Exceptions / Result type (Result was added later; rw has no exceptions — see 72-error-handling.md)
 - Multi-error recovery (the MVP stops at the first error)

@@ -229,7 +229,7 @@ Details: [spec 34](specs/34-fstrings.md)
 +  -  *  /  %  &  |  ^  ~  <<  >>
 == !=  <  <=  >  >=
 =  +=  -=  *=  /=  %=  &=  |=  ^=
-(  )  [  ]  {  }  ,  :  .  ->
+(  )  [  ]  {  }  ,  :  .  ->  ?
 ```
 
 There is no `**`, `//`, `<<=`, `>>=`, `++`, `--`, or `!`.
@@ -385,8 +385,8 @@ Details: [spec 37](specs/37-tuples.md)
 
 `Option[T]` is `Some(x)` or `None`; `Result[T, E]` is `Ok(x)` or `Err(e)`. `T`
 and `E` are any non-void types and may nest. The payload is taken out with
-`match` ([4.10](#410-match)). There is no `==`, no `print`, and no method such
-as `unwrap`.
+`match` ([4.10](#410-match)) or forwarded with `?` (below). There is no `==`,
+no `print`, and no method such as `unwrap`.
 
 `None`, `Some(...)`, `Ok(...)`, and `Err(...)` take the expected type when
 there is one. Without one, `Some(x)` is `Option[type of x]`, `None` is
@@ -411,8 +411,23 @@ def main() -> int:
     return 0
 ```
 
+**Propagating with `?`.** `x?` takes the payload of `Some` / `Ok`. When `x`
+is `None` or `Err(e)`, the enclosing function (the innermost `def` or
+`lambda`) returns `None` / `Err(e)` instead, running pending `defer`s and
+`with` cleanups as `return` does. On an `Option`, the function must return
+an `Option`; on a `Result[T, E]`, it must return a `Result[_, E]` with the
+same `E`. `?` binds like a call or a field access (`f(x)?.name`); write
+`(await fut)?` to unwrap an awaited value. It cannot appear in a `defer`.
+
+```rw
+def add(a: string, b: string) -> Result[int, string]:
+    x = parse(a)?        # returns Err(...) if a is not a number
+    y = parse(b)?
+    return Ok(x + y)
+```
+
 Details: [spec 10](specs/10-option-type.md), [spec 11](specs/11-result-type.md),
-[spec 30](specs/30-generic-option-result.md)
+[spec 30](specs/30-generic-option-result.md), [spec 72](specs/72-error-handling.md)
 
 ### 3.8 Callable (function values)
 
@@ -942,7 +957,7 @@ Lower rows bind tighter.
 | 11 | `+` `-` | left |
 | 12 | `*` `/` `%` | left |
 | 13 | unary `-` `~`, `await`, `spawn` | prefix |
-| 14 | call `f(...)`, index `x[i]`, slice `x[a:b]`, field `x.f` | left |
+| 14 | call `f(...)`, index `x[i]`, slice `x[a:b]`, field `x.f`, `x?` | left |
 
 Bitwise operators bind tighter than comparisons (as in Python, unlike C):
 `x & 1 == 1` is `(x & 1) == 1`. Chained comparisons such as `a < b < c` are a
@@ -1513,7 +1528,10 @@ Details: [spec 67](specs/67-garbage-collection.md)
 
 rw has no exceptions. Operations that can fail return their outcome as an
 `Option` / `Result` or a sentinel such as -1, and unrecoverable mistakes end
-the process (a panic). A panic cannot be caught.
+the process (a panic). A panic cannot be caught. `x?` forwards a `None` /
+`Err` to the caller ([3.7](#37-optiont-and-resultt-e)). The reasoning, and
+which mechanism an API should use, are in
+[spec 72](specs/72-error-handling.md).
 
 ### 9.1 Compile-time errors
 
@@ -1614,7 +1632,7 @@ inference, no `for`, and so on).
 | Fibers and scheduler | [05](specs/05-fibers.md), [06](specs/06-scheduler-mn.md), [19](specs/19-fiber-lifecycle.md), [23](specs/23-preemption.md), [24](specs/24-park-after-save.md) |
 | Strings and Bytes | [07](specs/07-string-builtins.md), [08](specs/08-bytes-type.md), [18](specs/18-string-search.md), [28](specs/28-string-builtins.md), [55](specs/55-string-extras.md) |
 | Collections | [09](specs/09-list-type.md), [22](specs/22-generic-list.md), [29](specs/29-list-syntax.md), [31](specs/31-dict.md), [36](specs/36-dict-literals.md), [37](specs/37-tuples.md) |
-| Option / Result / match | [10](specs/10-option-type.md), [11](specs/11-result-type.md), [30](specs/30-generic-option-result.md), [38](specs/38-value-match.md) |
+| Option / Result / match | [10](specs/10-option-type.md), [11](specs/11-result-type.md), [30](specs/30-generic-option-result.md), [38](specs/38-value-match.md), [72](specs/72-error-handling.md) |
 | Syntax | [13](specs/13-for-range-loop.md), [14](specs/14-ternary-expr.md), [27](specs/27-compound-assignment.md), [32](specs/32-local-inference.md), [34](specs/34-fstrings.md), [35](specs/35-constants.md), [41](specs/41-default-keyword-args.md), [47](specs/47-with-defer.md) |
 | Records, function values, closures | [20](specs/20-records.md), [21](specs/21-function-values.md), [33](specs/33-methods.md), [71](specs/71-closures.md) |
 | Conversions and arithmetic | [26](specs/26-conversions.md), [42](specs/42-checked-division.md) |

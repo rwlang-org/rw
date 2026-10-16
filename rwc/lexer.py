@@ -117,6 +117,7 @@ class TokenKind(Enum):
     PIPE = auto()  # |
     CARET = auto()  # ^
     TILDE = auto()  # ~
+    QUESTION = auto()  # ? (error propagation, spec 72)
     LSHIFT = auto()  # <<
     RSHIFT = auto()  # >>
 
@@ -595,6 +596,7 @@ class Lexer:
             "|": TokenKind.PIPE,
             "^": TokenKind.CARET,
             "~": TokenKind.TILDE,
+            "?": TokenKind.QUESTION,
         }
         if two in two_char:
             self._advance()

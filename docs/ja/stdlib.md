@@ -71,6 +71,8 @@ from json import Value, parse  # parse(...), Value
 
 ## モジュール共通の約束事
 
+これらは [spec 72](../specs/72-error-handling.md) のエラー処理ガイドラインに従っています。`Option` や `Result[_, string]` を返す関数の中では、`?` で失敗を伝播できます（`v = json.parse(text)?`）。
+
 ### 「無いかもしれない」は `Option`
 
 値が存在しない場合や操作が失敗した場合に `None` を返す関数は `Option[T]` を返します（`fs.read_file`、`fs.stat`、`json.Value.get`、`url.get`、`process.run` など）。`match` で両方の場合を扱ってください。

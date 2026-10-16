@@ -71,6 +71,8 @@ from json import Value, parse  # parse(...), Value
 
 ## Conventions shared across modules
 
+These follow the error-handling guidelines in [spec 72](specs/72-error-handling.md). Inside a function that itself returns an `Option` or a `Result[_, string]`, `?` forwards a failure: `v = json.parse(text)?`.
+
 ### "Maybe" is `Option`
 
 Functions that return `None` when a value does not exist or an operation fails return `Option[T]` (`fs.read_file`, `fs.stat`, `json.Value.get`, `url.get`, `process.run`, and so on). Handle both cases with `match`:

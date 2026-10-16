@@ -257,6 +257,7 @@ class Sema:
         self.result = SemaResult(filename=filename, functions={})
         # Depth of enclosing loops; break/continue are only valid when > 0.
         self._loop_depth = 0
+        self._in_defer = 0   # > 0 while checking a deferred statement
         # Closures being checked, innermost last (spec 71).
         self._closure_stack: List[_ClosureCtx] = []
         self._closure_counter = 0
@@ -707,6 +708,41 @@ class Sema:
                     help="keep shared mutable state in a record field, or use a different name",
                 ))
 
+    def _check_try(self, fn: A.FuncDef, expr: A.TryExpr, locals_: Dict[str, T.Type]) -> T.Type:
+        """`x?` (spec 72): the payload of `Some` / `Ok`; `None` / `Err(e)`
+        returns from the enclosing function, which must return an Option, or
+        a Result with the same error type."""
+        tgt = self._check_expr(fn, expr.target, locals_)
+        if self._in_defer:
+            raise CompileError(Diagnostic(
+                self.filename, expr.line, expr.col, 1,
+                "`?` cannot be used in a deferred statement: it runs while the function returns",
+            ))
+        sig = self.result.functions.get((self.current_module, fn.name))
+        ret = sig.return_type if sig is not None else None
+        if isinstance(tgt, T.OptionType):
+            if not isinstance(ret, T.OptionType):
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, 1,
+                    f"`?` on `{tgt}` needs the function to return an Option, "
+                    f"but it returns `{ret if ret is not None else 'nothing'}`",
+                    help="use `match` to handle `None` here",
+                ))
+            return tgt.inner
+        if isinstance(tgt, T.ResultType):
+            if not (isinstance(ret, T.ResultType) and ret.err == tgt.err):
+                raise CompileError(Diagnostic(
+                    self.filename, expr.line, expr.col, 1,
+                    f"`?` on `{tgt}` needs the function to return `Result[_, {tgt.err}]`, "
+                    f"but it returns `{ret if ret is not None else 'nothing'}`",
+                    help="use `match` to handle or convert the `Err` here",
+                ))
+            return tgt.ok
+        raise CompileError(Diagnostic(
+            self.filename, expr.line, expr.col, 1,
+            f"`?` requires an Option or a Result, found `{tgt}`",
+        ))
+
     def _check_closure(self, fn: A.FuncDef, node: object, label: str,
                        params: List[Tuple[str, T.Type]], ret: T.Type, body: List[A.Stmt],
                        outer: Dict[str, T.Type], self_name: Optional[str],
@@ -732,14 +768,15 @@ class Sema:
             self.result.local_types[(self.current_module, qual, pn)] = pt
         ctx = _ClosureCtx(set(candidates), set())
         self._closure_stack.append(ctx)
-        saved_loops = self._loop_depth
+        saved_loops, saved_defer = self._loop_depth, self._in_defer
         self._loop_depth = 0   # break / continue do not cross into a closure
+        self._in_defer = 0
         try:
             self._reject_nested_defer(body, True)
             ended = self._check_block(synth, body, inner, ret)
         finally:
             self._closure_stack.pop()
-            self._loop_depth = saved_loops
+            self._loop_depth, self._in_defer = saved_loops, saved_defer
         if ret is not T.VOID and not ended:
             raise CompileError(Diagnostic(self.filename, line, col, max(1, len(label)),
                                           f"function `{label}` does not return on all paths"))
@@ -867,7 +904,11 @@ class Sema:
             return self._check_value_match(fn, stmt, locals_, ret_ty)
 
         if isinstance(stmt, A.Defer):
-            self._check_stmt(fn, stmt.stmt, locals_, ret_ty)
+            self._in_defer += 1
+            try:
+                self._check_stmt(fn, stmt.stmt, locals_, ret_ty)
+            finally:
+                self._in_defer -= 1
             return False
 
         if isinstance(stmt, A.With):
@@ -1490,6 +1531,8 @@ class Sema:
                     f"`await` requires a Future, found `{tgt}`",
                 ))
             return tgt.inner
+        if isinstance(expr, A.TryExpr):
+            return self._check_try(fn, expr, locals_)
         if isinstance(expr, (A.SomeExpr, A.NoneExpr, A.OkExpr, A.ErrExpr)):
             return self._check_variant(fn, expr, locals_)
         if isinstance(expr, A.IfExpr):

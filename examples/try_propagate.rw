@@ -1,0 +1,52 @@
+# `?` propagates None / Err to the caller (spec 72).
+
+class Point:
+    x: int
+    y: int
+
+def parse_int(s: string) -> Result[int, string]:
+    match str_to_int(s):
+        case Some(v):
+            return Ok(v)
+        case None:
+            return Err(f"not a number: \"{s}\"")
+
+# "x,y" -> Point; each `?` returns the Err as it is.
+def parse_point(s: string) -> Result[Point, string]:
+    defer print(f"parsed {s}")   # runs on the early returns too
+    parts = str_split(s, ",")
+    if len(parts) != 2:
+        return Err(f"expected x,y: \"{s}\"")
+    x = parse_int(parts[0])?
+    y = parse_int(parts[1])?
+    return Ok(Point(x, y))
+
+def sum_points(lines: List[string]) -> Result[int, string]:
+    total = 0
+    for line in lines:
+        total += parse_point(line)?.x    # `?` binds like a call or a field access
+    return Ok(total)
+
+def second(xs: List[int]) -> Option[int]:
+    v = list_at_opt(xs, 1)?
+    return Some(v * 10)
+
+def show(r: Result[int, string]) -> void:
+    match r:
+        case Ok(v):
+            print(f"ok {v}")
+        case Err(e):
+            print(f"error: {e}")
+
+def main() -> int:
+    show(sum_points(["1,2", "3,4"]))
+    show(sum_points(["1,2", "3,x", "5,6"]))
+    show(sum_points(["7"]))
+    h: Callable[[List[int]], Option[int]] = lambda xs: Some(second(xs)? + 1)
+    for xs in [[1, 2], [1]]:
+        match h(xs):
+            case Some(v):
+                print(v)
+            case None:
+                print("none")
+    return 0
