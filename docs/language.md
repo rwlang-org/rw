@@ -1192,6 +1192,39 @@ Details: [spec 12](specs/12-netpoller-tcp.md), [spec 16](specs/16-async-file-io.
 [spec 25](specs/25-blocking-fd-offload.md), [spec 51](specs/51-io-errors.md),
 [spec 53](specs/53-io-timeouts.md)
 
+### 6.8 Cancellation and timeouts
+
+```rw
+def worker() -> int:
+    n = 0
+    while not cancelled():
+        sleep(10)
+        n += 1
+    return n                    # what the worker returns when asked to stop
+
+def main() -> int:
+    f = spawn worker()
+    match await_timeout(f, 100):
+        case Some(n):
+            print(n)
+        case None:
+            cancel(f)           # ask it to stop ...
+            print(await f)      # ... and collect its result
+    return 0
+```
+
+- `cancel(f)` asks the fiber to stop and returns at once. Cancellation is
+  cooperative: the fiber checks `cancelled()` and returns normally, so its
+  `defer`s run and `await f` gives whatever it returned. A fiber blocked in
+  `sleep` or I/O notices only when it next checks.
+- `await_timeout(f, ms) -> Option[T]` is `Some(await f)` if `f` finishes
+  within `ms` milliseconds, else `None`, leaving `f` to be awaited, waited
+  for again, or cancelled. Not for `Future[void]`.
+- `is_done(f) -> bool` tells whether `f` has finished, without waiting.
+- `cancelled()` is `false` on the main thread.
+
+Details: [spec 75](specs/75-cancel-timeout.md)
+
 ---
 
 ## 7. Modules and imports
@@ -1619,7 +1652,7 @@ inference, no `for`, and so on).
 | Records, function values, closures | [20](specs/20-records.md), [21](specs/21-function-values.md), [33](specs/33-methods.md), [71](specs/71-closures.md) |
 | Conversions and arithmetic | [26](specs/26-conversions.md), [42](specs/42-checked-division.md) |
 | Modules | [17](specs/17-namespaced-imports.md), [54](specs/54-stdlib-bufio.md) |
-| Concurrency | [39](specs/39-sleep-and-clocks.md), [44](specs/44-channels.md), [45](specs/45-await-all-any.md), [46](specs/46-mutex.md) |
+| Concurrency | [39](specs/39-sleep-and-clocks.md), [44](specs/44-channels.md), [45](specs/45-await-all-any.md), [46](specs/46-mutex.md), [75](specs/75-cancel-timeout.md) |
 | I/O and networking | [12](specs/12-netpoller-tcp.md), [15](specs/15-file-io.md), [16](specs/16-async-file-io.md), [25](specs/25-blocking-fd-offload.md), [50](specs/50-dial-listen-open.md), [51](specs/51-io-errors.md), [52](specs/52-write-all.md), [53](specs/53-io-timeouts.md), [56](specs/56-socket-options.md), [69](specs/69-udp.md) |
 | OS, processes, file system | [40](specs/40-os-api.md), [43](specs/43-random.md), [57](specs/57-signals-graceful-shutdown.md), [59](specs/59-fs-path.md), [61](specs/61-process.md) |
 | Standard library and web | [58](specs/58-json.md), [60](specs/60-log.md), [62](specs/62-url-web-requests.md), [63](specs/63-web-static-middleware.md), [64](specs/64-web-keepalive.md), [65](specs/65-web-chunked-requests.md), [66](specs/66-template.md) |

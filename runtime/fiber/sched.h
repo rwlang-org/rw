@@ -97,6 +97,11 @@ int8_t rw_sched_is_done(rw_fiber_handle *h);
  * meaningful after rw_sched_is_done(h) returned true. */
 uint64_t rw_sched_finish_seq(rw_fiber_handle *h);
 
+/* Cooperative cancellation (spec 75): cancel() sets a flag on the handle in
+ * O(1); cancelled() reads the current fiber's flag (0 off-fiber). */
+void   rw_sched_cancel(rw_fiber_handle *h);
+int8_t rw_sched_cancelled(void);
+
 /* Number of fiber handles spawned but not yet freed. For tests. */
 int64_t rw_sched_live_fibers(void);
 

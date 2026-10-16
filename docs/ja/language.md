@@ -1156,6 +1156,40 @@ def main() -> int:
 [spec 25](../specs/25-blocking-fd-offload.md)、[spec 51](../specs/51-io-errors.md)、
 [spec 53](../specs/53-io-timeouts.md)
 
+### 6.8 キャンセルとタイムアウト
+
+```rw
+def worker() -> int:
+    n = 0
+    while not cancelled():
+        sleep(10)
+        n += 1
+    return n                    # 止めるよう頼まれたときに返す値
+
+def main() -> int:
+    f = spawn worker()
+    match await_timeout(f, 100):
+        case Some(n):
+            print(n)
+        case None:
+            cancel(f)           # 止めるよう頼み、
+            print(await f)      # その結果を受け取る
+    return 0
+```
+
+- `cancel(f)` はファイバーに停止を頼み、すぐに戻ります。キャンセルは協調的
+  です。ファイバーは `cancelled()` を確認して普通に return するので、`defer`
+  も実行され、`await f` はその戻り値を返します。`sleep` や I/O で待っている
+  ファイバーが気付くのは、次に `cancelled()` を確認したときです。
+- `await_timeout(f, ms) -> Option[T]` は、`f` が `ms` ミリ秒以内に終われば
+  `Some(await f)`、終わらなければ `None` です。`None` のとき `f` はそのまま
+  残り、あとで await したり、再び待ったり、キャンセルしたりできます。
+  `Future[void]` には使えません。
+- `is_done(f) -> bool` は、待たずに `f` が終わったかどうかを返します。
+- メインスレッドでは `cancelled()` は常に `false` です。
+
+詳細: [spec 75](../specs/75-cancel-timeout.md)
+
 ---
 
 ## 7. モジュールと import
@@ -1575,7 +1609,7 @@ def test_add() -> void:
 | レコード・関数値・クロージャ | [20](../specs/20-records.md), [21](../specs/21-function-values.md), [33](../specs/33-methods.md), [71](../specs/71-closures.md) |
 | 変換と演算 | [26](../specs/26-conversions.md), [42](../specs/42-checked-division.md) |
 | モジュール | [17](../specs/17-namespaced-imports.md), [54](../specs/54-stdlib-bufio.md) |
-| 並行処理 | [39](../specs/39-sleep-and-clocks.md), [44](../specs/44-channels.md), [45](../specs/45-await-all-any.md), [46](../specs/46-mutex.md) |
+| 並行処理 | [39](../specs/39-sleep-and-clocks.md), [44](../specs/44-channels.md), [45](../specs/45-await-all-any.md), [46](../specs/46-mutex.md), [75](../specs/75-cancel-timeout.md) |
 | I/O とネットワーク | [12](../specs/12-netpoller-tcp.md), [15](../specs/15-file-io.md), [16](../specs/16-async-file-io.md), [25](../specs/25-blocking-fd-offload.md), [50](../specs/50-dial-listen-open.md), [51](../specs/51-io-errors.md), [52](../specs/52-write-all.md), [53](../specs/53-io-timeouts.md), [56](../specs/56-socket-options.md), [69](../specs/69-udp.md) |
 | OS・プロセス・ファイルシステム | [40](../specs/40-os-api.md), [43](../specs/43-random.md), [57](../specs/57-signals-graceful-shutdown.md), [59](../specs/59-fs-path.md), [61](../specs/61-process.md) |
 | 標準ライブラリ・Web | [58](../specs/58-json.md), [60](../specs/60-log.md), [62](../specs/62-url-web-requests.md), [63](../specs/63-web-static-middleware.md), [64](../specs/64-web-keepalive.md), [65](../specs/65-web-chunked-requests.md), [66](../specs/66-template.md) |

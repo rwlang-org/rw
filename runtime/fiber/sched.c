@@ -145,6 +145,9 @@ struct rw_fiber_handle {
     /* errno of the last I/O builtin this fiber ran (spec 51). Kept on the
      * fiber, not the thread, because a fiber migrates between Ms. */
     int              last_error;
+    /* Set by cancel(f) and read by the fiber itself through cancelled()
+     * (spec 75). Cancellation is cooperative: nothing else looks at it. */
+    _Atomic int      cancel_req;
 };
 
 static _Atomic uint64_t g_finish_seq = 0;
@@ -826,6 +829,15 @@ void rw_sched_detach(rw_fiber_handle *h) {
 
 int8_t rw_sched_is_done(rw_fiber_handle *h) {
     return atomic_load_explicit(&h->state, memory_order_acquire) == RW_FIBER_DONE;
+}
+
+void rw_sched_cancel(rw_fiber_handle *h) {
+    atomic_store_explicit(&h->cancel_req, 1, memory_order_release);
+}
+
+int8_t rw_sched_cancelled(void) {
+    rw_fiber_handle *h = rw_sched_current_fiber();
+    return h != NULL && atomic_load_explicit(&h->cancel_req, memory_order_acquire) != 0;
 }
 
 uint64_t rw_sched_finish_seq(rw_fiber_handle *h) {
