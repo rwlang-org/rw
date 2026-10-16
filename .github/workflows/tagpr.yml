@@ -11,6 +11,8 @@ permissions:
 jobs:
   tagpr:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tagpr.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -18,8 +20,20 @@ jobs:
           # the existing tags and the commits since the latest one.
           fetch-depth: 0
       - uses: Songmu/tagpr@0c4eb5a3b0862693702acea436a7c68bd586530d # v1.21.2
+        id: tagpr
         env:
           # tagpr reads GITHUB_TOKEN from the environment, not from
           # `with:`. The default token granted to the workflow has
           # the permissions we requested above (contents + PRs).
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # When tagpr has just tagged a release, build the binaries and the wheel
+  # and attach them to it (#78).
+  release:
+    needs: tagpr
+    if: needs.tagpr.outputs.tag != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tagpr.outputs.tag }}

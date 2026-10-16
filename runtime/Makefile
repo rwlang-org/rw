@@ -3,7 +3,7 @@ AR      ?= ar
 CFLAGS  ?= -O2 -Wall -Wextra -fPIC -std=c11 -D_GNU_SOURCE
 
 # Boehm GC (spec 67): headers from the bdw-gc install (see scripts/gc-prefix.sh).
-GC_PREFIX ?= $(shell ../scripts/gc-prefix.sh)
+GC_PREFIX ?= $(shell sh ../scripts/gc-prefix.sh)
 CFLAGS  += -I$(GC_PREFIX)/include
 ASFLAGS ?= -O2 -Wall -Wextra -fPIC
 
