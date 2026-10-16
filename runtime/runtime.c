@@ -1070,6 +1070,35 @@ int64_t rw_await_any(const rw_list *futures) {
     }
 }
 
+/* ---- cancellation and timeouts (spec 75) ---- */
+
+void rw_cancel(rw_future_t *f) {
+    rw_sched_cancel((rw_fiber_handle *)f);
+}
+
+int8_t rw_cancelled(void) {
+    return rw_sched_cancelled();
+}
+
+int8_t rw_is_done(rw_future_t *f) {
+    return rw_sched_is_done((rw_fiber_handle *)f);
+}
+
+/* Wait until f finishes or ms milliseconds pass; 1 if it finished. Polls
+ * like rw_await_any: a fiber can sit on one wait list only, and taking it
+ * off again when the deadline passes first would race with the target's
+ * wake-up. The 1 ms sleep parks a fiber (or sleeps the main thread). */
+int8_t rw_wait_timeout(rw_future_t *f, int64_t ms) {
+    rw_fiber_handle *h = (rw_fiber_handle *)f;
+    int64_t deadline = rw_mono_ns() + (ms > 0 ? ms : 0) * 1000000;
+    for (;;) {
+        if (rw_sched_is_done(h)) return 1;
+        int64_t left = deadline - rw_mono_ns();
+        if (left <= 0) return 0;
+        rw_sleep_ms(left < 1000000 ? 0 : 1);
+    }
+}
+
 void    rw_detach    (rw_future_t *f) {
     rw_sched_detach((rw_fiber_handle *)f);
 }

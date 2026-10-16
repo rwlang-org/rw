@@ -251,6 +251,12 @@ rw_str  rw_await_str (rw_future_t *f);
 int64_t rw_await_any(const rw_list *futures);
 /* Drop a Future without awaiting it; the fiber is freed when it finishes. */
 void    rw_detach    (rw_future_t *f);
+
+/* Cooperative cancellation and timed waits (spec 75). */
+void    rw_cancel      (rw_future_t *f);
+int8_t  rw_cancelled   (void);
+int8_t  rw_is_done     (rw_future_t *f);
+int8_t  rw_wait_timeout(rw_future_t *f, int64_t ms);
 void    rw_await_void(rw_future_t *f);
 
 /* process lifecycle (rwc inserts calls in @main) */

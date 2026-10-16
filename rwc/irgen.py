@@ -154,6 +154,11 @@ class IRGen:
             m, ir.FunctionType(I8, [RW_STR_TY, RW_STR_TY]), "rw_str_starts_with")
         self._rw_str_from_int = ir.Function(
             m, ir.FunctionType(RW_STR_TY, [I64]), "rw_str_from_int")
+        # Cancellation and timed waits (spec 75)
+        self._rw_cancel = ir.Function(m, ir.FunctionType(ir.VoidType(), [I8P]), "rw_cancel")
+        self._rw_cancelled = ir.Function(m, ir.FunctionType(I8, []), "rw_cancelled")
+        self._rw_is_done = ir.Function(m, ir.FunctionType(I8, [I8P]), "rw_is_done")
+        self._rw_wait_timeout = ir.Function(m, ir.FunctionType(I8, [I8P, I64]), "rw_wait_timeout")
         # conversions and string ordering (spec 26)
         self._rw_str_from_float = ir.Function(
             m, ir.FunctionType(RW_STR_TY, [F64]), "rw_str_from_float")
@@ -890,6 +895,38 @@ class IRGen:
         if call.callee == "chan_recv":
             return self._chan_recv(ctx, ch, ct)
         return b.call(self._rw_chan_close, [ch])
+    def _emit_future_control(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
+        """cancel / cancelled / is_done / await_timeout (spec 75)."""
+        b = ctx.builder
+        if call.callee == "cancelled":
+            return b.call(self._rw_cancelled, [])
+        fut = self._emit_expr(call.args[0], ctx)
+        if call.callee == "cancel":
+            b.call(self._rw_cancel, [fut])
+            return ir.Constant(I64, 0)
+        if call.callee == "is_done":
+            return b.call(self._rw_is_done, [fut])
+        # await_timeout: Some(await f) if it finishes in time, else None.
+        ms = self._emit_expr(call.args[1], ctx)
+        opt_ty = self.sema.expr_types[id(call)]
+        assert isinstance(opt_ty, T.OptionType)
+        done = b.call(self._rw_wait_timeout, [fut, ms])
+        done_bb = ctx.function.append_basic_block("await_timeout.done")
+        end_bb = ctx.function.append_basic_block("await_timeout.end")
+        start_bb = b.block
+        b.cbranch(b.icmp_unsigned("!=", done, ir.Constant(I8, 0)), done_bb, end_bb)
+        b.position_at_end(done_bb)
+        some = ir.Constant(llvm_type_of(opt_ty), None)
+        some = b.insert_value(some, ir.Constant(I64, 1), 0)
+        some = b.insert_value(some, b.call(self._decl_await(opt_ty.inner), [fut]), 1)
+        done_end = b.block
+        b.branch(end_bb)
+        b.position_at_end(end_bb)
+        phi = b.phi(llvm_type_of(opt_ty))
+        phi.add_incoming(ir.Constant(llvm_type_of(opt_ty), None), start_bb)
+        phi.add_incoming(some, done_end)
+        return phi
+
     def _emit_await_many(self, call: A.Call, ctx: "FunctionCtx") -> ir.Value:
         """await_all: await each Future in order into a List[T].
         await_any: (index, value) of the first Future to finish (spec 45)."""
@@ -1435,6 +1472,8 @@ class IRGen:
             return self._emit_chan_builtin(call, ctx)
         if call.callee in ("await_all", "await_any"):
             return self._emit_await_many(call, ctx)
+        if call.callee in ("cancel", "cancelled", "is_done", "await_timeout"):
+            return self._emit_future_control(call, ctx)
         if call.callee in ("dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values"):
             return self._emit_dict_builtin(call, ctx)
         if call.callee == "os_args":

@@ -2316,3 +2316,33 @@ def test_await_all_any_errors(body, msg):
 ])
 def test_with_defer_errors(src, msg):
     assert msg in err(src).diagnostic.message
+
+
+# ----- cancellation and await_timeout (spec 75) -----
+
+def test_future_control_types():
+    res = check(
+        "def f() -> string:\n    return \"x\"\n\n"
+        "def g() -> void:\n    print(cancelled())\n\n"
+        "def main() -> int:\n"
+        "    a = spawn f()\n"
+        "    b = spawn g()\n"
+        "    cancel(b)\n"
+        "    print(is_done(a))\n"
+        "    r = await_timeout(a, 10)\n"
+        "    await b\n"
+        "    return 0\n"
+    )
+    assert res.local_types[(None, "main", "r")] == T.option_of(T.STRING)
+
+
+@pytest.mark.parametrize("body, msg", [
+    ("    cancel(3)\n", "cancel argument must be a Future, found `int`"),
+    ("    print(cancelled(1))\n", "cancelled takes 0 arguments"),
+    ("    f = spawn v()\n    r = await_timeout(f, 1)\n", "await_timeout needs a Future with a value"),
+    ("    f = spawn i()\n    r = await_timeout(f, 1.5)\n", "timeout must be int milliseconds"),
+])
+def test_future_control_errors(body, msg):
+    src = ("def v() -> void:\n    return\n\ndef i() -> int:\n    return 1\n\n"
+           "def main() -> int:\n" + body + "    return 0\n")
+    assert msg in err(src).diagnostic.message

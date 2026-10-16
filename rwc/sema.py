@@ -113,6 +113,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "rand_int", "rand_float", "rand_seed", "rand_bytes",
     "chan_new", "chan_send", "chan_recv", "chan_close",
     "await_all", "await_any",
+    "cancel", "cancelled", "is_done", "await_timeout",
     "mutex_new", "mutex_lock", "mutex_unlock", "mutex_try_lock",
     "os_args", "os_getenv", "os_setenv", "os_exit", "os_getcwd", "os_chdir",
     "dial", "listen", "accept", "open", "local_addr", "peer_addr",
@@ -706,6 +707,35 @@ class Sema:
                     f"and cannot assign to it (spec 71)",
                     help="keep shared mutable state in a record field, or use a different name",
                 ))
+
+    def _check_future_control(self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]) -> T.Type:
+        """cancel(f), cancelled(), is_done(f), await_timeout(f, ms) (spec 75)."""
+        arity = {"cancel": 1, "cancelled": 0, "is_done": 1, "await_timeout": 2}[call.callee]
+        if len(call.args) != arity:
+            noun = "argument" if arity == 1 else "arguments"
+            raise CompileError(Diagnostic(self.filename, call.line, call.col, len(call.callee),
+                                          f"{call.callee} takes {arity} {noun}, got {len(call.args)}"))
+        if call.callee == "cancelled":
+            return T.BOOL
+        ft = self._check_expr(fn, call.args[0], locals_)
+        if not isinstance(ft, T.FutureType):
+            raise CompileError(Diagnostic(self.filename, call.line, call.col, len(call.callee),
+                                          f"{call.callee} argument must be a Future, found `{ft}`"))
+        if call.callee == "cancel":
+            return T.VOID
+        if call.callee == "is_done":
+            return T.BOOL
+        if ft.inner is T.VOID:
+            raise CompileError(Diagnostic(
+                self.filename, call.line, call.col, len(call.callee),
+                "await_timeout needs a Future with a value, found `Future[void]`",
+                help="wait with `is_done(f)` and `sleep`, then `await f`",
+            ))
+        mt = self._check_expr_expect(fn, call.args[1], locals_, T.INT)
+        if mt is not T.INT:
+            raise CompileError(Diagnostic(self.filename, call.line, call.col, len(call.callee),
+                                          f"await_timeout timeout must be int milliseconds, found `{mt}`"))
+        return T.option_of(ft.inner)
 
     def _check_closure(self, fn: A.FuncDef, node: object, label: str,
                        params: List[Tuple[str, T.Type]], ret: T.Type, body: List[A.Stmt],
@@ -1711,6 +1741,8 @@ class Sema:
             return self._check_dict_builtin(fn, call, locals_)
         if call.callee in ("chan_new", "chan_send", "chan_recv", "chan_close"):
             return self._check_chan_builtin(fn, call, locals_)
+        if call.callee in ("cancel", "cancelled", "is_done", "await_timeout"):
+            return self._check_future_control(fn, call, locals_)
         if call.callee in ("await_all", "await_any"):
             if len(call.args) != 1:
                 raise CompileError(Diagnostic(self.filename, call.line, call.col, len(call.callee),

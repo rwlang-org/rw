@@ -1,0 +1,39 @@
+# Cooperative cancellation and timed awaits (spec 75).
+
+# A worker that polls cancelled() and decides what to return when asked to stop.
+def count_until_cancelled() -> string:
+    n = 0
+    while not cancelled():
+        sleep(1)
+        n += 1
+    return "cancelled" if n > 0 else "cancelled before the first tick"
+
+def slow_square(x: int, ms: int) -> int:
+    sleep(ms)
+    return x * x
+
+def main() -> int:
+    # cancel() only asks; await still returns the function's own result.
+    w = spawn count_until_cancelled()
+    sleep(5)
+    print(is_done(w))                      # false: still counting
+    cancel(w)
+    print(await w)                         # cancelled
+
+    # await_timeout gives None if the future is not done in time; the future
+    # stays valid and can be awaited (or cancelled) later.
+    f = spawn slow_square(12, 300)
+    match await_timeout(f, 10):
+        case Some(v):
+            print(v)
+        case None:
+            print("not yet")
+    match await_timeout(f, 5000):
+        case Some(v):
+            print(v)                       # 144
+        case None:
+            print("still not done")
+
+    # main is not a fiber, so nobody can cancel it.
+    print(cancelled())
+    return 0
