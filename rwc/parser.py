@@ -142,6 +142,8 @@ class Parser:
                 mod.imports.append(self.parse_import())
             elif self.cur.kind == TokenKind.KW_DEF:
                 mod.functions.append(self.parse_func_def())
+            elif self.cur.kind == TokenKind.KW_EXTERN:
+                mod.functions.append(self.parse_extern_def())
             elif self.cur.kind == TokenKind.KW_TYPE:
                 mod.type_aliases.append(self.parse_type_alias())
             elif self.cur.kind == TokenKind.KW_CLASS:
@@ -152,7 +154,7 @@ class Parser:
                 mod.constants.append(self.parse_const_def())
             else:
                 raise ParserError(
-                    "expected 'import', 'def', 'type', 'class', or a constant at module level",
+                    "expected 'import', 'def', 'extern', 'type', 'class', or a constant at module level",
                     self.cur.line,
                     self.cur.col,
                     max(1, len(self.cur.value)),
@@ -294,6 +296,42 @@ class Parser:
         body = self.parse_block()
         return A.FuncDef(name_tok.value, params, ret_ty, body, kw.line, kw.col)
 
+    def parse_extern_def(self) -> A.FuncDef:
+        """`extern "c" def name(p: T, ...) -> R [as "symbol"]` (spec 74): a C
+        function declaration, with no body."""
+        kw = self.eat(TokenKind.KW_EXTERN, "'extern'")
+        abi = self.eat(TokenKind.STRING, "'\"c\"' after extern")
+        if abi.value != "c":
+            raise ParserError(f'unsupported ABI "{abi.value}"; only extern "c" is supported',
+                              abi.line, abi.col, len(abi.value) + 2)
+        if self.cur.kind != TokenKind.KW_DEF:
+            raise ParserError('expected \'def\' after extern "c"', self.cur.line, self.cur.col,
+                              max(1, len(self.cur.value)))
+        name_tok = self.peek(1)
+        self.i += 1  # `def`
+        self.eat(TokenKind.IDENT, "function name")
+        self.eat(TokenKind.LPAREN, "'('")
+        params: List[A.Param] = []
+        if self.cur.kind != TokenKind.RPAREN:
+            params.append(self.parse_param())
+            while self.match(TokenKind.COMMA):
+                params.append(self.parse_param())
+        self.eat(TokenKind.RPAREN, "')'")
+        for prm in params:
+            if prm.default is not None:
+                raise ParserError("an extern function cannot have default values",
+                                  prm.line, prm.col, len(prm.name))
+        self.eat(TokenKind.ARROW, "'->' after parameter list")
+        ret_ty = self.parse_type()
+        symbol = name_tok.value
+        if self.match(TokenKind.KW_AS):
+            symbol = self.eat(TokenKind.STRING, "C symbol name (a string) after 'as'").value
+        if self.cur.kind == TokenKind.COLON:
+            raise ParserError("an extern function has no body; remove the ':'",
+                              self.cur.line, self.cur.col, 1)
+        self.eat(TokenKind.NEWLINE)
+        return A.FuncDef(name_tok.value, params, ret_ty, [], kw.line, kw.col, extern_symbol=symbol)
+
     @staticmethod
     def _check_default_order(params: List[A.Param]) -> None:
         seen_default = False
@@ -387,6 +425,12 @@ class Parser:
             if len(elems) < 2:
                 raise ParserError("a tuple type needs at least two elements", t.line, t.col, len(t.value))
             return A.TypeTuple(elems, t.line, t.col)
+        # `ptr[T]` (spec 74): an opaque C pointer; special only in type position.
+        if t.kind == TokenKind.IDENT and t.value == "ptr" and self.peek(1).kind == TokenKind.LBRACK:
+            self.i += 2
+            elem = self.parse_type()
+            self.eat(TokenKind.RBRACK, "']' to close ptr[...]")
+            return A.TypePtr(elem, t.line, t.col)
         # `Dict[K, V]` (spec 31); like Callable, special only in type position.
         if t.kind == TokenKind.IDENT and t.value == "Dict" and self.peek(1).kind == TokenKind.LBRACK:
             self.i += 2  # `Dict` `[`

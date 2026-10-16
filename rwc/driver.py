@@ -13,7 +13,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from llvmlite import binding as llvm_binding
 
@@ -114,6 +114,8 @@ def compile_source(
     target_triple: Optional[str] = None,
     checked: bool = True,
     opt_level: Optional[int] = None,
+    link_libs: Sequence[str] = (),
+    link_dirs: Sequence[str] = (),
 ) -> CompileResult:
     """Compile a single rw source string to a native executable. `checked`
     keeps the run-time checks for integer division (spec 42). `opt_level`
@@ -152,7 +154,10 @@ def compile_source(
         # to libm calls (e.g. `pow`) by the backend. macOS bundles these in
         # libSystem, but GNU/Linux requires explicit linking against libm.
         level = resolve_opt_level(opt_level)
-        cmd = [clang, f"-O{level}", ll_path, str(librw), "-o", str(output), *gc_link_flags(), "-lpthread", "-lm"]
+        # -L / -l for the C libraries of extern "c" functions (spec 74).
+        user_link = [f"-L{d}" for d in link_dirs] + [f"-l{lib}" for lib in link_libs]
+        cmd = [clang, f"-O{level}", ll_path, str(librw), "-o", str(output), *user_link,
+               *gc_link_flags(), "-lpthread", "-lm"]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             raise CompileError(Diagnostic(

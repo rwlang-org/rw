@@ -237,6 +237,34 @@ static rw_str str_from_buf(const char *buf, int len) {
     return out;
 }
 
+/* ---------- C interop (spec 74) ---------- */
+
+/* A NUL-terminated copy of s on the GC heap. It stays alive while the
+   program holds the pointer; C code must not keep it beyond that. */
+char *rw_cstr(rw_str s) {
+    char *p = (char *)rw_gc_alloc_atomic((size_t)s.len + 1);
+    if (s.len > 0) memcpy(p, s.ptr, (size_t)s.len);
+    p[s.len] = '\0';
+    return p;
+}
+
+/* A copy of the C string p (up to its NUL); "" for NULL. */
+rw_str rw_str_from_cptr(const char *p) {
+    if (p == NULL) return (rw_str){0, NULL};
+    return rw_bytes_from_ptr(p, (int64_t)strlen(p));
+}
+
+/* A copy of n bytes at p; empty for NULL or n <= 0. */
+rw_str rw_bytes_from_ptr(const char *p, int64_t n) {
+    rw_str out = {0, NULL};
+    if (p == NULL || n <= 0) return out;
+    char *q = (char *)rw_gc_alloc_atomic((size_t)n);
+    memcpy(q, p, (size_t)n);
+    out.len = n;
+    out.ptr = q;
+    return out;
+}
+
 rw_str rw_str_from_float(double v) {
     char buf[40];
     /* The fewest significant digits (15..17) that read back as the same

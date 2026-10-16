@@ -63,8 +63,8 @@ def main() -> int:
 
 | コマンド | 説明 |
 |---|---|
-| `rwc build FILE [-o OUT] [-O N] [--unchecked]` | 実行ファイルを作る。`-o` を省略すると `FILE` から拡張子を除いたパス |
-| `rwc run FILE [-O N] [--unchecked]` | 一時ディレクトリでビルドして実行し、その終了ステータスを返す。プログラムへ引数は渡せない |
+| `rwc build FILE [-o OUT] [-O N] [--unchecked] [-l LIB] [-L DIR]` | 実行ファイルを作る。`-o` を省略すると `FILE` から拡張子を除いたパス。`-l` / `-L` で C ライブラリをリンクする（[4.16](#416-c-の呼び出しextern-c)） |
+| `rwc run FILE [-O N] [--unchecked] [-l LIB] [-L DIR]` | 一時ディレクトリでビルドして実行し、その終了ステータスを返す。プログラムへ引数は渡せない |
 | `rwc check [-q] FILE...` | 型検査だけを行う。IR 生成もリンクもしない。成功したファイルごとに `FILE: ok` を表示（`-q` で抑止）。1 つでも失敗すれば終了ステータス 1 |
 | `rwc test [PATH...] [-k SUBSTR] [--timeout SEC] [-v]` | `test_*.rw` / `*_test.rw` 内の `test_*` 関数を実行する（[9.4](#94-テストrwc-test-と-assert_eq)） |
 | `rwc emit-ir FILE [--unchecked]` | 生成した LLVM IR を標準出力に書く |
@@ -142,7 +142,7 @@ void int float bool string Bytes List Option Result Future
 Some None Ok Err
 ```
 
-`extern` は予約されているだけで、構文としての意味はありません。
+`extern` は C 関数の宣言に使います（[4.16](#416-c-の呼び出しextern-c)）。
 
 ### 2.5 文脈で特別扱いされる名前
 
@@ -248,6 +248,7 @@ Some None Ok Err
 | `Future[T]` | `spawn f()` | 実行中のファイバーの結果 |
 | `Channel[T]` | `chan_new(8)` | ファイバー間のチャネル。参照 |
 | `Mutex` | `mutex_new()` | ロック。参照 |
+| `ptr[T]` | `cstr("hi")` | 不透明な C のポインタ（[4.16](#416-c-の呼び出しextern-c)）。値 |
 | レコード | `Point(1, 2)` | `class` で宣言した型。参照 |
 | `void` | — | 戻り値がないことを表す。戻り値の型と `Callable` の戻り値、`Future[void]` にだけ書ける |
 
@@ -913,6 +914,40 @@ def main() -> int:
 - `spawn` でクロージャを起動することはできません。
 
 詳細: [spec 71](../specs/71-closures.md)
+
+### 4.16 C の呼び出し（extern "c"）
+
+```rw
+extern "c" def strlen(s: ptr[u8]) -> usize
+extern "c" def getenv(name: ptr[u8]) -> ptr[u8]
+extern "c" def c_write(fd: i32, buf: ptr[u8], n: usize) -> isize as "write"
+
+def main() -> int:
+    print(strlen(cstr("hello")))                     # 5
+    home = getenv(cstr("HOME"))
+    if not ptr_is_null(home):
+        print(str_from_cstr(home))
+    msg = bytes_from_str("to stderr\n")
+    c_write(2, bytes_ptr(msg), usize(len(msg)))
+    return 0
+```
+
+- モジュールの最上位に `extern "c" def name(引数) -> R` と書くと C 関数を
+  宣言できます。本体はありません。rw での名前と C のシンボル名が異なる
+  ときは `as "シンボル"` で指定します（C の名前が `write` のような rw の
+  組み込み関数と同じ場合に必要です）。
+- 引数と戻り値に使えるのは整数型（[3.2](#32-intfloatbool)）、`float`
+  （`double`）、`bool`、`ptr[T]` です。文字列やバイト列は `cstr(s)`
+  （NUL 終端のコピー）や `bytes_ptr(b)` で渡します。
+- `ptr[T]` は不透明な型です。使えるのは `ptr_null()`、`ptr_is_null(p)`、
+  `==`、`str_from_cstr(p)`（C 文字列のコピー。NULL なら `""`）、
+  `bytes_from_ptr(p, n)`（n バイトのコピー）で、参照外しはできません。
+- libc は常にリンクされます。それ以外のライブラリは `-l` / `-L` で指定します:
+  `rwc run app.rw -l z`。
+- C の呼び出しはワーカースレッドをブロックし、ファイバーの 64 KiB の
+  スタック上で実行されます。可変長引数の関数（`printf`）は宣言できません。
+
+詳細: [spec 74](../specs/74-extern-c.md)
 
 ---
 
@@ -1604,6 +1639,7 @@ def test_add() -> void:
 | Option / Result / match | [10](../specs/10-option-type.md), [11](../specs/11-result-type.md), [30](../specs/30-generic-option-result.md), [38](../specs/38-value-match.md) |
 | 構文 | [13](../specs/13-for-range-loop.md), [14](../specs/14-ternary-expr.md), [27](../specs/27-compound-assignment.md), [32](../specs/32-local-inference.md), [34](../specs/34-fstrings.md), [35](../specs/35-constants.md), [41](../specs/41-default-keyword-args.md), [47](../specs/47-with-defer.md) |
 | レコード・関数値・クロージャ | [20](../specs/20-records.md), [21](../specs/21-function-values.md), [33](../specs/33-methods.md), [71](../specs/71-closures.md) |
+| C との連携 | [74](../specs/74-extern-c.md) |
 | 変換と演算 | [26](../specs/26-conversions.md), [42](../specs/42-checked-division.md), [73](../specs/73-sized-integers.md) |
 | モジュール | [17](../specs/17-namespaced-imports.md), [54](../specs/54-stdlib-bufio.md) |
 | 並行処理 | [39](../specs/39-sleep-and-clocks.md), [44](../specs/44-channels.md), [45](../specs/45-await-all-any.md), [46](../specs/46-mutex.md) |

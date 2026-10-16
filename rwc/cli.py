@@ -40,7 +40,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     out_path = Path(args.output) if args.output else src_path.with_suffix("")
     try:
         compile_source(source, filename=str(src_path), output=out_path,
-                       checked=not args.unchecked, opt_level=args.opt)
+                       checked=not args.unchecked, opt_level=args.opt,
+                       link_libs=args.libs, link_dirs=args.lib_dirs)
     except CompileError as e:
         _report(e, source, src_path)
         return 1
@@ -56,7 +57,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         out = Path(td) / src_path.stem
         try:
             compile_source(source, filename=str(src_path), output=out,
-                           checked=not args.unchecked, opt_level=args.opt)
+                           checked=not args.unchecked, opt_level=args.opt,
+                           link_libs=args.libs, link_dirs=args.lib_dirs)
         except CompileError as e:
             _report(e, source, src_path)
             return 1
@@ -144,6 +146,14 @@ def _format_ast(node, indent: int = 0) -> str:
     return f"{pad}{node!r}"
 
 
+def _add_link_args(p: argparse.ArgumentParser) -> None:
+    """-l / -L for C libraries used through extern "c" (spec 74)."""
+    p.add_argument("-l", dest="libs", action="append", default=[], metavar="LIB",
+                   help="link the C library LIB (repeatable)")
+    p.add_argument("-L", dest="lib_dirs", action="append", default=[], metavar="DIR",
+                   help="add DIR to the library search path (repeatable)")
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="rwc", description="rw language compiler")
     ap.add_argument("--version", action="version", version=f"rwc {__version__}")
@@ -157,6 +167,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_build.add_argument("--unchecked", action="store_true", help=unchecked_help)
     p_build.add_argument("-O", dest="opt", type=int, choices=range(4), default=None, metavar="LEVEL",
                          help=opt_help)
+    _add_link_args(p_build)
     p_build.set_defaults(func=cmd_build)
 
     p_run = sub.add_parser("run", help="compile and run a .rw file")
@@ -164,6 +175,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_run.add_argument("--unchecked", action="store_true", help=unchecked_help)
     p_run.add_argument("-O", dest="opt", type=int, choices=range(4), default=None, metavar="LEVEL",
                        help=opt_help)
+    _add_link_args(p_run)
     p_run.set_defaults(func=cmd_run)
 
     p_ir = sub.add_parser("emit-ir", help="print generated LLVM IR")

@@ -143,3 +143,4 @@ extern "c" def name(arg: int) -> int
 
 This syntax is accepted by the Lexer/Parser but Sema emits a "not implemented" error.
 This is for backward compatibility when it is implemented in Phase 2+.
+(Implemented later, with `ptr[T]` and `as "symbol"`: see 74-extern-c.md.)

@@ -1,0 +1,40 @@
+# Calling C functions with extern "c" (spec 74).
+
+extern "c" def strlen(s: ptr[u8]) -> usize
+extern "c" def abs(x: i32) -> i32
+extern "c" def toupper(c: i32) -> i32
+extern "c" def strtol(s: ptr[u8], end: ptr[ptr[u8]], base: i32) -> int
+extern "c" def malloc(n: usize) -> ptr[u8]
+extern "c" def free(p: ptr[u8]) -> void
+extern "c" def memset(p: ptr[u8], c: i32, n: usize) -> ptr[u8]
+extern "c" def getenv(name: ptr[u8]) -> ptr[u8]
+# `write` is an rw builtin, so the C function gets another name.
+extern "c" def c_write(fd: i32, buf: ptr[u8], n: usize) -> isize as "write"
+
+def shout(s: string) -> string:
+    out = ""
+    for i in range(len(s)):
+        out += chr(int(toupper(i32(byte_at(s, i)))))
+    return out
+
+def main() -> int:
+    print(strlen(cstr("hello")))           # 5
+    print(abs(-42))
+    print(shout("quiet please"))
+    print(strtol(cstr("ff"), ptr_null(), 16))
+
+    # A C buffer: allocate, fill, copy into Bytes, free.
+    buf = malloc(3)
+    memset(buf, 120, 3)                    # 'x'
+    print(str_from_bytes(bytes_from_ptr(buf, 3)))
+    free(buf)
+
+    # A NULL result.
+    home = getenv(cstr("RW_EXAMPLE_UNSET_VARIABLE"))
+    print(ptr_is_null(home))
+    print(str_from_cstr(home) == "")
+
+    msg = bytes_from_str("written by write(2)\n")
+    n = c_write(2, bytes_ptr(msg), usize(len(msg)))
+    print(n == isize(len(msg)))
+    return 0

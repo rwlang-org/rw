@@ -189,6 +189,14 @@ class ChannelType(Type):
         self.name = f"Channel[{elem}]"
 
 
+class PtrType(Type):
+    """`ptr[T]` (spec 74): an opaque C pointer. Compared structurally."""
+
+    def __init__(self, elem: Type) -> None:
+        self.elem = elem
+        self.name = f"ptr[{elem}]"
+
+
 def is_integer(t: object) -> bool:
     return isinstance(t, IntType)
 
