@@ -41,10 +41,11 @@ jobs:
         include:
           - os: macos-latest
             platform: macos-arm64
-          # 22.04 for an older glibc, so the binary runs on more distros.
-          - os: ubuntu-22.04
+          # 24.04: the runtime needs Boehm GC 8.2+ (GC_set_stackbottom),
+          # which 22.04's libgc 8.0 lacks. The binary needs glibc 2.39+.
+          - os: ubuntu-24.04
             platform: linux-x86_64
-          - os: ubuntu-22.04-arm
+          - os: ubuntu-24.04-arm
             platform: linux-arm64
     runs-on: ${{ matrix.os }}
     name: binary (${{ matrix.platform }})

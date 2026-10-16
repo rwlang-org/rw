@@ -6,8 +6,9 @@ standard library. Python is not needed.
 ## Requirements
 
 - clang (or cc): rwc compiles programs to LLVM IR and links them with clang
-- the Boehm GC library and headers: `brew install bdw-gc` (macOS),
-  `sudo apt-get install libgc-dev` (Debian/Ubuntu)
+- the Boehm GC library and headers, version 8.2 or later: `brew install bdw-gc`
+  (macOS), `sudo apt-get install libgc-dev` (Debian 13 / Ubuntu 24.04 or later)
+- Linux: glibc 2.39 or later (the binary is built on Ubuntu 24.04)
 
 ## Install
 

@@ -10,7 +10,7 @@ Each [GitHub Release](https://github.com/rwlang-org/rw/releases) has:
 
 | Asset | What it is | Needs |
 |---|---|---|
-| `rw-<version>-macos-arm64.tar.gz`, `-linux-x86_64`, `-linux-arm64` | standalone `rwc` with the prebuilt runtime and the standard library | clang, Boehm GC (`bdw-gc` / `libgc-dev`) |
+| `rw-<version>-macos-arm64.tar.gz`, `-linux-x86_64`, `-linux-arm64` | standalone `rwc` with the prebuilt runtime and the standard library | clang, Boehm GC 8.2+ (`bdw-gc` / `libgc-dev`); on Linux, glibc 2.39+ (built on Ubuntu 24.04) |
 | `rw-<version>-py3-none-any.whl` | the Python package; the runtime is built on first use | Python 3.11+, clang, make, Boehm GC |
 | `*.sha256`, `SHA256SUMS` | SHA-256 checksums | |
 
