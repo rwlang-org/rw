@@ -234,6 +234,7 @@ Some None Ok Err
 | 型 | 例 | 意味論 |
 |---|---|---|
 | `int` | `42` | 64 ビット符号付き整数。値 |
+| `i8` … `i32`、`u8` … `u64` | `x: u8 = 255` | 幅を指定した整数（[3.2](#32-intfloatbool)）。値 |
 | `float` | `3.14` | 倍精度浮動小数点数。値 |
 | `bool` | `true` | 値 |
 | `string` | `"hi"` | 不変のバイト列。値 |
@@ -253,8 +254,8 @@ Some None Ok Err
 `void` は変数、引数、フィールド、リスト要素、`Option` などの中身には
 使えません。
 
-暗黙の型変換はありません。`int` と `float` を混ぜた演算も書けないので、
-`float(n)` のように明示的に変換します。
+暗黙の型変換はありません。`int` と `float`、あるいは異なる整数型どうしを
+混ぜた演算も書けないので、`float(n)` や `int(b)` のように明示的に変換します。
 
 ### 3.2 int、float、bool
 
@@ -266,6 +267,32 @@ Some None Ok Err
   `1.0 / 0.0` は `inf` です。
 - `bool` は `true` / `false` だけで、整数とは相互に変換されません
   （`int(true)` は 1）。
+
+**幅を指定した整数** `i8`、`i16`、`i32`、`u8`、`u16`、`u32`、`u64` は
+ビット幅が固定の整数です。`i64` と `isize` は `int` の別名、`usize` は
+`u64` の別名です。値としては `int` と同じ場所（フィールド、リスト、
+Option、チャネル、`spawn`、値の `match` など）で使えますが、添字、`len`、
+`range`、`int` を受け取る組み込み関数は `int` のままです。
+
+- 整数リテラルは文脈が期待する整数型になります
+  （[3.14](#314-期待型による型付け)）。演算子のもう一方の項も文脈に含まれ、
+  `x: u8` のとき `x + 1` の `1` は `u8` です。範囲に収まらないリテラルは
+  コンパイルエラーです。
+- 演算は型の幅で折り返します。符号なし型の除算・シフト（`>>` は論理
+  シフト）・比較は符号なしで行います。符号なし型への単項 `-` はエラーです。
+- 変換には型名を使います: `u8(x)`、`int(x)`、`u64(x)`。整数型どうしでは
+  切り詰めるか拡張し、ビット列を保ちます（`u8(-1) == 255`、
+  `i8(200) == -56`）。
+
+```rw
+def checksum(data: List[u8]) -> u8:
+    s: u8 = 0
+    for x in data:
+        s += x          # 256 を法として折り返す
+    return s
+```
+
+詳細: [spec 73](../specs/73-sized-integers.md)
 
 ### 3.3 string と Bytes
 
@@ -486,7 +513,7 @@ type Score = Dict[string, int]
 
 | 値として振る舞う型 | 参照として振る舞う型 |
 |---|---|
-| `int`, `float`, `bool`, `string`, `Bytes`, `List[T]`, `tuple[...]`, `Option[T]`, `Result[T, E]` | レコード、`Dict[K, V]`, `Channel[T]`, `Mutex` |
+| 整数型, `float`, `bool`, `string`, `Bytes`, `List[T]`, `tuple[...]`, `Option[T]`, `Result[T, E]` | レコード、`Dict[K, V]`, `Channel[T]`, `Mutex` |
 
 値の型は不変なので、代入や引数渡しでコピーされたように振る舞い、受け取った
 側の操作が元の変数に影響することはありません。ただし、値の型の中に入れた
@@ -504,10 +531,10 @@ type Score = Dict[string, int]
 | 操作 | 使える型 |
 |---|---|
 | `==`, `!=` | `int`, `float`, `bool`, `string`, `Bytes`（両辺が同じ型） |
-| `<`, `<=`, `>`, `>=` | `int`, `float`, `string`（両辺が同じ型。文字列はバイトの辞書順） |
-| `print(x)` | `int`, `float`, `bool`, `string` |
-| `str(x)` | `int`, `float`, `bool`, `string` |
-| `assert_eq(a, b)` | `int`, `float`, `bool`, `string` |
+| `<`, `<=`, `>`, `>=` | 整数型, `float`, `string`（両辺が同じ型。文字列はバイトの辞書順） |
+| `print(x)` | 整数型, `float`, `bool`, `string` |
+| `str(x)` | 整数型, `float`, `bool`, `string` |
+| `assert_eq(a, b)` | 整数型, `float`, `bool`, `string` |
 
 リスト、辞書、タプル、Option、Result、レコード、関数値は比較も表示も
 できません。必要なら自分で関数を書きます。
@@ -530,10 +557,12 @@ type Score = Dict[string, int]
 | `chan_new(n)` | エラー |
 | `None`, `Some(x)`, `Ok(x)`, `Err(e)` | [3.7](#37-optiont-と-resultt-e) の既定 |
 | `lambda ...` | エラー |
+| 整数リテラル | `int` |
 
 期待型を与える文脈は、型注釈付きの宣言、既存変数への代入、`return`、関数・
 メソッド・コンストラクタの引数、リストやタプルや辞書リテラルの要素、
-`list_push` の第 1 引数、条件式の両方の枝です。
+`list_push` の第 1 引数、条件式の両方の枝です。整数リテラルについては、
+算術・ビット・比較演算子のもう一方の項と、値の `match` の対象も文脈になります。
 
 ---
 
@@ -918,9 +947,9 @@ def main() -> int:
 
 | 演算子 | オペランド | 結果 |
 |---|---|---|
-| `+` `-` `*` `/` `%` | 同じ型の `int` 同士、または `float` 同士 | オペランドの型 |
+| `+` `-` `*` `/` `%` | 同じ整数型同士、または `float` 同士 | オペランドの型 |
 | `+` | `string` 同士 | 連結した `string` |
-| 単項 `-` | `int` または `float` | 同じ型 |
+| 単項 `-` | 符号付き整数型または `float` | 同じ型 |
 
 整数演算の詳細は [3.2](#32-intfloatbool) を見てください。
 
@@ -933,8 +962,10 @@ def main() -> int:
 
 ### 5.4 ビット演算子
 
-`&`、`|`、`^`、`<<`、`>>`、単項 `~` は `int` だけに使えます。`>>` は算術
-シフト（符号を保つ）です。シフト量が 0–63 の範囲外の場合の結果は未規定です。
+`&`、`|`、`^`、`<<`、`>>`、単項 `~` は整数型に使え、両辺は同じ型です。
+`>>` は符号付き型では算術シフト（符号を保つ）、符号なし型では論理シフトです。
+シフト量が 0 から ビット数−1（`int` なら 0–63）の範囲外の場合の結果は
+未規定です。
 
 ### 5.5 論理演算子
 
@@ -985,14 +1016,14 @@ def main() -> int:
 
 | 呼び出し | 受け付ける型 | 結果 |
 |---|---|---|
-| `int(x)` | `int`, `float`, `bool` | `float` は 0 方向に切り捨て、`bool` は 0 / 1。NaN や範囲外の `float` の結果は未規定 |
-| `float(x)` | `int`, `float` | `float` |
-| `str(x)` | `int`, `float`, `bool`, `string` | 10 進表記、最短の往復表記（[3.13](#313-等値順序print)）、`"true"` / `"false"`、そのまま |
+| `int(x)`、`u8(x)`、… `u64(x)` | 整数型, `float`, `bool` | 他の整数型はビット列を保って切り詰めまたは拡張、`float` は 0 方向に切り捨て、`bool` は 0 / 1。NaN や範囲外の `float` の結果は未規定 |
+| `float(x)` | 整数型, `float` | `float` |
+| `str(x)` | 整数型, `float`, `bool`, `string` | 10 進表記、最短の往復表記（[3.13](#313-等値順序print)）、`"true"` / `"false"`、そのまま |
 
 文字列からの変換は失敗しうるので `Option` を返す関数を使います:
 `str_to_int(s)`、`str_to_float(s)`。
 
-詳細: [spec 26](../specs/26-conversions.md)
+詳細: [spec 26](../specs/26-conversions.md)、[spec 73](../specs/73-sized-integers.md)
 
 ---
 
@@ -1486,7 +1517,7 @@ rw に例外はありません。失敗しうる操作は `Option` / `Result` �
 | `assert` の失敗 | `rw: assertion failed: <メッセージ>` | 終了ステータス 1 |
 | `assert_eq` の失敗 | `rw: assert_eq failed in <関数> (line N)` と両辺 | 終了ステータス 1 |
 | 整数の 0 除算（`/`、`%`） | `rw: assertion failed: division by zero in <関数> (line N)` | 終了ステータス 1 |
-| `INT64_MIN / -1` | `rw: assertion failed: integer overflow in division in <関数> (line N)` | 終了ステータス 1 |
+| `INT64_MIN / -1`（符号付き型の最小値 / -1） | `rw: assertion failed: integer overflow in division in <関数> (line N)` | 終了ステータス 1 |
 | リストのインデックス範囲外（`xs[i]`、`list_at`） | `rw: list_at: index out of bounds` | abort（SIGABRT） |
 | 文字列のインデックス範囲外 | `rw: string index out of range` | abort |
 | 辞書にキーがない（`d[k]`） | `rw: dict key not found: <キー>` | abort |
@@ -1573,7 +1604,7 @@ def test_add() -> void:
 | Option / Result / match | [10](../specs/10-option-type.md), [11](../specs/11-result-type.md), [30](../specs/30-generic-option-result.md), [38](../specs/38-value-match.md) |
 | 構文 | [13](../specs/13-for-range-loop.md), [14](../specs/14-ternary-expr.md), [27](../specs/27-compound-assignment.md), [32](../specs/32-local-inference.md), [34](../specs/34-fstrings.md), [35](../specs/35-constants.md), [41](../specs/41-default-keyword-args.md), [47](../specs/47-with-defer.md) |
 | レコード・関数値・クロージャ | [20](../specs/20-records.md), [21](../specs/21-function-values.md), [33](../specs/33-methods.md), [71](../specs/71-closures.md) |
-| 変換と演算 | [26](../specs/26-conversions.md), [42](../specs/42-checked-division.md) |
+| 変換と演算 | [26](../specs/26-conversions.md), [42](../specs/42-checked-division.md), [73](../specs/73-sized-integers.md) |
 | モジュール | [17](../specs/17-namespaced-imports.md), [54](../specs/54-stdlib-bufio.md) |
 | 並行処理 | [39](../specs/39-sleep-and-clocks.md), [44](../specs/44-channels.md), [45](../specs/45-await-all-any.md), [46](../specs/46-mutex.md) |
 | I/O とネットワーク | [12](../specs/12-netpoller-tcp.md), [15](../specs/15-file-io.md), [16](../specs/16-async-file-io.md), [25](../specs/25-blocking-fd-offload.md), [50](../specs/50-dial-listen-open.md), [51](../specs/51-io-errors.md), [52](../specs/52-write-all.md), [53](../specs/53-io-timeouts.md), [56](../specs/56-socket-options.md), [69](../specs/69-udp.md) |

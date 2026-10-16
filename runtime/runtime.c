@@ -16,6 +16,10 @@ void rw_print_i64(int64_t v) {
     printf("%lld\n", (long long)v);
 }
 
+void rw_print_u64(int64_t v) {
+    printf("%llu\n", (unsigned long long)(uint64_t)v);
+}
+
 void rw_print_f64(double v) {
     printf("%g\n", v);
 }
@@ -53,6 +57,13 @@ static void put_where(rw_str where) {
 void rw_assert_eq_fail_i64(int64_t a, int64_t b, rw_str where) {
     put_where(where);
     fprintf(stderr, "  left:  %lld\n  right: %lld\n", (long long)a, (long long)b);
+    exit(1);
+}
+
+void rw_assert_eq_fail_u64(int64_t a, int64_t b, rw_str where) {
+    put_where(where);
+    fprintf(stderr, "  left:  %llu\n  right: %llu\n",
+            (unsigned long long)(uint64_t)a, (unsigned long long)(uint64_t)b);
     exit(1);
 }
 
@@ -200,9 +211,21 @@ int8_t rw_str_starts_with(rw_str s, rw_str prefix) {
     return memcmp(s.ptr, prefix.ptr, (size_t)prefix.len) == 0 ? 1 : 0;
 }
 
+static rw_str str_from_buf(const char *buf, int len);
+
+rw_str rw_str_from_u64(int64_t n) {
+    char buf[32];
+    int len = snprintf(buf, sizeof buf, "%llu", (unsigned long long)(uint64_t)n);
+    return str_from_buf(buf, len);
+}
+
 rw_str rw_str_from_int(int64_t n) {
     char buf[32];
     int len = snprintf(buf, sizeof buf, "%lld", (long long)n);
+    return str_from_buf(buf, len);
+}
+
+static rw_str str_from_buf(const char *buf, int len) {
     rw_str out;
     out.len = 0;
     out.ptr = NULL;

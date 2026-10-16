@@ -1,0 +1,55 @@
+# Sized integer types (spec 73): i8..i64, u8..u64, usize / isize.
+
+# A literal takes the integer type the context expects.
+MAGIC: u32 = 0xCAFEBABE
+
+class Header:
+    version: u8
+    flags: u16
+    length: u32
+
+# FNV-1a over bytes, in u64 arithmetic that wraps on overflow.
+def fnv1a(s: string) -> u64:
+    h: u64 = 14695981039346656037
+    for i in range(len(s)):
+        h = h ^ u64(byte_at(s, i))
+        h = h * 1099511628211
+    return h
+
+def checksum(data: List[u8]) -> u8:
+    s: u8 = 0
+    for x in data:
+        s += x               # wraps modulo 256
+    return s
+
+def average(xs: List[i32]) -> i32:
+    total: i64 = 0
+    for x in xs:
+        total += i64(x)      # widen explicitly; no implicit conversions
+    return i32(total / i64(len(xs)))
+
+def main() -> int:
+    h = Header(2, 0x8001, 1024)
+    print(f"v{h.version} flags={h.flags} len={h.length}")
+    print(MAGIC >> 16)                     # logical shift for unsigned
+    print(checksum([200, 100, 1]))
+    print(average([-3, 4, -10]))
+    print(fnv1a("rw"))
+    big: u64 = 18446744073709551615
+    print(big)
+    print(big > 0)                         # unsigned comparison
+    n: usize = 3                           # usize is u64
+    m: u64 = n * 2
+    print(m)
+    small: i8 = -128
+    print(small - 1)                       # wraps to 127
+    print(i8(200))                         # -56: truncated
+    print(u8(-1))                          # 255
+    print(int(big))                        # -1: same bits as i64
+    print(float(big) > 1.0e19)
+    match small:
+        case -128:
+            print("min i8")
+        case _:
+            print("other")
+    return 0

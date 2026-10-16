@@ -16,6 +16,7 @@ typedef struct rw_future rw_future_t;
 
 /* print */
 void rw_print_i64(int64_t v);
+void rw_print_u64(int64_t v);   /* the bits of a u64 (spec 73) */
 void rw_print_f64(double v);
 void rw_print_bool(int8_t v);
 void rw_print_str(rw_str s);
@@ -25,6 +26,7 @@ void rw_panic(rw_str msg);
 
 /* assert_eq failures (spec 68): print both values and exit(1). */
 void rw_assert_eq_fail_i64 (int64_t a, int64_t b, rw_str where);
+void rw_assert_eq_fail_u64 (int64_t a, int64_t b, rw_str where);
 void rw_assert_eq_fail_f64 (double a, double b, rw_str where);
 void rw_assert_eq_fail_bool(int8_t a, int8_t b, rw_str where);
 void rw_assert_eq_fail_str (rw_str a, rw_str b, rw_str where);
@@ -43,6 +45,7 @@ int64_t rw_str_find       (rw_str s, rw_str sub);
 rw_str  rw_str_slice      (rw_str s, int64_t start, int64_t end);
 int8_t  rw_str_starts_with(rw_str s, rw_str prefix);
 rw_str  rw_str_from_int   (int64_t n);
+rw_str  rw_str_from_u64   (int64_t n);
 
 /* Conversions and ordering (spec 26). */
 rw_str  rw_str_from_float(double v);       /* shortest round-trip text */

@@ -1828,9 +1828,9 @@ def test_conversions_ok():
 @pytest.mark.parametrize(
     "expr, msg",
     [
-        ('int("1")', "int argument must be int, float or bool"),
-        ("float(true)", "float argument must be int or float"),
-        ("str(bytes_from_str(\"a\"))", "str argument must be int, float, bool or string"),
+        ('int("1")', "int argument must be an integer, float or bool"),
+        ("float(true)", "float argument must be an integer or float"),
+        ("str(bytes_from_str(\"a\"))", "str argument must be an integer, float, bool or string"),
         ("int(1, 2)", "int takes 1 argument"),
         ('"a" < 1', "requires int or float on both sides, or two strings"),
     ],
@@ -2193,7 +2193,7 @@ def test_value_match_ok_and_returns():
 @pytest.mark.parametrize(
     "body, msg",
     [
-        ("    match 1.5:\n        case _:\n            print(1)\n", "can only match int, string, or bool"),
+        ("    match 1.5:\n        case _:\n            print(1)\n", "can only match an integer, string, or bool"),
         ('    match 1:\n        case "a":\n            print(1)\n', "pattern of type `string` cannot match a `int`"),
         ("    match 1:\n        case 1:\n            print(1)\n        case 1:\n            print(2)\n", "duplicate pattern 1"),
         ("    match 1:\n        case _:\n            print(1)\n        case 2:\n            print(2)\n", "unreachable case after a catch-all"),
@@ -2316,3 +2316,46 @@ def test_await_all_any_errors(body, msg):
 ])
 def test_with_defer_errors(src, msg):
     assert msg in err(src).diagnostic.message
+
+
+# ----- sized integer types (spec 73) -----
+
+def test_int_aliases_and_literal_inference():
+    res = check(
+        "N: u16 = 65535\n\n"
+        "def f(a: i64, b: isize, c: usize = 7) -> u64:\n"
+        "    x: u8 = 255\n"
+        "    y: i8 = -128\n"
+        "    z = x + 1\n"
+        "    w: u32 = 1 << 31\n"
+        "    return c * 2\n\n"
+        "def main() -> int:\n    print(f(1, 2))\n    return 0\n"
+    )
+    sig = res.functions[(None, "f")]
+    assert [t for _, t in sig.params] == [T.INT, T.INT, T.U64]
+    assert sig.return_type is T.U64
+    assert res.local_types[(None, "f", "z")] is T.U8
+
+
+@pytest.mark.parametrize("body, msg", [
+    ("    x: u8 = 256\n", "integer literal `256` is out of range for `u8` (0..255)"),
+    ("    x: i8 = -129\n", "integer literal `-129` is out of range for `i8`"),
+    ("    x: u64 = -1\n", "integer literal `-1` is out of range for `u64`"),
+    ("    print(9223372036854775808)\n", "out of range for `int`"),
+    ("    a: u8 = 1\n    b = 2\n    print(a + b)\n", "requires same type on both sides, found `u8` and `int`"),
+    ("    a: u8 = 1\n    b: u16 = 2\n    print(a & b)\n", "requires the same integer type on both sides"),
+    ("    a: u32 = 1\n    print(-a)\n", "unary `-` cannot be applied to unsigned `u32`"),
+    ("    a: i32 = 1\n    b: int = a\n", "declared `int`, value has type `i32`"),
+])
+def test_sized_int_errors(body, msg):
+    assert msg in err("def main() -> int:\n" + body + "    return 0\n").diagnostic.message
+
+
+def test_sized_int_mismatch_suggests_conversion():
+    e = err("def main() -> int:\n    a: i32 = 1\n    b: int = a\n    return 0\n")
+    assert "convert with `int(...)`" in e.diagnostic.help
+
+
+def test_function_named_like_an_int_type_is_rejected():
+    e = err("def u8(x: int) -> int:\n    return x\n\ndef main() -> int:\n    return 0\n")
+    assert "`u8` is an integer type and its conversion function" in e.diagnostic.message

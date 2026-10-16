@@ -105,6 +105,7 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "sqrt", "floor", "ceil", "exp", "log", "sin", "cos", "fabs", "pow",
     "str_find", "str_slice", "str_starts_with", "str_from_int", "str_to_int",
     "int", "float", "str",
+    "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
     "str_split", "str_join", "str_strip", "str_replace", "str_lower", "str_upper",
     "str_contains", "str_ends_with",
     "str_lstrip", "str_rstrip", "str_rfind",
@@ -129,16 +130,38 @@ _BUILTIN_FUNCS: frozenset[str] = frozenset({
     "recv_from", "send_to",
 })
 
+# Binary operators whose result has the type of their operands.
+_INT_RESULT_OPS = frozenset({"+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"})
+
+
+def _is_int_literal(e: A.Expr) -> bool:
+    """An expression made only of integer literals (`3`, `-1`, `1 << 4`):
+    it takes its type from the other operand or the context (spec 73)."""
+    if isinstance(e, A.IntLit):
+        return True
+    if isinstance(e, A.UnaryOp) and e.op in ("-", "~"):
+        return _is_int_literal(e.operand)
+    if isinstance(e, A.BinOp) and e.op in _INT_RESULT_OPS:
+        return _is_int_literal(e.left) and _is_int_literal(e.right)
+    return False
+
+
 _DICT_BUILTINS = frozenset({
     "dict_new", "dict_get", "dict_has", "dict_remove", "dict_keys", "dict_values",
 })
 
 # Accepted argument types for the conversion builtins (spec 26).
+_ALL_INTS: Tuple[T.Type, ...] = tuple(dict.fromkeys(T.INT_TYPE_NAMES.values()))
 _CONVERSIONS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type, str]] = {
-    "int": ((T.INT, T.FLOAT, T.BOOL), T.INT, "int, float or bool"),
-    "float": ((T.INT, T.FLOAT), T.FLOAT, "int or float"),
-    "str": ((T.INT, T.FLOAT, T.BOOL, T.STRING), T.STRING, "int, float, bool or string"),
+    "float": (_ALL_INTS + (T.FLOAT,), T.FLOAT, "an integer or float"),
+    "str": (_ALL_INTS + (T.FLOAT, T.BOOL, T.STRING), T.STRING,
+            "an integer, float, bool or string"),
 }
+# `int(x)`, `u8(x)`, ...: between integer types the value is truncated or
+# extended (wrapping like Rust's `as`); from float it truncates toward zero
+# (spec 26, 73).
+for _name, _ity in T.INT_TYPE_NAMES.items():
+    _CONVERSIONS[_name] = (_ALL_INTS + (T.FLOAT, T.BOOL), _ity, "an integer, float or bool")
 
 # Fixed signatures (parameter types, return type) for builtins that need no
 # special-casing beyond argument count and type checks. See spec 18.
@@ -234,7 +257,7 @@ _SIMPLE_BUILTIN_SIGS: Dict[str, Tuple[Tuple[T.Type, ...], T.Type]] = {
 
 
 _BUILTIN_TYPES: Dict[str, T.Type] = {
-    "int": T.INT,
+    **T.INT_TYPE_NAMES,
     "float": T.FLOAT,
     "bool": T.BOOL,
     "string": T.STRING,
@@ -257,6 +280,8 @@ class Sema:
         self.result = SemaResult(filename=filename, functions={})
         # Depth of enclosing loops; break/continue are only valid when > 0.
         self._loop_depth = 0
+        # ids of IntLits directly under unary `-` (their range check is negated).
+        self._negated_lits: set = set()
         # Closures being checked, innermost last (spec 71).
         self._closure_stack: List[_ClosureCtx] = []
         self._closure_counter = 0
@@ -469,6 +494,12 @@ class Sema:
                         self.filename, fn.line, fn.col, len(fn.name),
                         f"`{fn.name}` is already a class",
                     ))
+                if fn.name in T.INT_TYPE_NAMES:
+                    raise CompileError(Diagnostic(
+                        self.filename, fn.line, fn.col, len(fn.name),
+                        f"`{fn.name}` is an integer type and its conversion function; "
+                        "a function cannot use this name",
+                    ))
                 if key in self.result.functions:
                     raise CompileError(Diagnostic(
                         self.filename, fn.line, fn.col, len(fn.name),
@@ -485,9 +516,7 @@ class Sema:
                     seen.add(p.name)
                     pt = self._resolve_type(p.type_expr)
                     if p.default is not None:
-                        lit = p.default.operand if isinstance(p.default, A.UnaryOp) else p.default
-                        dt = {A.IntLit: T.INT, A.FloatLit: T.FLOAT, A.StringLit: T.STRING,
-                              A.BoolLit: T.BOOL}[type(lit)]
+                        dt = self._literal_type(p.default, pt)
                         if dt != pt:
                             raise CompileError(Diagnostic(
                                 self.filename, p.line, p.col, len(p.name),
@@ -546,8 +575,7 @@ class Sema:
             ))
         declared = self._resolve_type(cdef.type_expr)
         v = cdef.value.operand if isinstance(cdef.value, A.UnaryOp) else cdef.value
-        lit_ty = {A.IntLit: T.INT, A.FloatLit: T.FLOAT, A.StringLit: T.STRING,
-                  A.BoolLit: T.BOOL}[type(v)]
+        lit_ty = self._literal_type(cdef.value, declared)
         if declared != lit_ty:
             raise CompileError(Diagnostic(
                 self.filename, cdef.line, cdef.col, len(cdef.name),
@@ -706,6 +734,24 @@ class Sema:
                     f"and cannot assign to it (spec 71)",
                     help="keep shared mutable state in a record field, or use a different name",
                 ))
+
+    def _check_int_literal(self, lit: A.IntLit, ty: T.IntType, negated: bool) -> None:
+        v = -lit.value if negated else lit.value
+        if not ty.min <= v <= ty.max:
+            raise CompileError(Diagnostic(
+                self.filename, lit.line, lit.col, len(str(lit.value)),
+                f"integer literal `{v}` is out of range for `{ty}` ({ty.min}..{ty.max})",
+            ))
+
+    def _literal_type(self, node: A.Expr, declared: T.Type) -> T.Type:
+        """The type of the literal default value or constant `node` given
+        the declared type: an integer literal takes any integer type."""
+        lit = node.operand if isinstance(node, A.UnaryOp) else node
+        if isinstance(lit, A.IntLit) and isinstance(declared, T.IntType):
+            self._check_int_literal(lit, declared, lit is not node)
+            return declared
+        return {A.IntLit: T.INT, A.FloatLit: T.FLOAT, A.StringLit: T.STRING,
+                A.BoolLit: T.BOOL}[type(lit)]
 
     def _check_closure(self, fn: A.FuncDef, node: object, label: str,
                        params: List[Tuple[str, T.Type]], ret: T.Type, body: List[A.Stmt],
@@ -1142,6 +1188,14 @@ class Sema:
             self._type_hints[id(expr)] = expected
         elif isinstance(expected, T.ResultType) and isinstance(expr, (A.OkExpr, A.ErrExpr)):
             self._type_hints[id(expr)] = expected
+        elif T.is_integer(expected) and isinstance(expr, A.IntLit):
+            self._type_hints[id(expr)] = expected
+        elif T.is_integer(expected) and isinstance(expr, A.UnaryOp) and expr.op in ("-", "~"):
+            self._hint_expected(expr.operand, expected, locals_)
+        elif T.is_integer(expected) and isinstance(expr, A.BinOp) and expr.op in _INT_RESULT_OPS:
+            # `x: u8 = 1 + 2`: the literals take the expected integer type (spec 73).
+            self._hint_expected(expr.left, expected, locals_)
+            self._hint_expected(expr.right, expected, locals_)
         elif isinstance(expr, A.IfExpr):
             self._hint_expected(expr.then, expected, locals_)
             self._hint_expected(expr.els, expected, locals_)
@@ -1163,7 +1217,10 @@ class Sema:
         locals_: Dict[str, T.Type],
     ) -> T.Type:
         if isinstance(expr, A.IntLit):
-            return T.INT
+            hint = self._type_hints.get(id(expr))
+            ity = hint if isinstance(hint, T.IntType) else T.INT
+            self._check_int_literal(expr, ity, id(expr) in self._negated_lits)
+            return ity
         if isinstance(expr, A.FloatLit):
             return T.FLOAT
         if isinstance(expr, A.BoolLit):
@@ -1222,8 +1279,16 @@ class Sema:
                                        body, locals_, None, expr.line, expr.col)
             return info.type
         if isinstance(expr, A.UnaryOp):
+            if expr.op == "-" and isinstance(expr.operand, A.IntLit):
+                self._negated_lits.add(id(expr.operand))   # `-128` fits in i8
             inner = self._check_expr(fn, expr.operand, locals_)
             if expr.op == "-":
+                if isinstance(inner, T.IntType) and not inner.signed:
+                    raise CompileError(Diagnostic(
+                        self.filename, expr.line, expr.col, 1,
+                        f"unary `-` cannot be applied to unsigned `{inner}`",
+                        help="subtract from zero to wrap around: `0 - x`",
+                    ))
                 if not T.is_numeric(inner):
                     raise CompileError(Diagnostic(
                         self.filename, expr.line, expr.col, 1,
@@ -1238,18 +1303,27 @@ class Sema:
                     ))
                 return T.BOOL
             if expr.op == "~":
-                if inner is not T.INT:
+                if not T.is_integer(inner):
                     raise CompileError(Diagnostic(
                         self.filename, expr.line, expr.col, 1,
-                        f"unary `~` requires int, found `{inner}`",
+                        f"unary `~` requires an integer, found `{inner}`",
                     ))
-                return T.INT
+                return inner
             raise CompileError(Diagnostic(self.filename, expr.line, expr.col, 1,
                                           f"internal: unknown unary op {expr.op}"))
         if isinstance(expr, A.BinOp):
-            lt = self._check_expr(fn, expr.left, locals_)
-            rt = self._check_expr(fn, expr.right, locals_)
             op = expr.op
+            # A literal operand takes the integer type of the other one:
+            # `x + 1`, `1 << n`, `b == 255` (spec 73).
+            if op not in ("and", "or") and _is_int_literal(expr.right) and not _is_int_literal(expr.left):
+                lt = self._check_expr(fn, expr.left, locals_)
+                rt = self._check_expr_expect(fn, expr.right, locals_, lt)
+            elif op not in ("and", "or") and _is_int_literal(expr.left) and not _is_int_literal(expr.right):
+                rt = self._check_expr(fn, expr.right, locals_)
+                lt = self._check_expr_expect(fn, expr.left, locals_, rt)
+            else:
+                lt = self._check_expr(fn, expr.left, locals_)
+                rt = self._check_expr(fn, expr.right, locals_)
             if op == "+" and lt is T.STRING and rt is T.STRING:
                 return T.STRING
             if op in ("+", "-", "*", "/", "%"):
@@ -1258,6 +1332,7 @@ class Sema:
                         self.filename, expr.line, expr.col, len(op),
                         f"operator `{op}` requires same type on both sides, "
                         f"found `{lt}` and `{rt}`",
+                        help=conversion_hint(lt, rt),
                     ))
                 if not T.is_numeric(lt):
                     raise CompileError(Diagnostic(
@@ -1266,20 +1341,21 @@ class Sema:
                     ))
                 return lt
             if op in ("&", "|", "^", "<<", ">>"):
-                if lt is not T.INT or rt is not T.INT:
+                if not T.is_integer(lt) or lt != rt:
                     raise CompileError(Diagnostic(
                         self.filename, expr.line, expr.col, len(op),
-                        f"operator `{op}` requires int on both sides, "
+                        f"operator `{op}` requires the same integer type on both sides, "
                         f"found `{lt}` and `{rt}`",
+                        help=conversion_hint(lt, rt) if T.is_integer(lt) else None,
                     ))
-                return T.INT
+                return lt
             if op in ("==", "!="):
                 if lt != rt:
                     raise CompileError(Diagnostic(
                         self.filename, expr.line, expr.col, len(op),
                         f"`{op}` requires same type, found `{lt}` and `{rt}`",
                     ))
-                if lt not in (T.INT, T.FLOAT, T.BOOL, T.STRING, T.BYTES):
+                if not T.is_integer(lt) and lt not in (T.FLOAT, T.BOOL, T.STRING, T.BYTES):
                     raise CompileError(Diagnostic(
                         self.filename, expr.line, expr.col, len(op),
                         f"cannot compare `{lt}` with `{op}`",
@@ -1476,7 +1552,7 @@ class Sema:
                 ))
             # The fiber runtime returns results through rw_spawn_<T> for
             # these types only.
-            if ret_ty not in (T.INT, T.FLOAT, T.BOOL, T.STRING, T.BYTES, T.VOID):
+            if not T.is_integer(ret_ty) and ret_ty not in (T.FLOAT, T.BOOL, T.STRING, T.BYTES, T.VOID):
                 raise CompileError(Diagnostic(
                     self.filename, expr.line, expr.col, 5,
                     f"cannot spawn a function returning `{ret_ty}`",
@@ -1652,10 +1728,10 @@ class Sema:
                 ))
             lt = self._check_expr(fn, call.args[0], locals_)
             rt = self._check_expr_expect(fn, call.args[1], locals_, lt)
-            if lt not in (T.INT, T.FLOAT, T.BOOL, T.STRING):
+            if not T.is_printable(lt):
                 raise CompileError(Diagnostic(
                     self.filename, call.line, call.col, len(call.callee),
-                    f"assert_eq compares int, float, bool or string values, found `{lt}`",
+                    f"assert_eq compares integer, float, bool or string values, found `{lt}`",
                 ))
             if rt != lt:
                 raise CompileError(Diagnostic(
@@ -2019,10 +2095,10 @@ class Sema:
         """match on an int / string / bool with literal, `_`, and binding
         patterns (spec 38). Returns whether every path returns."""
         tt = self._check_expr(fn, stmt.target, locals_)
-        if tt not in (T.INT, T.STRING, T.BOOL):
+        if not T.is_integer(tt) and tt not in (T.STRING, T.BOOL):
             raise CompileError(Diagnostic(
                 self.filename, stmt.line, stmt.col, 5,
-                f"value patterns can only match int, string, or bool, found `{tt}`",
+                f"value patterns can only match an integer, string, or bool, found `{tt}`",
             ))
         seen: set = set()
         catch_all = False
@@ -2032,7 +2108,7 @@ class Sema:
                 raise CompileError(Diagnostic(self.filename, arm.line, arm.col, 4,
                                               "unreachable case after a catch-all pattern"))
             for p in arm.patterns:
-                pt = self._check_expr(fn, p, locals_)
+                pt = self._check_expr_expect(fn, p, locals_, tt)
                 if pt != tt:
                     raise CompileError(Diagnostic(
                         self.filename, arm.line, arm.col, 4,
