@@ -70,6 +70,7 @@ are no mutable global variables.
 | `rwc run FILE [-O N] [--unchecked]` | Build in a temporary directory, run it, and return its exit status. No arguments can be passed to the program |
 | `rwc check [-q] FILE...` | Type-check only; no IR generation or linking. Prints `FILE: ok` for each file that passes (`-q` suppresses it). Exit status 1 if any file fails |
 | `rwc test [PATH...] [-k SUBSTR] [--timeout SEC] [-v]` | Run the `test_*` functions in `test_*.rw` / `*_test.rw` files ([9.4](#94-tests-rwc-test-and-assert_eq)) |
+| `rwc watch [--interval SEC] [-O N] [--unchecked] FILE [-- ARGS...]` | Build and run `FILE`, then stop, rebuild, and rerun it whenever a `.rw` file in its directory changes. Build errors are printed and it waits for the next change. Ctrl-C exits ([spec 72](specs/72-rwc-watch.md)) |
 | `rwc emit-ir FILE [--unchecked]` | Write the generated LLVM IR to stdout |
 | `rwc emit-ast FILE` | Print the AST of the entry module |
 | `rwc --version` | Print the version |
