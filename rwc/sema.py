@@ -2019,10 +2019,10 @@ class Sema:
         """match on an int / string / bool with literal, `_`, and binding
         patterns (spec 38). Returns whether every path returns."""
         tt = self._check_expr(fn, stmt.target, locals_)
-        if tt not in (T.INT, T.STRING, T.BOOL):
+        if tt not in (T.INT, T.STRING, T.BOOL) and not isinstance(tt, T.TupleType):
             raise CompileError(Diagnostic(
                 self.filename, stmt.line, stmt.col, 5,
-                f"value patterns can only match int, string, or bool, found `{tt}`",
+                f"value patterns can only match int, string, bool, or a tuple, found `{tt}`",
             ))
         seen: set = set()
         catch_all = False
@@ -2031,6 +2031,23 @@ class Sema:
             if catch_all:
                 raise CompileError(Diagnostic(self.filename, arm.line, arm.col, 4,
                                               "unreachable case after a catch-all pattern"))
+            if arm.tuple_pats:
+                binds: Dict[str, T.Type] = {}
+                for tp in arm.tuple_pats:
+                    alt_binds: Dict[str, T.Type] = {}
+                    if self._check_tuple_pattern(fn, tp, tt, alt_binds, locals_):
+                        catch_all = True
+                    if alt_binds and len(arm.tuple_pats) > 1:
+                        raise CompileError(Diagnostic(
+                            self.filename, arm.line, arm.col, 4,
+                            "patterns joined by `|` cannot bind names",
+                            help="use `_` in place of the name, or give each pattern its own `case`",
+                        ))
+                    binds.update(alt_binds)
+                arm_locals = dict(locals_)
+                arm_locals.update(binds)
+                all_return = self._check_block(fn, arm.body, arm_locals, ret_ty) and all_return
+                continue
             for p in arm.patterns:
                 pt = self._check_expr(fn, p, locals_)
                 if pt != tt:
@@ -2056,6 +2073,37 @@ class Sema:
             all_return = self._check_block(fn, arm.body, arm_locals, ret_ty) and all_return
         exhaustive = catch_all or (tt is T.BOOL and seen == {True, False})
         return exhaustive and all_return
+
+    def _check_tuple_pattern(self, fn: A.FuncDef, pat: A.TuplePattern, ty: T.Type,
+                             binds: Dict[str, T.Type], locals_: Dict[str, T.Type]) -> bool:
+        """Check `pat` against a value of type `ty` and collect its bindings
+        into `binds` (spec 74). Returns whether it matches every value."""
+        if not isinstance(ty, T.TupleType):
+            raise CompileError(Diagnostic(self.filename, pat.line, pat.col, 1,
+                                          f"a tuple pattern cannot match a `{ty}`"))
+        if len(pat.elems) != len(ty.elems):
+            raise CompileError(Diagnostic(
+                self.filename, pat.line, pat.col, 1,
+                f"tuple pattern has {len(pat.elems)} elements, but the value is `{ty}`",
+            ))
+        irrefutable = True
+        for p, et in zip(pat.elems, ty.elems, strict=True):
+            if isinstance(p, A.TuplePattern):
+                irrefutable = self._check_tuple_pattern(fn, p, et, binds, locals_) and irrefutable
+            elif isinstance(p, A.Name):
+                if p.name == "_":
+                    continue
+                if p.name in binds or p.name in locals_:
+                    raise CompileError(Diagnostic(self.filename, p.line, p.col, len(p.name),
+                                                  f"variable `{p.name}` already declared"))
+                binds[p.name] = et
+            else:
+                pt = self._check_expr(fn, p, locals_)
+                if pt != et:
+                    raise CompileError(Diagnostic(self.filename, p.line, p.col, 1,
+                                                  f"pattern of type `{pt}` cannot match a `{et}`"))
+                irrefutable = False
+        return irrefutable
 
     def _declare_by_assignment(self, fn: A.FuncDef, stmt: A.Assign,
                                locals_: Dict[str, T.Type]) -> bool:

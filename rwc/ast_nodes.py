@@ -418,15 +418,27 @@ class MatchStmt:
 
 
 @dataclass
+class TuplePattern:
+    """`(p1, ..., pn)` in a `case` (spec 74). Each element is an int /
+    string / bool literal, a Name (`_` matches anything, any other name
+    binds the element), or a nested TuplePattern."""
+    elems: List[Union[Expr, "TuplePattern"]]
+    line: int
+    col: int
+
+
+@dataclass
 class MatchArm:
     """One `case` of a ValueMatch. `patterns` are literals joined by `|`;
     when empty the arm is a catch-all, binding the value to `bind` unless
-    it is `_` (bind is None)."""
+    it is `_` (bind is None), or it has `tuple_pats`: tuple patterns
+    joined by `|` (spec 74)."""
     patterns: List[Expr]
     bind: Optional[str]
     body: List["Stmt"]
     line: int
     col: int
+    tuple_pats: List[TuplePattern] = field(default_factory=list)
 
 
 @dataclass

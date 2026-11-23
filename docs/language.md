@@ -788,7 +788,7 @@ def main() -> int:
     return 0
 ```
 
-- The target is an `int`, `string`, or `bool`.
+- The target is an `int`, `string`, `bool`, or a tuple (see below).
 - A pattern is a literal (negative integers included), several literals
   joined by `|`, `_` (matches anything), or a name (matches anything and binds
   the value).
@@ -799,8 +799,27 @@ def main() -> int:
 - The whole `match` counts as returning only if it has a catch-all arm (or,
   for a `bool`, covers both `true` and `false`) and every arm returns.
 
+**Tuple patterns**
+
+```rw
+def quadrant(pt: tuple[int, int]) -> string:
+    match pt:
+        case (0, 0):
+            return "origin"
+        case (0, _) | (_, 0):
+            return "axis"
+        case (x, y):
+            return "first" if x > 0 and y > 0 else "other"
+```
+
+- The target may also be a tuple. Each element of a tuple pattern is a
+  literal, `_`, a name (binds the element), or a nested tuple pattern, and
+  the pattern must have as many elements as the tuple.
+- Tuple patterns may be joined by `|`, but then they cannot bind names.
+- A tuple pattern made only of `_` and names is a catch-all.
+
 Details: [spec 10](specs/10-option-type.md), [spec 11](specs/11-result-type.md),
-[spec 38](specs/38-value-match.md)
+[spec 38](specs/38-value-match.md), [spec 74](specs/74-tuple-patterns.md)
 
 ### 4.11 assert
 
@@ -1614,7 +1633,7 @@ inference, no `for`, and so on).
 | Fibers and scheduler | [05](specs/05-fibers.md), [06](specs/06-scheduler-mn.md), [19](specs/19-fiber-lifecycle.md), [23](specs/23-preemption.md), [24](specs/24-park-after-save.md) |
 | Strings and Bytes | [07](specs/07-string-builtins.md), [08](specs/08-bytes-type.md), [18](specs/18-string-search.md), [28](specs/28-string-builtins.md), [55](specs/55-string-extras.md) |
 | Collections | [09](specs/09-list-type.md), [22](specs/22-generic-list.md), [29](specs/29-list-syntax.md), [31](specs/31-dict.md), [36](specs/36-dict-literals.md), [37](specs/37-tuples.md) |
-| Option / Result / match | [10](specs/10-option-type.md), [11](specs/11-result-type.md), [30](specs/30-generic-option-result.md), [38](specs/38-value-match.md) |
+| Option / Result / match | [10](specs/10-option-type.md), [11](specs/11-result-type.md), [30](specs/30-generic-option-result.md), [38](specs/38-value-match.md), [74](specs/74-tuple-patterns.md) |
 | Syntax | [13](specs/13-for-range-loop.md), [14](specs/14-ternary-expr.md), [27](specs/27-compound-assignment.md), [32](specs/32-local-inference.md), [34](specs/34-fstrings.md), [35](specs/35-constants.md), [41](specs/41-default-keyword-args.md), [47](specs/47-with-defer.md) |
 | Records, function values, closures | [20](specs/20-records.md), [21](specs/21-function-values.md), [33](specs/33-methods.md), [71](specs/71-closures.md) |
 | Conversions and arithmetic | [26](specs/26-conversions.md), [42](specs/42-checked-division.md) |

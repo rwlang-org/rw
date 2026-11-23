@@ -33,7 +33,7 @@ Grammar (informal):
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from . import ast_nodes as A
 from .lexer import LexerError, Token, TokenKind, tokenize
@@ -797,9 +797,14 @@ class Parser:
             patterns: List[A.Expr] = []
             bind: Optional[str] = None
             t = self.cur
+            tuple_pats: List[A.TuplePattern] = []
             if t.kind == TokenKind.IDENT:
                 self.i += 1
                 bind = None if t.value == "_" else t.value
+            elif t.kind == TokenKind.LPAREN:
+                tuple_pats.append(self._parse_tuple_pattern())
+                while self.match(TokenKind.PIPE):
+                    tuple_pats.append(self._parse_tuple_pattern())
             else:
                 patterns.append(self._parse_literal_pattern())
                 while self.match(TokenKind.PIPE):
@@ -807,9 +812,29 @@ class Parser:
             self.eat(TokenKind.COLON, "':' after case pattern")
             self.eat(TokenKind.NEWLINE)
             body = self.parse_block()
-            arms.append(A.MatchArm(patterns, bind, body, case_tok.line, case_tok.col))
+            arms.append(A.MatchArm(patterns, bind, body, case_tok.line, case_tok.col, tuple_pats))
         self.eat(TokenKind.DEDENT)
         return A.ValueMatch(target, arms, kw.line, kw.col)
+
+    def _parse_tuple_pattern(self) -> A.TuplePattern:
+        """`(p1, ..., pn)` with n >= 2 (spec 74)."""
+        lp = self.eat(TokenKind.LPAREN)
+        elems: List[Union[A.Expr, A.TuplePattern]] = []
+        while True:
+            t = self.cur
+            if t.kind == TokenKind.LPAREN:
+                elems.append(self._parse_tuple_pattern())
+            elif t.kind == TokenKind.IDENT:
+                self.i += 1
+                elems.append(A.Name(t.value, t.line, t.col))
+            else:
+                elems.append(self._parse_literal_pattern())
+            if not self.match(TokenKind.COMMA) or self.cur.kind == TokenKind.RPAREN:
+                break
+        self.eat(TokenKind.RPAREN, "')' after tuple pattern")
+        if len(elems) < 2:
+            raise ParserError("a tuple pattern needs at least two elements", lp.line, lp.col, 1)
+        return A.TuplePattern(elems, lp.line, lp.col)
 
     def _parse_literal_pattern(self) -> A.Expr:
         t = self.cur
