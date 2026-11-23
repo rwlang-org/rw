@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Iterable, List, Literal, Optional
+from dataclasses import dataclass, replace
+from typing import Callable, Iterable, List, Literal, Optional
 
 
 @dataclass
@@ -15,6 +15,8 @@ class Diagnostic:
     message: str
     severity: Literal["error", "warning"] = "error"
     help: Optional[str] = None
+    # The warning's rule name, such as "unused-variable" (spec 73).
+    code: Optional[str] = None
 
     def render(self, source: str) -> str:
         lines = source.splitlines()
@@ -24,7 +26,7 @@ class Diagnostic:
         empty_gutter = " " * len(gutter)
         caret = " " * (self.col - 1) + "^" * max(1, self.length)
         out = [
-            f"{self.severity}: {self.message}",
+            f"{self.severity}[{self.code}]: {self.message}" if self.code else f"{self.severity}: {self.message}",
             f"{empty_gutter} --> {self.file}:{self.line}:{self.col}",
             f"{empty_gutter}  |",
             f"{gutter}  | {line_text}",
@@ -94,6 +96,33 @@ def conversion_hint(expected: object, found: object) -> Optional[str]:
     if e.startswith("Result[") and e[len("Result["):].startswith(f + ","):
         return "wrap the value with `Ok(...)`"
     return None
+
+
+# Every warning rule (spec 73). All are on by default.
+WARNING_RULES = ("unused-variable",)
+
+
+@dataclass
+class WarningPolicy:
+    """What to do with warnings (spec 73): `disabled` rules are dropped,
+    the rest go to `report`, and with `as_error` any warning fails the
+    build."""
+
+    report: Callable[[Diagnostic], None]
+    disabled: frozenset = frozenset()
+    as_error: bool = False
+
+    def apply(self, warnings: List[Diagnostic]) -> None:
+        """Report the enabled warnings. With `as_error`, they are reported
+        as errors and the last one is raised as a CompileError."""
+        shown = [w for w in warnings if w.code not in self.disabled]
+        if self.as_error and shown:
+            errs = [replace(w, severity="error") for w in shown]
+            for e in errs[:-1]:
+                self.report(e)
+            raise CompileError(errs[-1])
+        for w in shown:
+            self.report(w)
 
 
 class CompileError(Exception):

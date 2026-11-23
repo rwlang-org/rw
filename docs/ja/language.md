@@ -63,9 +63,9 @@ def main() -> int:
 
 | コマンド | 説明 |
 |---|---|
-| `rwc build FILE [-o OUT] [-O N] [--unchecked]` | 実行ファイルを作る。`-o` を省略すると `FILE` から拡張子を除いたパス |
-| `rwc run FILE [-O N] [--unchecked]` | 一時ディレクトリでビルドして実行し、その終了ステータスを返す。プログラムへ引数は渡せない |
-| `rwc check [-q] FILE...` | 型検査だけを行う。IR 生成もリンクもしない。成功したファイルごとに `FILE: ok` を表示（`-q` で抑止）。1 つでも失敗すれば終了ステータス 1 |
+| `rwc build FILE [-o OUT] [-O N] [--unchecked] [-W no-RULE] [--warn-as-error]` | 実行ファイルを作る。`-o` を省略すると `FILE` から拡張子を除いたパス |
+| `rwc run FILE [-O N] [--unchecked] [-W no-RULE] [--warn-as-error]` | 一時ディレクトリでビルドして実行し、その終了ステータスを返す。プログラムへ引数は渡せない |
+| `rwc check [-q] [-W no-RULE] [--warn-as-error] FILE...` | 型検査だけを行う。IR 生成もリンクもしない。成功したファイルごとに `FILE: ok` を表示（`-q` で抑止）。1 つでも失敗すれば終了ステータス 1 |
 | `rwc test [PATH...] [-k SUBSTR] [--timeout SEC] [-v]` | `test_*.rw` / `*_test.rw` 内の `test_*` 関数を実行する（[9.4](#94-テストrwc-test-と-assert_eq)） |
 | `rwc emit-ir FILE [--unchecked]` | 生成した LLVM IR を標準出力に書く |
 | `rwc emit-ast FILE` | エントリモジュールの AST を表示する |
@@ -78,7 +78,13 @@ def main() -> int:
   `build` と `run` だけが受け付けます。
 - `--unchecked`: 整数除算の実行時チェック（[9.2](#92-実行時チェック)）を
   省きます。`build`、`run`、`emit-ir` が受け付けます。
+- `-W no-RULE` / `-W RULE`: 警告ルールを無効化、または再び有効化します。
+  現在のルールは `unused-variable`（一度も読まれないローカル変数。`_` で
+  始まる名前は対象外）だけです。`build`、`run`、`check` が受け付けます。
+- `--warn-as-error`: 警告をエラーとして報告し、失敗させます。`build`、
+  `run`、`check` が受け付けます。
 
+警告（`warning[RULE]: ...`）ではビルドは止まりません。
 コンパイラは最初のエラーで止まり、ファイル名・行・桁・キャレット付きの
 診断を表示します。名前の綴り間違いには `help: did you mean ...?`、型の
 不一致には `float(...)` などの変換方法が添えられます。
@@ -87,7 +93,8 @@ C ランタイム `runtime/librw.a` がなければ、初回のビルド時に `
 で作ります。リンクには `clang`（なければ `cc`）と Boehm GC が必要です。
 
 詳細: [spec 48](../specs/48-rwc-check.md)、[spec 49](../specs/49-did-you-mean.md)、
-[spec 68](../specs/68-rwc-test.md)、[spec 70](../specs/70-optimization-levels.md)
+[spec 68](../specs/68-rwc-test.md)、[spec 70](../specs/70-optimization-levels.md)、
+[spec 73](../specs/73-warnings.md)
 
 ### 1.3 環境変数
 
