@@ -1,0 +1,43 @@
+def route(method: string, path: string) -> string:
+    match (method, path):
+        case ("GET", "/"):
+            return "index"
+        case ("GET", p):
+            return "get " + p
+        case ("POST", "/login") | ("POST", "/signin"):
+            return "login"
+        case (m, _):
+            return "unsupported " + m
+
+def quadrant(pt: tuple[int, int]) -> string:
+    match pt:
+        case (0, 0):
+            return "origin"
+        case (0, _) | (_, 0):
+            return "axis"
+        case (x, y):
+            if x > 0 and y > 0:
+                return "first"
+            return "other"
+
+def main() -> int:
+    print(route("GET", "/"))
+    print(route("GET", "/users"))
+    print(route("POST", "/login"))
+    print(route("DELETE", "/x"))
+    print(quadrant((0, 0)))
+    print(quadrant((0, 5)))
+    print(quadrant((3, 4)))
+    print(quadrant((-1, 2)))
+    nested = (("a", 1), true)
+    match nested:
+        case (("a", n), true):
+            print(f"a with {n}")
+        case _:
+            print("other")
+    # No arm matches: nothing runs.
+    match (1, 2):
+        case (2, _):
+            print("never")
+    print("done")
+    return 0

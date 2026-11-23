@@ -2193,7 +2193,7 @@ def test_value_match_ok_and_returns():
 @pytest.mark.parametrize(
     "body, msg",
     [
-        ("    match 1.5:\n        case _:\n            print(1)\n", "can only match int, string, or bool"),
+        ("    match 1.5:\n        case _:\n            print(1)\n", "can only match int, string, bool, or a tuple"),
         ('    match 1:\n        case "a":\n            print(1)\n', "pattern of type `string` cannot match a `int`"),
         ("    match 1:\n        case 1:\n            print(1)\n        case 1:\n            print(2)\n", "duplicate pattern 1"),
         ("    match 1:\n        case _:\n            print(1)\n        case 2:\n            print(2)\n", "unreachable case after a catch-all"),
@@ -2207,6 +2207,54 @@ def test_value_match_errors(body, msg):
 def test_non_exhaustive_value_match_does_not_return():
     e = err("def f(x: int) -> int:\n    match x:\n        case 1:\n            return 1\n\ndef main() -> int:\n    return f(1)\n")
     assert "does not return on all paths" in e.diagnostic.message
+
+
+# ----- tuple patterns (spec 74) -----
+
+def test_tuple_match_ok_and_returns():
+    check(
+        "def f(p: tuple[int, string]) -> string:\n"
+        "    match p:\n"
+        '        case (0, "a") | (1, _):\n            return "x"\n'
+        "        case (n, s):\n            return s\n\n"
+        "def main() -> int:\n"
+        '    match ((1, true), "z"):\n'
+        "        case ((1, b), _):\n            print(b)\n"
+        '    print(f((0, "a")))\n'
+        "    return 0\n"
+    )
+
+
+def test_tuple_match_with_refutable_arms_does_not_return():
+    e = err("def f(p: tuple[int, int]) -> int:\n    match p:\n        case (1, y):\n            return y\n\n"
+            "def main() -> int:\n    return f((1, 2))\n")
+    assert "does not return on all paths" in e.diagnostic.message
+
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ("    match (1, 2):\n        case (1, 2, 3):\n            print(1)\n", "tuple pattern has 3 elements"),
+        ('    match (1, 2):\n        case (1, "a"):\n            print(1)\n', "pattern of type `string` cannot match a `int`"),
+        ("    match 1:\n        case (1, 2):\n            print(1)\n", "a tuple pattern cannot match a `int`"),
+        ("    match (1, 2):\n        case ((1, 2), 3):\n            print(1)\n", "a tuple pattern cannot match a `int`"),
+        ("    match (1, 2):\n        case 1:\n            print(1)\n", "cannot match a `tuple[int, int]`"),
+        ("    match (1, 2):\n        case (a, a):\n            print(a)\n", "variable `a` already declared"),
+        ("    match (1, 2):\n        case (a, 1) | (1, a):\n            print(a)\n", "cannot bind names"),
+        ("    match (1, 2):\n        case (_, _):\n            print(1)\n        case (1, 2):\n            print(2)\n",
+         "unreachable case after a catch-all"),
+    ],
+)
+def test_tuple_match_errors(body, msg):
+    e = err("def main() -> int:\n" + body + "    return 0\n")
+    assert msg in e.diagnostic.message
+
+
+def test_tuple_pattern_needs_two_elements():
+    from rwc.parser import ParserError
+
+    with pytest.raises(ParserError, match="at least two elements"):
+        parse(tokenize("def main() -> int:\n    match (1, 2):\n        case (1):\n            print(1)\n    return 0\n"))
 
 
 # ----- default and keyword arguments (spec 41) -----

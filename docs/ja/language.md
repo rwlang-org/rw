@@ -760,7 +760,7 @@ def main() -> int:
     return 0
 ```
 
-- 対象は `int`、`string`、`bool` です。
+- 対象は `int`、`string`、`bool`、またはタプル（後述）です。
 - パターンはリテラル（負の整数を含む）、`|` でつないだ複数のリテラル、
   `_`（何にでも一致）、名前（何にでも一致し、その値を束縛）です。
 - 腕は上から順に試され、最初に一致した腕だけが実行されます。どれにも一致
@@ -770,8 +770,27 @@ def main() -> int:
 - 何にでも一致する腕がある（または `bool` で `true` と `false` を両方書いた）
   うえで全腕が return する場合だけ、`match` 全体が return するとみなされます。
 
+**タプルパターン**
+
+```rw
+def quadrant(pt: tuple[int, int]) -> string:
+    match pt:
+        case (0, 0):
+            return "origin"
+        case (0, _) | (_, 0):
+            return "axis"
+        case (x, y):
+            return "first" if x > 0 and y > 0 else "other"
+```
+
+- 対象はタプルでもかまいません。タプルパターンの各要素はリテラル、`_`、
+  名前（その要素を束縛）、入れ子のタプルパターンのいずれかで、要素数は
+  タプルと一致させます。
+- タプルパターンは `|` でつなげますが、その場合は名前を束縛できません。
+- `_` と名前だけでできたタプルパターンは何にでも一致する腕になります。
+
 詳細: [spec 10](../specs/10-option-type.md)、[spec 11](../specs/11-result-type.md)、
-[spec 38](../specs/38-value-match.md)
+[spec 38](../specs/38-value-match.md)、[spec 74](../specs/74-tuple-patterns.md)
 
 ### 4.11 assert
 
@@ -1570,7 +1589,7 @@ def test_add() -> void:
 | ファイバーとスケジューラ | [05](../specs/05-fibers.md), [06](../specs/06-scheduler-mn.md), [19](../specs/19-fiber-lifecycle.md), [23](../specs/23-preemption.md), [24](../specs/24-park-after-save.md) |
 | 文字列と Bytes | [07](../specs/07-string-builtins.md), [08](../specs/08-bytes-type.md), [18](../specs/18-string-search.md), [28](../specs/28-string-builtins.md), [55](../specs/55-string-extras.md) |
 | コレクション | [09](../specs/09-list-type.md), [22](../specs/22-generic-list.md), [29](../specs/29-list-syntax.md), [31](../specs/31-dict.md), [36](../specs/36-dict-literals.md), [37](../specs/37-tuples.md) |
-| Option / Result / match | [10](../specs/10-option-type.md), [11](../specs/11-result-type.md), [30](../specs/30-generic-option-result.md), [38](../specs/38-value-match.md) |
+| Option / Result / match | [10](../specs/10-option-type.md), [11](../specs/11-result-type.md), [30](../specs/30-generic-option-result.md), [38](../specs/38-value-match.md), [74](../specs/74-tuple-patterns.md) |
 | 構文 | [13](../specs/13-for-range-loop.md), [14](../specs/14-ternary-expr.md), [27](../specs/27-compound-assignment.md), [32](../specs/32-local-inference.md), [34](../specs/34-fstrings.md), [35](../specs/35-constants.md), [41](../specs/41-default-keyword-args.md), [47](../specs/47-with-defer.md) |
 | レコード・関数値・クロージャ | [20](../specs/20-records.md), [21](../specs/21-function-values.md), [33](../specs/33-methods.md), [71](../specs/71-closures.md) |
 | 変換と演算 | [26](../specs/26-conversions.md), [42](../specs/42-checked-division.md) |

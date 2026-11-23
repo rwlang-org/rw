@@ -720,7 +720,27 @@ class IRGen:
         for arm in stmt.arms:
             body_bb = ctx.function.append_basic_block("vmatch.arm")
             next_bb = ctx.function.append_basic_block("vmatch.next")
-            if arm.patterns:
+            binds: List[Tuple[str, ir.Value, T.Type]] = []
+            if arm.tuple_pats:
+                # OR over the alternatives of the AND of each one's tests; an
+                # alternative without tests matches everything.
+                hit = None
+                always = False
+                for tp in arm.tuple_pats:
+                    tests: List[ir.Value] = []
+                    self._tuple_pattern_tests(tp, v, tt, tests, binds, ctx)
+                    if not tests:
+                        always = True
+                        continue
+                    alt = tests[0]
+                    for t in tests[1:]:
+                        alt = b.and_(alt, t)
+                    hit = alt if hit is None else b.or_(hit, alt)
+                if always or hit is None:
+                    b.branch(body_bb)
+                else:
+                    b.cbranch(hit, body_bb, next_bb)
+            elif arm.patterns:
                 hit = None
                 for p in arm.patterns:
                     pv = self._emit_expr(p, ctx)
@@ -733,23 +753,46 @@ class IRGen:
             else:
                 b.branch(body_bb)
             b.position_at_end(body_bb)
-            saved = None
             if arm.bind is not None:
-                slot = ctx.alloca(llvm_type_of(tt), name=arm.bind)
-                b.store(v, slot)
-                saved = ctx.locals.get(arm.bind)
-                ctx.locals[arm.bind] = slot
+                binds.append((arm.bind, v, tt))
+            saved = []
+            for name, val, ty in binds:
+                slot = ctx.alloca(llvm_type_of(ty), name=name)
+                b.store(val, slot)
+                saved.append((name, ctx.locals.get(name)))
+                ctx.locals[name] = slot
             self._emit_block(arm.body, ctx)
-            if arm.bind is not None:
-                if saved is None:
-                    ctx.locals.pop(arm.bind, None)
+            for name, old in saved:
+                if old is None:
+                    ctx.locals.pop(name, None)
                 else:
-                    ctx.locals[arm.bind] = saved
+                    ctx.locals[name] = old
             if not b.block.is_terminated:
                 b.branch(end_bb)
             b.position_at_end(next_bb)
         b.branch(end_bb)  # no arm matched
         b.position_at_end(end_bb)
+
+    def _tuple_pattern_tests(self, pat: A.TuplePattern, v: ir.Value, ty: T.Type,
+                             tests: List[ir.Value], binds: List[Tuple[str, ir.Value, T.Type]],
+                             ctx: "FunctionCtx") -> None:
+        """Equality tests for the literals in `pat` and the values its names
+        bind, for the tuple value `v` (spec 74)."""
+        b = ctx.builder
+        assert isinstance(ty, T.TupleType)
+        for i, (p, et) in enumerate(zip(pat.elems, ty.elems, strict=True)):
+            ev = b.extract_value(v, i)
+            if isinstance(p, A.TuplePattern):
+                self._tuple_pattern_tests(p, ev, et, tests, binds, ctx)
+            elif isinstance(p, A.Name):
+                if p.name != "_":
+                    binds.append((p.name, ev, et))
+            else:
+                pv = self._emit_expr(p, ctx)
+                if et is T.STRING:
+                    tests.append(b.icmp_unsigned("!=", b.call(self._rw_str_eq, [ev, pv]), ir.Constant(I8, 0)))
+                else:
+                    tests.append(b.icmp_signed("==", ev, pv))
 
     def _emit_arm(self, var_name, block, payload, payload_ty, ctx, end_bb):
         """Emit one match arm. var_name=None means no payload binding."""
