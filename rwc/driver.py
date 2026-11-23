@@ -18,7 +18,7 @@ from typing import Optional
 from llvmlite import binding as llvm_binding
 
 from .ast_nodes import Module as ASTModule
-from .diagnostics import CompileError, Diagnostic
+from .diagnostics import CompileError, Diagnostic, WarningPolicy
 from .irgen import generate as irgen_generate
 from .lexer import LexerError
 from .loader import load_program
@@ -114,14 +114,18 @@ def compile_source(
     target_triple: Optional[str] = None,
     checked: bool = True,
     opt_level: Optional[int] = None,
+    warnings: Optional[WarningPolicy] = None,
 ) -> CompileResult:
     """Compile a single rw source string to a native executable. `checked`
     keeps the run-time checks for integer division (spec 42). `opt_level`
     (0-3) is the LLVM optimization level (spec 70); None means
-    $RW_OPT_LEVEL, else the default."""
+    $RW_OPT_LEVEL, else the default. Warnings go to `warnings`, or are
+    dropped when it is None (spec 73)."""
     try:
         program = load_program(source, filename)
         sema = analyze_program(program, filename=filename)
+        if warnings is not None:
+            warnings.apply(sema.warnings)
         llmod = irgen_generate(program, sema, checked)
     except LexerError as e:
         raise CompileError(Diagnostic(filename, e.line, e.col, e.length, e.message)) from e
@@ -177,12 +181,14 @@ def emit_ir(source: str, filename: str, checked: bool = True) -> str:
     return str(llmod)
 
 
-def check_source(source: str, filename: str) -> None:
+def check_source(source: str, filename: str, warnings: Optional[WarningPolicy] = None) -> None:
     """Parse and type-check without generating code (`rwc check`, spec 48).
     Raises CompileError on the first error."""
     try:
         program = load_program(source, filename)
-        analyze_program(program, filename=filename)
+        sema = analyze_program(program, filename=filename)
+        if warnings is not None:
+            warnings.apply(sema.warnings)
     except LexerError as e:
         raise CompileError(Diagnostic(filename, e.line, e.col, e.length, e.message)) from e
     except ParserError as e:

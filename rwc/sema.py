@@ -11,12 +11,13 @@ A single diagnostic is raised via CompileError on the first error.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from . import ast_nodes as A
 from . import types as T
 from .diagnostics import CompileError, Diagnostic, conversion_hint, did_you_mean
-from .loader import LoadedProgram
+from .loader import LoadedProgram, stdlib_dir
 
 
 # A function is identified by (module, name). The entry (root) module uses
@@ -52,9 +53,20 @@ class _ClosureCtx:
 
 
 @dataclass
+class _Frame:
+    """A function or closure body being checked: the locals it declares
+    (name, line, col) and the names read in it, for the unused-variable
+    warning (spec 73)."""
+    decls: List[Tuple[str, int, int]] = field(default_factory=list)
+    used: set = field(default_factory=set)
+
+
+@dataclass
 class SemaResult:
     filename: str
     functions: Dict[FuncKey, FuncSig]
+    # Warnings (spec 73), in source order per function. Each has a `code`.
+    warnings: List[Diagnostic] = field(default_factory=list)
     # id(expr_node) -> Type. We use object identity to avoid dataclass hash issues.
     expr_types: Dict[int, T.Type] = field(default_factory=dict)
     # (module, func_name, var_name) -> declared Type
@@ -260,6 +272,8 @@ class Sema:
         # Closures being checked, innermost last (spec 71).
         self._closure_stack: List[_ClosureCtx] = []
         self._closure_counter = 0
+        # Function / closure bodies being checked, innermost last (spec 73).
+        self._frames: List[_Frame] = []
         # User-declared type aliases (name -> resolved concrete Type), one map
         # per module. Aliases are module-local: type-alias import is a Non-Goal,
         # so `type_alias_map` always points at the current module's map.
@@ -685,8 +699,29 @@ class Sema:
     def _note_use(self, name: str) -> None:
         """A read of local `name`: inside a closure, a name from the
         enclosing function becomes a capture."""
+        for fr in self._frames:
+            fr.used.add(name)
         if self._closure_stack and name in self._closure_stack[-1].candidates:
             self._closure_stack[-1].used.add(name)
+
+    # ---------- warnings (spec 73) ----------
+    def _note_decl(self, name: str, line: int, col: int) -> None:
+        """A local declared by `x: T = e`, `x = e`, or tuple unpacking."""
+        if self._frames and not name.startswith("_"):
+            self._frames[-1].decls.append((name, line, col))
+
+    def _pop_frame(self) -> None:
+        fr = self._frames.pop()
+        if Path(self.filename).resolve().parent == stdlib_dir().resolve():
+            return   # the stdlib's warnings are not the user's to fix
+        for name, line, col in fr.decls:
+            if name not in fr.used:
+                self.result.warnings.append(Diagnostic(
+                    self.filename, line, col, len(name),
+                    f"unused variable `{name}`", severity="warning",
+                    help=f"remove it, or name it `_{name}` if it is unused on purpose",
+                    code="unused-variable",
+                ))
 
     def _reject_captured_assign(self, stmt: A.Stmt) -> None:
         if not self._closure_stack:
@@ -732,6 +767,7 @@ class Sema:
             self.result.local_types[(self.current_module, qual, pn)] = pt
         ctx = _ClosureCtx(set(candidates), set())
         self._closure_stack.append(ctx)
+        self._frames.append(_Frame())
         saved_loops = self._loop_depth
         self._loop_depth = 0   # break / continue do not cross into a closure
         try:
@@ -740,6 +776,7 @@ class Sema:
         finally:
             self._closure_stack.pop()
             self._loop_depth = saved_loops
+        self._pop_frame()
         if ret is not T.VOID and not ended:
             raise CompileError(Diagnostic(self.filename, line, col, max(1, len(label)),
                                           f"function `{label}` does not return on all paths"))
@@ -762,7 +799,9 @@ class Sema:
         for pname, pty in sig.params:
             locals_[pname] = pty
             self.result.local_types[(self.current_module, fn.name, pname)] = pty
+        self._frames.append(_Frame())
         ended = self._check_block(fn, fn.body, locals_, sig.return_type)
+        self._pop_frame()
         if sig.return_type is not T.VOID and not ended:
             raise CompileError(Diagnostic(
                 self.filename, fn.line, fn.col, len(fn.name),
@@ -838,6 +877,8 @@ class Sema:
             locals_[stmt.name] = declared
             self.result.local_types[(self.current_module, fn.name, stmt.name)] = declared
             self.result.decl_types[id(stmt)] = declared
+            if not stmt.implicit:
+                self._note_decl(stmt.name, stmt.line, stmt.col)
             return False
 
         if isinstance(stmt, A.Assign):
@@ -2090,6 +2131,7 @@ class Sema:
         locals_[stmt.name] = ty
         self.result.local_types[(self.current_module, fn.name, stmt.name)] = ty
         self.result.decl_types[id(stmt)] = ty
+        self._note_decl(stmt.name, stmt.line, stmt.col)
         return False
 
     def _check_dict_builtin(self, fn: A.FuncDef, call: A.Call, locals_: Dict[str, T.Type]) -> T.Type:

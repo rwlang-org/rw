@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import __version__
-from .diagnostics import CompileError
+from .diagnostics import WARNING_RULES, CompileError, Diagnostic, WarningPolicy
 from .driver import check_source, compile_source, emit_ast, emit_ir, run_executable
 from .lexer import LexerError
 from .parser import ParserError
@@ -34,13 +34,42 @@ def _report(err: CompileError, source: str, src_path: Path) -> None:
     print(diag.render(source), file=sys.stderr)
 
 
+def _render_warning(diag: Diagnostic) -> None:
+    try:
+        source = Path(diag.file).read_text(encoding="utf-8")
+    except OSError:
+        source = ""
+    print(diag.render(source), file=sys.stderr)
+
+
+def _warning_policy(args: argparse.Namespace) -> WarningPolicy:
+    """The -W / --warn-as-error options as a policy (spec 73)."""
+    disabled = set()
+    for opt in args.W or []:
+        name = opt[3:] if opt.startswith("no-") else opt
+        if name not in WARNING_RULES:
+            print(f"error: unknown warning `{name}` (known: {', '.join(WARNING_RULES)})", file=sys.stderr)
+            sys.exit(2)
+        if opt.startswith("no-"):
+            disabled.add(name)
+        else:
+            disabled.discard(name)
+    return WarningPolicy(_render_warning, frozenset(disabled), args.warn_as_error)
+
+
+def _add_warning_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("-W", action="append", metavar="[no-]RULE",
+                   help=f"turn a warning off (no-RULE) or back on; rules: {', '.join(WARNING_RULES)}")
+    p.add_argument("--warn-as-error", action="store_true", help="fail the build when there is any warning")
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     src_path = Path(args.input)
     source = _read_source(src_path)
     out_path = Path(args.output) if args.output else src_path.with_suffix("")
     try:
         compile_source(source, filename=str(src_path), output=out_path,
-                       checked=not args.unchecked, opt_level=args.opt)
+                       checked=not args.unchecked, opt_level=args.opt, warnings=_warning_policy(args))
     except CompileError as e:
         _report(e, source, src_path)
         return 1
@@ -56,7 +85,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         out = Path(td) / src_path.stem
         try:
             compile_source(source, filename=str(src_path), output=out,
-                           checked=not args.unchecked, opt_level=args.opt)
+                           checked=not args.unchecked, opt_level=args.opt, warnings=_warning_policy(args))
         except CompileError as e:
             _report(e, source, src_path)
             return 1
@@ -90,7 +119,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         src_path = Path(name)
         source = _read_source(src_path)
         try:
-            check_source(source, filename=str(src_path))
+            check_source(source, filename=str(src_path), warnings=_warning_policy(args))
         except CompileError as e:
             _report(e, source, src_path)
             status = 1
@@ -157,6 +186,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_build.add_argument("--unchecked", action="store_true", help=unchecked_help)
     p_build.add_argument("-O", dest="opt", type=int, choices=range(4), default=None, metavar="LEVEL",
                          help=opt_help)
+    _add_warning_args(p_build)
     p_build.set_defaults(func=cmd_build)
 
     p_run = sub.add_parser("run", help="compile and run a .rw file")
@@ -164,6 +194,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_run.add_argument("--unchecked", action="store_true", help=unchecked_help)
     p_run.add_argument("-O", dest="opt", type=int, choices=range(4), default=None, metavar="LEVEL",
                        help=opt_help)
+    _add_warning_args(p_run)
     p_run.set_defaults(func=cmd_run)
 
     p_ir = sub.add_parser("emit-ir", help="print generated LLVM IR")
@@ -174,6 +205,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_check = sub.add_parser("check", help="type-check without generating code")
     p_check.add_argument("inputs", nargs="+")
     p_check.add_argument("-q", "--quiet", action="store_true", help="print nothing for files that pass")
+    _add_warning_args(p_check)
     p_check.set_defaults(func=cmd_check)
 
     p_test = sub.add_parser("test", help="run test_* functions in test_*.rw / *_test.rw files")

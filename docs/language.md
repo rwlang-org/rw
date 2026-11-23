@@ -66,9 +66,9 @@ are no mutable global variables.
 
 | Command | Description |
 |---|---|
-| `rwc build FILE [-o OUT] [-O N] [--unchecked]` | Build an executable. Without `-o`, the output is `FILE` with its extension removed |
-| `rwc run FILE [-O N] [--unchecked]` | Build in a temporary directory, run it, and return its exit status. No arguments can be passed to the program |
-| `rwc check [-q] FILE...` | Type-check only; no IR generation or linking. Prints `FILE: ok` for each file that passes (`-q` suppresses it). Exit status 1 if any file fails |
+| `rwc build FILE [-o OUT] [-O N] [--unchecked] [-W no-RULE] [--warn-as-error]` | Build an executable. Without `-o`, the output is `FILE` with its extension removed |
+| `rwc run FILE [-O N] [--unchecked] [-W no-RULE] [--warn-as-error]` | Build in a temporary directory, run it, and return its exit status. No arguments can be passed to the program |
+| `rwc check [-q] [-W no-RULE] [--warn-as-error] FILE...` | Type-check only; no IR generation or linking. Prints `FILE: ok` for each file that passes (`-q` suppresses it). Exit status 1 if any file fails |
 | `rwc test [PATH...] [-k SUBSTR] [--timeout SEC] [-v]` | Run the `test_*` functions in `test_*.rw` / `*_test.rw` files ([9.4](#94-tests-rwc-test-and-assert_eq)) |
 | `rwc emit-ir FILE [--unchecked]` | Write the generated LLVM IR to stdout |
 | `rwc emit-ast FILE` | Print the AST of the entry module |
@@ -82,7 +82,13 @@ Options:
   and `run` accept it.
 - `--unchecked`: omit the run-time checks for integer division
   ([9.2](#92-run-time-checks)). `build`, `run`, and `emit-ir` accept it.
+- `-W no-RULE` / `-W RULE`: turn a warning rule off or back on. The only
+  rule so far is `unused-variable`: a local that is never read (a name
+  starting with `_` is exempt). `build`, `run`, and `check` accept it.
+- `--warn-as-error`: report warnings as errors and fail. `build`, `run`,
+  and `check` accept it.
 
+Warnings (`warning[RULE]: ...`) do not stop the build.
 The compiler stops at the first error and prints a diagnostic with the file
 name, line, column, and a caret. A misspelled name gets a
 `help: did you mean ...?` line, and a type mismatch gets the conversion that
@@ -92,7 +98,8 @@ If the C runtime `runtime/librw.a` is missing, the first build creates it with
 `make -C runtime`. Linking needs `clang` (or `cc`) and the Boehm GC.
 
 Details: [spec 48](specs/48-rwc-check.md), [spec 49](specs/49-did-you-mean.md),
-[spec 68](specs/68-rwc-test.md), [spec 70](specs/70-optimization-levels.md)
+[spec 68](specs/68-rwc-test.md), [spec 70](specs/70-optimization-levels.md),
+[spec 73](specs/73-warnings.md)
 
 ### 1.3 Environment variables
 
