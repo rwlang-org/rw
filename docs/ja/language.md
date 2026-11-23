@@ -67,6 +67,7 @@ def main() -> int:
 | `rwc run FILE [-O N] [--unchecked]` | 一時ディレクトリでビルドして実行し、その終了ステータスを返す。プログラムへ引数は渡せない |
 | `rwc check [-q] FILE...` | 型検査だけを行う。IR 生成もリンクもしない。成功したファイルごとに `FILE: ok` を表示（`-q` で抑止）。1 つでも失敗すれば終了ステータス 1 |
 | `rwc test [PATH...] [-k SUBSTR] [--timeout SEC] [-v]` | `test_*.rw` / `*_test.rw` 内の `test_*` 関数を実行する（[9.4](#94-テストrwc-test-と-assert_eq)） |
+| `rwc watch [--interval SEC] [-O N] [--unchecked] FILE [-- ARGS...]` | `FILE` をビルドして実行し、同じディレクトリの `.rw` ファイルが変わるたびに停止・再ビルド・再実行する。ビルドエラーは表示して次の変更を待つ。Ctrl-C で終了（[spec 72](../specs/72-rwc-watch.md)） |
 | `rwc emit-ir FILE [--unchecked]` | 生成した LLVM IR を標準出力に書く |
 | `rwc emit-ast FILE` | エントリモジュールの AST を表示する |
 | `rwc --version` | バージョンを表示する |

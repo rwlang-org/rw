@@ -25,6 +25,7 @@ make -C runtime
 uv run rwc run examples/hello.rw
 uv run rwc check examples/hello.rw   # type-check only, no codegen
 uv run rwc test tests/              # run test_* functions in test_*.rw files
+uv run rwc watch examples/hello.rw  # rebuild and rerun on every change
 ```
 
 For installation prerequisites and detailed setup, see [INSTALL.md](INSTALL.md).

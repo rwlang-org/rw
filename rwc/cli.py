@@ -107,6 +107,18 @@ def cmd_test(args: argparse.Namespace) -> int:
     return run(args.paths, pattern=args.k, timeout=args.timeout, verbose=args.verbose, report_error=_report)
 
 
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Rebuild and rerun on every source change (spec 72)."""
+    from .watch import watch
+
+    src_path = Path(args.input)
+    if not src_path.is_file():
+        print(f"error: no such file: {src_path}", file=sys.stderr)
+        return 1
+    return watch(src_path, interval=args.interval, checked=not args.unchecked, opt_level=args.opt,
+                 report_error=_report, args=[a for i, a in enumerate(args.args) if i or a != "--"])
+
+
 def cmd_emit_ast(args: argparse.Namespace) -> int:
     src_path = Path(args.input)
     source = _read_source(src_path)
@@ -182,6 +194,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_test.add_argument("--timeout", type=float, default=60.0, help="seconds per test (default 60)")
     p_test.add_argument("-v", "--verbose", action="store_true", help="show output of passing tests too")
     p_test.set_defaults(func=cmd_test)
+
+    p_watch = sub.add_parser("watch", help="rebuild and rerun a .rw file whenever its sources change")
+    p_watch.add_argument("input")
+    p_watch.add_argument("args", nargs=argparse.REMAINDER, help="arguments passed to the program")
+    p_watch.add_argument("--interval", type=float, default=0.5, metavar="SECONDS",
+                         help="how often to look for changes (default 0.5)")
+    p_watch.add_argument("--unchecked", action="store_true", help=unchecked_help)
+    p_watch.add_argument("-O", dest="opt", type=int, choices=range(4), default=None, metavar="LEVEL",
+                         help=opt_help)
+    p_watch.set_defaults(func=cmd_watch)
 
     p_ast = sub.add_parser("emit-ast", help="print parsed AST")
     p_ast.add_argument("input")
